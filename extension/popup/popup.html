@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>VOC-Master</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="popup-container">
+    <header class="popup-header">
+      <div class="logo">
+        <span class="logo-icon">📊</span>
+        <span class="logo-text">VOC-Master</span>
+      </div>
+      <span class="version">v1.0</span>
+    </header>
+
+    <main class="popup-content">
+      <!-- Not on Amazon Page -->
+      <div id="not-amazon" class="state-view" style="display: none;">
+        <div class="icon-large">🌐</div>
+        <h2>请访问 Amazon 商品页</h2>
+        <p>请导航到 Amazon 商品详情页或评论页后再使用本插件。</p>
+      </div>
+
+      <!-- On Amazon Product Page -->
+      <div id="on-amazon" class="state-view" style="display: none;">
+        <div class="product-info">
+          <div class="asin" id="asin-display">ASIN: --</div>
+          <div class="product-title" id="title-display">加载中...</div>
+        </div>
+
+        <div class="status-badge" id="status-badge">
+          <span class="status-dot"></span>
+          <span class="status-text">准备就绪</span>
+        </div>
+
+        <button class="btn btn-primary" id="open-panel-btn">
+          <span>🚀</span>
+          打开采集面板
+        </button>
+      </div>
+
+      <!-- Quick Links -->
+      <div class="quick-links">
+        <a href="http://localhost:3000" target="_blank" class="link-btn">
+          <span>📈</span>
+          打开控制台
+        </a>
+        <a href="http://localhost:8000/docs" target="_blank" class="link-btn">
+          <span>📚</span>
+          API 文档
+        </a>
+      </div>
+    </main>
+
+    <footer class="popup-footer">
+      <span>Amazon 评论智能采集翻译分析系统</span>
+    </footer>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
+

@@ -1,0 +1,67 @@
+{
+  "manifest_version": 3,
+  "name": "VOC-Master: Amazon Review Collector",
+  "version": "1.0.1",
+  "description": "Collect Amazon product reviews for translation and analysis. 采集亚马逊商品评论，智能翻译分析。",
+  "author": "VOC-Master Team",
+  
+  "permissions": [
+    "activeTab",
+    "storage",
+    "scripting",
+    "tabs"
+  ],
+  
+  "host_permissions": [
+    "https://*.amazon.com/*",
+    "https://*.amazon.co.uk/*",
+    "https://*.amazon.de/*",
+    "https://*.amazon.fr/*",
+    "https://*.amazon.co.jp/*",
+    "http://localhost:8000/*"
+  ],
+  
+  "action": {
+    "default_popup": "popup/popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    },
+    "default_title": "VOC-Master"
+  },
+  
+  "background": {
+    "service_worker": "src/background/service-worker.js",
+    "type": "module"
+  },
+  
+  "content_scripts": [
+    {
+      "matches": [
+        "https://*.amazon.com/*",
+        "https://*.amazon.co.uk/*",
+        "https://*.amazon.de/*",
+        "https://*.amazon.fr/*",
+        "https://*.amazon.co.jp/*"
+      ],
+      "js": ["src/content/content.js"],
+      "css": ["src/content/overlay.css"],
+      "run_at": "document_idle"
+    }
+  ],
+  
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  
+  "web_accessible_resources": [
+    {
+      "resources": ["src/content/overlay.css"],
+      "matches": ["https://*.amazon.com/*", "https://*.amazon.co.uk/*"]
+    }
+  ]
+}
+

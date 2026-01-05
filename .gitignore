@@ -1,0 +1,48 @@
+# Environment
+.env
+.env.local
+*.env
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+ENV/
+.venv/
+
+# Node
+node_modules/
+dist/
+.npm
+*.log
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# Docker
+*.log
+
+# Database
+*.db
+*.sqlite
+
+# Compiled
+*.pyc
+*.pyo
+
+# Test
+.coverage
+htmlcov/
+.pytest_cache/
+
+# Build
+build/
+*.egg-info/
+

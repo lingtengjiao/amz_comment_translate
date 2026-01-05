@@ -1,0 +1,126 @@
+services:
+  # PostgreSQL Database
+  db-postgres:
+    image: postgres:15-alpine
+    container_name: voc-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-vocmaster}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-vocmaster123}
+      POSTGRES_DB: ${POSTGRES_DB:-vocmaster}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-vocmaster}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - voc-network
+
+  # Redis for Celery Message Broker
+  db-redis:
+    image: redis:7-alpine
+    container_name: voc-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - voc-network
+
+  # FastAPI Backend
+  app-backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: voc-backend
+    restart: unless-stopped
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-vocmaster}:${POSTGRES_PASSWORD:-vocmaster123}@db-postgres:5432/${POSTGRES_DB:-vocmaster}
+      - REDIS_URL=redis://db-redis:6379/0
+      - QWEN_API_KEY=${QWEN_API_KEY}
+      - QWEN_API_BASE=${QWEN_API_BASE:-https://dashscope.aliyuncs.com/compatible-mode/v1}
+    ports:
+      - "8000:8000"
+    depends_on:
+      db-postgres:
+        condition: service_healthy
+      db-redis:
+        condition: service_healthy
+    volumes:
+      - ./backend:/app
+    networks:
+      - voc-network
+
+  # Celery Worker for Async Translation Tasks
+  app-worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: voc-worker
+    restart: unless-stopped
+    command: celery -A app.worker worker --loglevel=info --concurrency=2 -Q translation,celery
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-vocmaster}:${POSTGRES_PASSWORD:-vocmaster123}@db-postgres:5432/${POSTGRES_DB:-vocmaster}
+      - REDIS_URL=redis://db-redis:6379/0
+      - QWEN_API_KEY=${QWEN_API_KEY}
+      - QWEN_API_BASE=${QWEN_API_BASE:-https://dashscope.aliyuncs.com/compatible-mode/v1}
+    depends_on:
+      db-postgres:
+        condition: service_healthy
+      db-redis:
+        condition: service_healthy
+    volumes:
+      - ./backend:/app
+    networks:
+      - voc-network
+
+  # React Frontend
+  app-frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: voc-frontend
+    restart: unless-stopped
+    # 不直接暴露端口，通过 nginx 代理访问
+    expose:
+      - "80"
+    depends_on:
+      - app-backend
+    networks:
+      - voc-network
+
+  # Nginx 反向代理
+  nginx:
+    image: nginx:alpine
+    container_name: voc-nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"      # 主入口
+      - "3000:80"    # 保持兼容旧端口
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - app-backend
+      - app-frontend
+    networks:
+      - voc-network
+
+volumes:
+  postgres_data:
+  redis_data:
+
+networks:
+  voc-network:
+    driver: bridge
+

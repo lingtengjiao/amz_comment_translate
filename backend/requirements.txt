@@ -1,0 +1,31 @@
+# FastAPI & Web Server
+fastapi==0.109.0
+uvicorn[standard]==0.27.0
+python-multipart==0.0.6
+pydantic==2.5.3
+pydantic-settings==2.1.0
+
+# Database - Async PostgreSQL
+sqlalchemy[asyncio]==2.0.25
+asyncpg==0.29.0
+psycopg2-binary==2.9.9
+alembic==1.13.1
+greenlet==3.0.3
+
+# Celery & Redis for async tasks
+celery[redis]==5.3.6
+redis==5.0.1
+
+# HTTP Client for Qwen API (OpenAI compatible)
+httpx==0.26.0
+openai==1.8.0
+
+# Retry logic
+tenacity==8.2.3
+
+# Excel/CSV Export
+openpyxl==3.1.2
+pandas==2.1.4
+
+# Utilities
+python-dotenv==1.0.0
