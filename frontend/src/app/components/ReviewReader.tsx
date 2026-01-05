@@ -168,72 +168,41 @@ export function ReviewReader() {
     }
   }, []);
 
-  // 全屏切换 - 真正的沉浸式（针对容器元素）
+  // 全屏切换 - 文档级全屏 + CSS fixed 定位
   const handleFullscreenClick = async (e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
-    
-    // 1. 关键修改：目标改为当前的容器 div，而不是整个网页
-    const element = pageContainerRef.current;
-    if (!element) return;
-
-    // 2. 获取当前正在全屏的元素
-    const currentFullscreenElement = getFullscreenElement();
-    const isNodeFullscreen = currentFullscreenElement === element;
 
     try {
-      if (!isNodeFullscreen) {
-        // --- 进入全屏 ---
-        // 针对 div 调用 requestFullscreen，浏览器会自动将其置顶并放大
-        if (element.requestFullscreen) {
-          await element.requestFullscreen();
-        } else if ((element as any).webkitRequestFullscreen) {
-          await (element as any).webkitRequestFullscreen();
-        } else if ((element as any).msRequestFullscreen) {
-          await (element as any).msRequestFullscreen();
-        }
+      // 检查当前是否有元素处于全屏状态
+      const isFullscreen = !!document.fullscreenElement;
+
+      if (!isFullscreen) {
+        // ✅ 关键：请求整个 HTML 文档全屏，而不是某个 div
+        // 这样所有 React Portal (Modal/Toast) 依然在同一个层级树中，z-index 才会生效
+        await document.documentElement.requestFullscreen();
       } else {
-        // --- 退出全屏 ---
-        // 退出全屏永远是针对 document 操作的
-        if (document.exitFullscreen) {
-          await document.exitFullscreen();
-        } else if ((document as any).webkitExitFullscreen) {
-          await (document as any).webkitExitFullscreen();
-        } else if ((document as any).msExitFullscreen) {
-          await (document as any).msExitFullscreen();
-        }
+        await document.exitFullscreen();
       }
     } catch (err) {
       console.error('全屏切换失败:', err);
-      toast.error('全屏切换失败', '可能是浏览器权限限制或被拦截');
+      toast.error('全屏模式受限', '请检查浏览器权限');
     }
   };
 
   // 监听全屏状态变化
   useEffect(() => {
     const handleFullscreenChange = () => {
-      // 检查当前全屏元素是否为我们的容器
-      const currentElement = getFullscreenElement();
-      const isNowFullscreen = currentElement === pageContainerRef.current;
-      
-      setIsFullscreen(isNowFullscreen);
-      
-      // 注意：这里删除了之前手动修改 document.body style 的代码
-      // 因为 element.requestFullscreen() 会自动处理视口占满
+      // 只要 Document 处于全屏，我们就认为进入了沉浸模式
+      // 不需要判断是哪个元素，因为我们只允许 Document 全屏
+      const isNativeFullscreen = !!document.fullscreenElement;
+      setIsFullscreen(isNativeFullscreen);
     };
 
     document.addEventListener('fullscreenchange', handleFullscreenChange);
-    document.addEventListener('webkitfullscreenchange', handleFullscreenChange);
-    document.addEventListener('mozfullscreenchange', handleFullscreenChange);
-    document.addEventListener('MSFullscreenChange', handleFullscreenChange);
-
-    return () => {
-      document.removeEventListener('fullscreenchange', handleFullscreenChange);
-      document.removeEventListener('webkitfullscreenchange', handleFullscreenChange);
-      document.removeEventListener('mozfullscreenchange', handleFullscreenChange);
-      document.removeEventListener('MSFullscreenChange', handleFullscreenChange);
-    };
-  }, [getFullscreenElement]);
+    // 兼容性监听可保留，这里简写
+    return () => document.removeEventListener('fullscreenchange', handleFullscreenChange);
+  }, []);
 
   // 轮询翻译进度
   useEffect(() => {
@@ -716,17 +685,20 @@ export function ReviewReader() {
   return (
     <div 
       ref={pageContainerRef} 
-      // 关键样式修改：
-      // 1. overflow-y-auto: 确保全屏时可以滚动查看长内容
-      // 2. h-screen / h-full: 确保高度撑开
-      // 3. bg-gray-50: 必须指定背景色，否则全屏默认可能是黑色
-      className={`bg-gray-50 transition-colors overflow-y-auto ${
-        isFullscreen ? 'fixed inset-0 z-50 w-full h-full' : 'min-h-screen'
+      // ✅ 关键样式解析：
+      // 1. fixed inset-0: 强制固定在视口，盖住原来的布局
+      // 2. z-40: 盖住 Sidebar (通常 z-30)，但让出 z-50 给 Modal/Toast
+      // 3. w-screen h-screen: 撑满屏幕
+      // 4. overflow-y-auto: 保证内容可滚动
+      className={`bg-gray-50 transition-all duration-300 ease-in-out ${
+        isFullscreen 
+          ? 'fixed inset-0 z-40 w-screen h-screen overflow-y-auto pt-0' 
+          : 'min-h-screen relative'
       }`}
-      // 移除之前那个 style={{ width: '100vw'... }} 对象，改用 Tailwind 类控制更稳健
     >
       {/* Header */}
-      <header className="bg-white border-b border-gray-200 sticky top-0 z-20 shadow-sm">
+      {/* Header 保持不变，但 z-index 不需要太高，相对于容器即可 */}
+      <header className="bg-white border-b border-gray-200 sticky top-0 z-30 shadow-sm">
         <div className="max-w-[1600px] mx-auto px-4 sm:px-6 lg:px-8 py-3">
           <div className="flex items-center justify-between gap-4">
             {/* Left: Fullscreen Button + Back Button + Title */}
