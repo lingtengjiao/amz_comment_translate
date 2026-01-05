@@ -62,14 +62,24 @@ function humanLikeDelay(base = 3000, variance = 1000) {
 
 /**
  * Detect ASIN from current page URL or page content
+ * [UPDATED] Added check for hidden input #ASIN (Gold Standard)
  */
 function detectASIN() {
-  // Try URL patterns
+  // Strategy 1: Hidden Input (Most Reliable)
+  // Amazon 几乎所有的详情页都有一个 id="ASIN" 的隐藏输入框
+  const asinInput = document.getElementById('ASIN') || document.querySelector('input[name="ASIN"]');
+  if (asinInput && asinInput.value && asinInput.value.length === 10) {
+    return asinInput.value;
+  }
+
+  // Strategy 2: URL Regex Patterns
   const urlPatterns = [
     /\/dp\/([A-Z0-9]{10})/i,
     /\/product\/([A-Z0-9]{10})/i,
     /\/gp\/product\/([A-Z0-9]{10})/i,
-    /\/ASIN\/([A-Z0-9]{10})/i
+    /\/ASIN\/([A-Z0-9]{10})/i,
+    // 处理带参数的情况，如 ?asin=B0...
+    /[?&]asin=([A-Z0-9]{10})/i
   ];
 
   for (const pattern of urlPatterns) {
@@ -77,20 +87,28 @@ function detectASIN() {
     if (match) return match[1];
   }
 
-  // Try data attributes
-  const asinElement = document.querySelector('[data-asin]');
-  if (asinElement) {
-    const asin = asinElement.getAttribute('data-asin');
-    if (asin && asin.length === 10) return asin;
-  }
-
-  // Try canonical link
+  // Strategy 3: Canonical Link
   const canonical = document.querySelector('link[rel="canonical"]');
   if (canonical) {
     for (const pattern of urlPatterns) {
       const match = canonical.href.match(pattern);
       if (match) return match[1];
     }
+  }
+
+  // Strategy 4: Data Attributes
+  // 某些动态加载的页面会在 body 或特定 div 上挂载 data-asin
+  const asinElement = document.querySelector('[data-asin]');
+  if (asinElement) {
+    const asin = asinElement.getAttribute('data-asin');
+    if (asin && asin.length === 10) return asin;
+  }
+  
+  // Strategy 5: Q&A Widget (Fallback)
+  const qaWidget = document.querySelector('[data-asin-id]');
+  if (qaWidget) {
+     const asin = qaWidget.getAttribute('data-asin-id');
+     if (asin && asin.length === 10) return asin;
   }
 
   return null;
