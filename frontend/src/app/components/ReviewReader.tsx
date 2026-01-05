@@ -168,50 +168,44 @@ export function ReviewReader() {
     }
   }, []);
 
-  // 全屏切换 - 针对页面容器进行全屏，实现真正的沉浸式
+  // 全屏切换 - 真正的沉浸式（针对容器元素）
   const handleFullscreenClick = async (e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
     
-    // 1. 获取要全屏的目标容器
+    // 1. 关键修改：目标改为当前的容器 div，而不是整个网页
     const element = pageContainerRef.current;
     if (!element) return;
 
-    // 2. 检查当前全屏状态（兼容性写法）
-    const fullscreenElement = getFullscreenElement();
-    const isCurrentElementFullscreen = fullscreenElement === element;
+    // 2. 获取当前正在全屏的元素
+    const currentFullscreenElement = getFullscreenElement();
+    const isNodeFullscreen = currentFullscreenElement === element;
 
     try {
-      if (!isCurrentElementFullscreen) {
+      if (!isNodeFullscreen) {
         // --- 进入全屏 ---
+        // 针对 div 调用 requestFullscreen，浏览器会自动将其置顶并放大
         if (element.requestFullscreen) {
           await element.requestFullscreen();
         } else if ((element as any).webkitRequestFullscreen) {
           await (element as any).webkitRequestFullscreen();
-        } else if ((element as any).webkitRequestFullScreen) {
-          await (element as any).webkitRequestFullScreen();
-        } else if ((element as any).mozRequestFullScreen) {
-          await (element as any).mozRequestFullScreen();
         } else if ((element as any).msRequestFullscreen) {
           await (element as any).msRequestFullscreen();
-        } else {
-          toast.error('不支持全屏', '您的浏览器不支持全屏功能');
         }
       } else {
         // --- 退出全屏 ---
+        // 退出全屏永远是针对 document 操作的
         if (document.exitFullscreen) {
           await document.exitFullscreen();
         } else if ((document as any).webkitExitFullscreen) {
           await (document as any).webkitExitFullscreen();
-        } else if ((document as any).mozCancelFullScreen) {
-          await (document as any).mozCancelFullScreen();
         } else if ((document as any).msExitFullscreen) {
           await (document as any).msExitFullscreen();
         }
       }
     } catch (err) {
       console.error('全屏切换失败:', err);
-      toast.error('全屏切换失败', '可能是浏览器权限限制');
+      toast.error('全屏切换失败', '可能是浏览器权限限制或被拦截');
     }
   };
 
@@ -219,22 +213,19 @@ export function ReviewReader() {
   useEffect(() => {
     const handleFullscreenChange = () => {
       // 检查当前全屏元素是否为我们的容器
-      const currentFullscreenElement = getFullscreenElement();
-      const isNowFullscreen = currentFullscreenElement === pageContainerRef.current;
+      const currentElement = getFullscreenElement();
+      const isNowFullscreen = currentElement === pageContainerRef.current;
       
       setIsFullscreen(isNowFullscreen);
       
-      // 注意：不需要手动修改 body 样式了
-      // 浏览器会对全屏元素自动应用 user-agent 样式
+      // 注意：这里删除了之前手动修改 document.body style 的代码
+      // 因为 element.requestFullscreen() 会自动处理视口占满
     };
 
     document.addEventListener('fullscreenchange', handleFullscreenChange);
     document.addEventListener('webkitfullscreenchange', handleFullscreenChange);
     document.addEventListener('mozfullscreenchange', handleFullscreenChange);
     document.addEventListener('MSFullscreenChange', handleFullscreenChange);
-
-    // 初始化状态
-    handleFullscreenChange();
 
     return () => {
       document.removeEventListener('fullscreenchange', handleFullscreenChange);
@@ -725,13 +716,14 @@ export function ReviewReader() {
   return (
     <div 
       ref={pageContainerRef} 
-      // 关键样式解释：
-      // 1. overflow-y-auto: 确保全屏时内容长了可以滚动
-      // 2. bg-gray-50: 防止全屏后背景变黑
-      // 3. w-full h-full: 常规状态下占满父容器
-      className={`min-h-screen bg-gray-50 transition-colors overflow-y-auto ${
-        isFullscreen ? 'p-0' : ''
+      // 关键样式修改：
+      // 1. overflow-y-auto: 确保全屏时可以滚动查看长内容
+      // 2. h-screen / h-full: 确保高度撑开
+      // 3. bg-gray-50: 必须指定背景色，否则全屏默认可能是黑色
+      className={`bg-gray-50 transition-colors overflow-y-auto ${
+        isFullscreen ? 'fixed inset-0 z-50 w-full h-full' : 'min-h-screen'
       }`}
+      // 移除之前那个 style={{ width: '100vw'... }} 对象，改用 Tailwind 类控制更稳健
     >
       {/* Header */}
       <header className="bg-white border-b border-gray-200 sticky top-0 z-20 shadow-sm">
