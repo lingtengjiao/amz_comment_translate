@@ -141,34 +141,9 @@ export function ReviewReader() {
     fetchData();
   }, [fetchData]);
 
-  // 全屏功能 - 获取全屏元素（兼容所有浏览器）
-  const getFullscreenElement = useCallback(() => {
-    return (
-      document.fullscreenElement ||
-      (document as any).webkitFullscreenElement ||
-      (document as any).mozFullScreenElement ||
-      (document as any).msFullscreenElement ||
-      null
-    );
-  }, []);
-
-
-  // 全屏功能 - 退出全屏（兼容所有浏览器）
-  const exitFullscreen = useCallback(async () => {
-    if (document.exitFullscreen) {
-      await document.exitFullscreen();
-    } else if ((document as any).webkitExitFullscreen) {
-      await (document as any).webkitExitFullscreen();
-    } else if ((document as any).mozCancelFullScreen) {
-      await (document as any).mozCancelFullScreen();
-    } else if ((document as any).msExitFullscreen) {
-      await (document as any).msExitFullscreen();
-    } else {
-      throw new Error('浏览器不支持退出全屏功能');
-    }
-  }, []);
-
   // 全屏切换 - 文档级全屏 + CSS fixed 定位
+  // 核心：使用 document.documentElement.requestFullscreen() 让整个文档全屏
+  // 而不是某个 div，这样 Portal (Modal/Toast) 的 z-index 才能正常工作
   const handleFullscreenClick = async (e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
@@ -193,15 +168,33 @@ export function ReviewReader() {
   // 监听全屏状态变化
   useEffect(() => {
     const handleFullscreenChange = () => {
-      // 只要 Document 处于全屏，我们就认为进入了沉浸模式
+      // 【核心修改点】只要 document 有全屏元素，就激活沉浸模式 UI
       // 不需要判断是哪个元素，因为我们只允许 Document 全屏
-      const isNativeFullscreen = !!document.fullscreenElement;
+      const isNativeFullscreen = !!(
+        document.fullscreenElement ||
+        (document as any).webkitFullscreenElement ||
+        (document as any).mozFullScreenElement ||
+        (document as any).msFullscreenElement
+      );
       setIsFullscreen(isNativeFullscreen);
     };
 
+    // 标准事件
     document.addEventListener('fullscreenchange', handleFullscreenChange);
-    // 兼容性监听可保留，这里简写
-    return () => document.removeEventListener('fullscreenchange', handleFullscreenChange);
+    // 兼容旧版浏览器事件
+    document.addEventListener('webkitfullscreenchange', handleFullscreenChange);
+    document.addEventListener('mozfullscreenchange', handleFullscreenChange);
+    document.addEventListener('MSFullscreenChange', handleFullscreenChange);
+
+    // 初始化状态
+    handleFullscreenChange();
+
+    return () => {
+      document.removeEventListener('fullscreenchange', handleFullscreenChange);
+      document.removeEventListener('webkitfullscreenchange', handleFullscreenChange);
+      document.removeEventListener('mozfullscreenchange', handleFullscreenChange);
+      document.removeEventListener('MSFullscreenChange', handleFullscreenChange);
+    };
   }, []);
 
   // 轮询翻译进度
