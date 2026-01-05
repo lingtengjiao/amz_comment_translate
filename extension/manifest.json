@@ -60,7 +60,13 @@
   "web_accessible_resources": [
     {
       "resources": ["src/content/overlay.css"],
-      "matches": ["https://*.amazon.com/*", "https://*.amazon.co.uk/*"]
+      "matches": [
+        "https://*.amazon.com/*",
+        "https://*.amazon.co.uk/*",
+        "https://*.amazon.de/*",
+        "https://*.amazon.fr/*",
+        "https://*.amazon.co.jp/*"
+      ]
     }
   ]
 }

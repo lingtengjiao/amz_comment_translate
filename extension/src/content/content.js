@@ -526,60 +526,120 @@ function hideOverlay() {
   if (overlay) overlay.classList.remove('voc-visible');
 }
 
+/**
+ * Create overlay DOM
+ * [UPDATED] Manually inject CSS to ensure styles are loaded
+ */
 function createOverlay() {
+  // 1. 强制注入 CSS (修复样式丢失问题)
+  // 注意：这需要 overlay.css 在 manifest.json 的 web_accessible_resources 中 (您已经配好了)
+  const styleId = 'voc-master-styles';
+  if (!document.getElementById(styleId)) {
+    const link = document.createElement('link');
+    link.id = styleId;
+    link.rel = 'stylesheet';
+    link.type = 'text/css';
+    link.href = chrome.runtime.getURL('src/content/overlay.css');
+    (document.head || document.documentElement).appendChild(link);
+  }
+
+  // 2. 创建 Overlay 容器
   overlay = document.createElement('div');
   overlay.id = 'voc-master-overlay';
-  // Use existing HTML structure from previous version...
   overlay.innerHTML = `
     <div class="voc-panel">
       <div class="voc-header">
-        <div class="voc-logo"><span class="voc-icon">📊</span><span class="voc-title">VOC-Master</span></div>
-        <div style="display:flex;gap:10px">
-           <button class="voc-close" id="voc-expand-btn" title="全屏切换">⛶</button>
-           <button class="voc-close" id="voc-close-btn">×</button>
+        <div class="voc-logo">
+          <span class="voc-icon">📊</span>
+          <span class="voc-title">VOC-Master</span>
+        </div>
+        <div style="display:flex; gap:10px; align-items:center;">
+          <button class="voc-close" id="voc-expand-btn" title="切换全屏/侧边栏" style="font-size:16px;">⛶</button>
+          <button class="voc-close" id="voc-close-btn" title="关闭面板">×</button>
         </div>
       </div>
+      
       <div class="voc-content">
-        <div class="voc-product-info"><div id="voc-asin"></div><div id="voc-product-title"></div></div>
-        <div class="voc-status">
-          <div id="voc-message">准备就绪</div>
-          <div id="voc-progress-container" style="display:none">
-            <div class="voc-progress-bar"><div id="voc-progress-fill"></div></div>
-            <div id="voc-progress-text">0%</div>
-          </div>
-          <div id="voc-review-count"></div>
+        <div class="voc-product-info" id="voc-product-info">
+          <div class="voc-asin" id="voc-asin">检测中...</div>
+          <div class="voc-product-title" id="voc-product-title"></div>
         </div>
+        
+        <div class="voc-status" id="voc-status">
+          <div class="voc-message" id="voc-message">准备就绪</div>
+          <div class="voc-progress-container" id="voc-progress-container" style="display: none;">
+            <div class="voc-progress-bar">
+              <div class="voc-progress-fill" id="voc-progress-fill"></div>
+            </div>
+            <div class="voc-progress-text" id="voc-progress-text">0%</div>
+          </div>
+          <div class="voc-review-count" id="voc-review-count"></div>
+        </div>
+        
         <div class="voc-config" id="voc-config">
           <div class="voc-config-row">
             <label>采集星级:</label>
             <div class="voc-stars">
-              ${[1,2,3,4,5].map(s => `<label><input type="checkbox" class="voc-star-check" value="${s}" checked> ${s}星</label>`).join('')}
+              <label><input type="checkbox" class="voc-star-check" value="1" checked> 1星</label>
+              <label><input type="checkbox" class="voc-star-check" value="2" checked> 2星</label>
+              <label><input type="checkbox" class="voc-star-check" value="3" checked> 3星</label>
+              <label><input type="checkbox" class="voc-star-check" value="4" checked> 4星</label>
+              <label><input type="checkbox" class="voc-star-check" value="5" checked> 5星</label>
             </div>
           </div>
           <div class="voc-config-row">
-             <label>页数上限:</label>
-             <select id="voc-pages-per-star">
-               <option value="3">3页</option>
-               <option value="5" selected>5页</option>
-               <option value="10">10页</option>
-             </select>
+            <label>评论类型:</label>
+            <div class="voc-media-options">
+              <label><input type="radio" name="voc-media-type" value="all_formats" checked> 全部 (文字+图视)</label>
+              <label><input type="radio" name="voc-media-type" value="media_reviews_only"> 仅带图/视频</label>
+            </div>
+          </div>
+          <div class="voc-config-row">
+            <label>每星级采集页数:</label>
+            <select id="voc-pages-per-star">
+              <option value="3">3 页</option>
+              <option value="5" selected>5 页</option>
+              <option value="10">10 页 (最大)</option>
+            </select>
+          </div>
+          <div class="voc-config-row">
+            <label>采集模式:</label>
+            <div class="voc-mode-options">
+              <label><input type="radio" name="voc-speed-mode" value="fast" checked> ⚡ 极速模式</label>
+              <label><input type="radio" name="voc-speed-mode" value="stable"> 🛡️ 稳定模式</label>
+            </div>
           </div>
         </div>
-        <div class="voc-actions">
+        
+        <div class="voc-actions" id="voc-actions">
           <button class="voc-btn voc-btn-primary" id="voc-start-btn">开始采集</button>
-          <button class="voc-btn voc-btn-danger" id="voc-stop-btn" style="display:none">停止</button>
-          <a class="voc-btn voc-btn-success" id="voc-dashboard-btn" style="display:none" target="_blank">查看分析</a>
+          <button class="voc-btn voc-btn-danger" id="voc-stop-btn" style="display: none;">停止采集</button>
+          <a class="voc-btn voc-btn-success" id="voc-dashboard-btn" style="display: none;" target="_blank">
+            前往控制台查看分析 →
+          </a>
         </div>
       </div>
     </div>
   `;
+
   document.body.appendChild(overlay);
 
-  // Bind Events
-  document.getElementById('voc-close-btn').onclick = hideOverlay;
-  document.getElementById('voc-expand-btn').onclick = toggleFullscreen;
-  document.getElementById('voc-start-btn').onclick = handleStartClick;
-  document.getElementById('voc-stop-btn').onclick = handleStopClick;
+  // 绑定事件
+  document.getElementById('voc-close-btn').addEventListener('click', hideOverlay);
+  document.getElementById('voc-start-btn').addEventListener('click', handleStartClick);
+  document.getElementById('voc-stop-btn').addEventListener('click', handleStopClick);
+  
+  // 绑定全屏切换事件 (确保 toggleFullscreen 函数存在)
+  const expandBtn = document.getElementById('voc-expand-btn');
+  if (expandBtn && typeof toggleFullscreen === 'function') {
+      expandBtn.addEventListener('click', toggleFullscreen);
+  } else if (expandBtn) {
+      // 简单的内联全屏逻辑作为后备
+      expandBtn.addEventListener('click', () => {
+          overlay.classList.toggle('voc-fullscreen');
+          expandBtn.innerHTML = overlay.classList.contains('voc-fullscreen') ? '⤢' : '⛶';
+      });
+  }
 }
 
 function toggleFullscreen() {
@@ -640,10 +700,20 @@ function updateOverlay(state) {
 
 function handleStartClick() {
   const stars = Array.from(document.querySelectorAll('.voc-star-check:checked')).map(el => parseInt(el.value));
-  const pages = parseInt(document.getElementById('voc-pages-per-star').value);
-  if (!stars.length) return alert('请选择星级');
-  
-  const config = { stars, pagesPerStar: pages };
+  const pagesPerStar = parseInt(document.getElementById('voc-pages-per-star').value);
+  // 获取选中的媒体类型 radio
+  const mediaTypeRadio = document.querySelector('input[name="voc-media-type"]:checked');
+  const mediaType = mediaTypeRadio ? mediaTypeRadio.value : 'all_formats';
+  // 获取选中的速度模式 radio
+  const speedModeRadio = document.querySelector('input[name="voc-speed-mode"]:checked');
+  const speedMode = speedModeRadio ? speedModeRadio.value : 'fast';
+
+  if (!stars.length) {
+    alert('请至少选择一个星级');
+    return;
+  }
+
+  const config = { stars, pagesPerStar, mediaType, speedMode };
   startCollection(config);
 }
 
