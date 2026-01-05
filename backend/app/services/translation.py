@@ -1,15 +1,14 @@
 """
 Translation Service - Qwen API Integration for Amazon Review Translation
-
-This service handles:
-1. E-commerce context-aware translation (English -> Chinese)
-2. Sentiment preservation and analysis
-3. Slang and colloquialism handling
-4. Rate limiting and retry logic
-5. Review insight extraction (深度解读)
+[Optimized Version]
+Features:
+1. Few-Shot System Prompt for natural, e-commerce style translation
+2. CoT (Chain of Thought) Prompt for insight extraction
+3. Robust JSON parsing to handle LLM output errors
 """
 import logging
 import json
+import re
 from typing import Optional, Tuple, List
 from enum import Enum
 
@@ -28,24 +27,35 @@ class Sentiment(str, Enum):
     NEGATIVE = "negative"
 
 
-# System prompt for Amazon review translation
-TRANSLATION_SYSTEM_PROMPT = """你是一位专业的亚马逊电商评论翻译专家。你的任务是将英文评论翻译成中文，同时保留原文的情感强度和语气。
+# [UPDATED] System prompt with Few-Shot examples
+TRANSLATION_SYSTEM_PROMPT = """你是一位精通中美文化差异的资深亚马逊跨境电商翻译专家。你的目标是提供"信、达、雅"的中文译文。
 
-翻译原则：
-1. **情感还原**: 保留原文的情感色彩。愤怒、失望、惊喜、满意等情绪必须在译文中体现。
-2. **电商语境**: 使用符合中国电商评论习惯的表达方式。例如：
-   - "works great" → "很好用" 而不是 "工作得很好"
-   - "waste of money" → "浪费钱" / "智商税"
-   - "must have" → "必入" / "值得入手"
-   - "game changer" → "真香" / "神器"
-3. **俚语处理**: 识别并恰当翻译网络俚语和口语表达。
-4. **负面评论**: 对于差评，忠实传达消费者的不满和批评，不要美化。
-5. **简洁有力**: 中文译文应当简洁有力，避免冗余。
+### 核心规则
+1. **拒绝翻译腔**: 不要逐字翻译。
+   - ❌ 错误: "这个产品工作得很好" (The product works great)
+   - ✅ 正确: "这东西太好用了" / "效果绝了"
+2. **术语精准**: 
+   - "DOA (Dead on Arrival)" -> "到手即坏"
+   - "Return window" -> "退货期"
+   - "Steal" -> "捡漏/超值"
+3. **情感对齐**: 
+   - 1星评论通常带有愤怒，译文要用感叹号、反问句体现情绪。
+   - 5星评论通常带有兴奋，译文要体现"种草"感。
 
-输出格式：
-- 只输出翻译后的中文文本
-- 不要添加任何解释、注释或原文引用
-- 保持原文的段落结构"""
+### 参考范例 (Few-Shot)
+Input: "Total lemon. Stopped working after 2 days. Don't waste your money."
+Output: "简直是个次品！用了两天就坏了。千万别浪费钱！"
+
+Input: "I was skeptical at first, but this thing is a game changer for my morning routine."
+Output: "起初我还有点怀疑，但这东西彻底改变了我每天早上的习惯，真香！"
+
+Input: "It fits a bit snug, suggest sizing up."
+Output: "穿起来有点紧，建议买大一码。"
+
+Input: "The battery life is a joke."
+Output: "电池续航简直就是个笑话。"
+
+请翻译以下内容，直接输出译文："""
 
 
 SENTIMENT_ANALYSIS_PROMPT = """分析以下亚马逊商品评论的情感倾向。
@@ -61,7 +71,7 @@ SENTIMENT_ANALYSIS_PROMPT = """分析以下亚马逊商品评论的情感倾向�
 情感判断："""
 
 
-# System prompt for bullet points translation (产品五点描述翻译)
+# System prompt for bullet points translation
 BULLET_POINTS_SYSTEM_PROMPT = """你是一位专业的亚马逊产品描述翻译专家。你的任务是将产品的五点描述（Bullet Points）从英文翻译成中文。
 
 翻译原则：
@@ -78,46 +88,47 @@ BULLET_POINTS_SYSTEM_PROMPT = """你是一位专业的亚马逊产品描述翻�
 - 不要添加任何解释或注释"""
 
 
-# Prompt for extracting insights from reviews
-INSIGHT_EXTRACTION_PROMPT = """你是一位专业的亚马逊评论分析专家。请分析以下商品评论，提取有价值的洞察。
+# [UPDATED] Insight extraction prompt with Chain of Thought (CoT)
+INSIGHT_EXTRACTION_PROMPT = """# Role
+亚马逊评论深度分析师
 
-评论原文（英文）：
-{original_text}
+# Task
+分析以下评论，提取关键的用户洞察。
 
-评论翻译（中文）：
-{translated_text}
+# Input
+原文: {original_text}
+译文: {translated_text}
 
-请从评论中提取关键洞察，每个洞察包含：
-1. type: 洞察类型，必须是以下之一：
-   - strength: 产品优势/优点
-   - weakness: 产品劣势/缺点/改进空间
-   - suggestion: 用户建议/期望
-   - scenario: 使用场景描述
-   - emotion: 情感洞察（特别强烈的情感表达）
+# Requirements
+请仔细阅读评论，寻找用户提到的具体的"痛点(Weakness)"、"爽点(Strength)"、"使用场景(Scenario)"或"用户建议(Suggestion)"。
+对于每一个洞察点，请遵循以下步骤思考：
+1. 定位原文中证据确凿的句子。
+2. 判断它属于哪个维度（如：电池续航、做工细节、物流、性价比）。
+3. 用简练的中文总结价值。
 
-2. quote: 原文中的关键片段（英文原文）
-3. quote_translated: 引用片段的中文翻译
-4. analysis: 深度解读（用一句话总结这个洞察的价值，中文）
-5. dimension: 产品维度（如：质量、价格、外观、功能、物流、客服等，可为null）
-
-注意事项：
-- 只提取有实际价值的洞察，不要凑数
-- 每条评论提取1-3个最重要的洞察即可
-- 如果评论内容太短或无实质内容，可以返回空数组
-- quote必须是原文中实际存在的片段
-
-请以JSON数组格式返回，例如：
+# Output Format (JSON Array)
 [
   {{
-    "type": "weakness",
-    "quote": "the arms are so flimsy",
-    "quote_translated": "扶手太软了",
-    "analysis": "产品结构支撑不足，可能存在安全隐患",
-    "dimension": "质量"
+    "type": "weakness", 
+    "dimension": "电池续航",
+    "quote": "battery only lasts 2 hours", 
+    "quote_translated": "电池只能用2小时",
+    "analysis": "续航虚标，实际使用时间远低于预期" 
+  }},
+  {{
+    "type": "strength",
+    "dimension": "手感/材质",
+    "quote": "feels premium in hand",
+    "quote_translated": "拿在手里很有质感",
+    "analysis": "材质高级，手感舒适"
   }}
 ]
 
-如果没有有价值的洞察，返回空数组 []"""
+注意事项：
+- 如果评论只是发泄情绪（如"垃圾快递"）且无具体细节，不要提取。
+- 提取要"颗粒度细"，不要笼统地说"质量不好"，要说"塑料感强"或"按键松动"。
+- 如果没有有价值的洞察，返回空数组 []。
+"""
 
 
 class InsightType(str, Enum):
@@ -167,43 +178,58 @@ THEME_EXTRACTION_PROMPT = """你是一位专业的亚马逊评论分析专家。
       "explanation": "评论中提到使用人群是孩子"
     }}
   ],
-  "where": [
-    {{
-      "content": "家里",
-      "content_original": "at home",
-      "content_translated": "在家里",
-      "explanation": "评论中提到使用场景是家里"
-    }}
-  ],
-  "when": [],
-  "unmet_needs": [
-    {{
-      "content": "希望能更大一些",
-      "content_original": null,
-      "content_translated": null,
-      "explanation": "用户希望产品尺寸更大"
-    }}
-  ],
-  "pain_points": [
-    {{
-      "content": "太贵了",
-      "content_original": "too expensive",
-      "content_translated": "太贵了",
-      "explanation": "用户认为价格过高"
-    }}
-  ],
-  "benefits": [],
-  "features": [],
-  "comparison": []
+  "pain_points": [],
+  ...
 }}
 
 说明：
 - content: 中文内容（必需），可以是关键词、短语或句子
-- content_original: 原始英文内容（可选），如果内容来自英文原文则提供
-- content_translated: 翻译（可选），如果从英文提取则提供中文翻译
-- explanation: 解释说明（可选），简要说明为什么提取这个内容
+- content_original: 原始英文内容（可选）
+- content_translated: 翻译（可选）
+- explanation: 解释说明（可选）
 
 如果评论太短或无实质内容，返回所有主题为空数组的JSON。"""
+
+
+# [NEW] Helper function for robust JSON parsing
+def parse_json_safely(text: str):
+    """
+    Safely parse JSON from LLM output, handling markdown blocks and extra characters.
+    """
+    if not text:
+        return None
+        
+    # 1. Try direct parsing
+    try:
+        return json.loads(text)
+    except:
+        pass
+    
+    # 2. Try to extract from ```json ... ``` blocks
+    match = re.search(r'```(?:json)?\s*([\s\S]*?)\s*```', text)
+    if match:
+        try:
+            return json.loads(match.group(1))
+        except:
+            pass
+            
+    # 3. Try to find the first [ or { and last ] or }
+    try:
+        text = text.strip()
+        if '}' in text: # Likely an object
+            start = text.find('{')
+            end = text.rfind('}') + 1
+            if start != -1 and end != -1:
+                return json.loads(text[start:end])
+        if ']' in text: # Likely an array
+            start = text.find('[')
+            end = text.rfind(']') + 1
+            if start != -1 and end != -1:
+                return json.loads(text[start:end])
+    except:
+        pass
+        
+    return None
 
 
 class TranslationService:
@@ -245,15 +271,6 @@ class TranslationService:
     def translate_text(self, text: str) -> str:
         """
         Translate English text to Chinese with e-commerce context.
-        
-        Args:
-            text: English text to translate
-            
-        Returns:
-            Translated Chinese text
-            
-        Raises:
-            Exception: If translation fails after retries
         """
         if not self._check_client():
             raise RuntimeError("Translation service not configured")
@@ -273,7 +290,7 @@ class TranslationService:
                 ],
                 temperature=0.3,  # Lower temperature for more consistent translations
                 max_tokens=2000,
-                timeout=60.0,  # 60 seconds timeout
+                timeout=60.0,
             )
             
             translated = response.choices[0].message.content.strip()
@@ -315,15 +332,8 @@ class TranslationService:
     def analyze_sentiment(self, text: str) -> Sentiment:
         """
         Analyze the sentiment of a review.
-        
-        Args:
-            text: Review text (English or Chinese)
-            
-        Returns:
-            Sentiment enum value
         """
         if not self._check_client():
-            # Default to neutral if service not configured
             return Sentiment.NEUTRAL
         
         if not text or not text.strip():
@@ -337,7 +347,7 @@ class TranslationService:
                 ],
                 temperature=0.1,
                 max_tokens=20,
-                timeout=30.0,  # 30 seconds timeout
+                timeout=30.0,
             )
             
             result = response.choices[0].message.content.strip().lower()
@@ -366,19 +376,12 @@ class TranslationService:
     ) -> List[dict]:
         """
         Extract insights from a review.
-        
-        Args:
-            original_text: Original English review text
-            translated_text: Translated Chinese text
-            
-        Returns:
-            List of insight dicts
         """
         if not self._check_client():
             return []
         
         # Skip very short reviews
-        if not original_text or len(original_text.strip()) < 30:
+        if not original_text or len(original_text.strip()) < 20:
             return []
         
         try:
@@ -390,25 +393,19 @@ class TranslationService:
                         translated_text=translated_text or original_text
                     )}
                 ],
-                temperature=0.3,
+                temperature=0.2, # Lower temperature for structural extraction
                 max_tokens=1500,
                 timeout=60.0,
             )
             
             result = response.choices[0].message.content.strip()
             
-            # Parse JSON result
-            # Handle markdown code blocks if present
-            if result.startswith("```"):
-                # Remove markdown code block markers
-                lines = result.split("\n")
-                if lines[0].startswith("```"):
-                    lines = lines[1:]
-                if lines and lines[-1].strip() == "```":
-                    lines = lines[:-1]
-                result = "\n".join(lines)
+            # [UPDATED] Use robust JSON parser
+            insights = parse_json_safely(result)
             
-            insights = json.loads(result)
+            if not isinstance(insights, list):
+                logger.warning(f"Parsed insights is not a list: {type(insights)}")
+                return []
             
             # Validate insights
             valid_insights = []
@@ -433,9 +430,6 @@ class TranslationService:
             logger.debug(f"Extracted {len(valid_insights)} insights from review")
             return valid_insights
             
-        except json.JSONDecodeError as e:
-            logger.warning(f"Failed to parse insights JSON: {e}")
-            return []
         except Exception as e:
             logger.warning(f"Insight extraction failed: {e}")
             return []
@@ -448,14 +442,6 @@ class TranslationService:
     ) -> Tuple[Optional[str], str, Sentiment, List[dict]]:
         """
         Translate a complete review (title and body), analyze sentiment, and extract insights.
-        
-        Args:
-            title: Review title (optional)
-            body: Review body (required)
-            extract_insights: Whether to extract insights (default True)
-            
-        Returns:
-            Tuple of (translated_title, translated_body, sentiment, insights)
         """
         # Translate title if present
         translated_title = None
@@ -493,12 +479,6 @@ class TranslationService:
     ) -> list[dict]:
         """
         Translate a batch of reviews.
-        
-        Args:
-            reviews: List of review dicts with 'title' and 'body' keys
-            
-        Returns:
-            List of dicts with 'title_translated', 'body_translated', 'sentiment'
         """
         results = []
         
@@ -507,14 +487,16 @@ class TranslationService:
             body = review.get("body") or review.get("body_original", "")
             
             try:
-                translated_title, translated_body, sentiment = self.translate_review(
+                translated_title, translated_body, sentiment, insights = self.translate_review(
                     title=title,
-                    body=body
+                    body=body,
+                    extract_insights=True 
                 )
                 results.append({
                     "title_translated": translated_title,
                     "body_translated": translated_body,
                     "sentiment": sentiment.value,
+                    "insights": insights,
                     "success": True
                 })
             except Exception as e:
@@ -523,6 +505,7 @@ class TranslationService:
                     "title_translated": None,
                     "body_translated": None,
                     "sentiment": Sentiment.NEUTRAL.value,
+                    "insights": [],
                     "success": False,
                     "error": str(e)
                 })
@@ -538,12 +521,6 @@ class TranslationService:
     def translate_bullet_points(self, bullet_points: List[str]) -> List[str]:
         """
         Translate product bullet points from English to Chinese.
-        
-        Args:
-            bullet_points: List of English bullet point strings
-            
-        Returns:
-            List of translated Chinese bullet point strings
         """
         if not self._check_client():
             raise RuntimeError("Translation service not configured")
@@ -592,12 +569,6 @@ class TranslationService:
     def translate_product_title(self, title: str) -> str:
         """
         Translate product title from English to Chinese.
-        
-        Args:
-            title: English product title
-            
-        Returns:
-            Translated Chinese title
         """
         if not title or not title.strip():
             return ""
@@ -617,32 +588,6 @@ class TranslationService:
     def extract_themes(self, original_text: str, translated_text: str) -> dict:
         """
         Extract theme content from a review (both original and translated).
-        
-        Args:
-            original_text: Original English review text
-            translated_text: Translated Chinese review text
-            
-        Returns:
-            Dict with theme_type -> list of items
-            Each item is a dict with: content, content_original, content_translated, explanation
-            Example: {
-                "who": [
-                    {
-                        "content": "孩子",
-                        "content_original": "for kids",
-                        "content_translated": "给孩子",
-                        "explanation": "评论中提到使用人群是孩子"
-                    }
-                ],
-                "pain_points": [
-                    {
-                        "content": "太贵了",
-                        "content_original": "too expensive",
-                        "content_translated": "太贵了",
-                        "explanation": "用户认为价格过高"
-                    }
-                ]
-            }
         """
         if not self._check_client():
             return {}
@@ -667,23 +612,18 @@ class TranslationService:
                     )}
                 ],
                 temperature=0.2,
-                max_tokens=2000,  # Increased for more detailed responses
+                max_tokens=2000,
                 timeout=60.0,
             )
             
             result = response.choices[0].message.content.strip()
             
-            # Parse JSON result
-            # Handle markdown code blocks if present
-            if result.startswith("```"):
-                lines = result.split("\n")
-                if lines[0].startswith("```"):
-                    lines = lines[1:]
-                if lines and lines[-1].strip() == "```":
-                    lines = lines[:-1]
-                result = "\n".join(lines)
+            # [UPDATED] Use robust JSON parser
+            themes = parse_json_safely(result)
             
-            themes = json.loads(result)
+            if not isinstance(themes, dict):
+                logger.warning(f"Parsed themes is not a dict: {type(themes)}")
+                return {}
             
             # Validate and filter themes
             valid_result = {}
@@ -724,9 +664,6 @@ class TranslationService:
             logger.debug(f"Extracted themes: {list(valid_result.keys())}")
             return valid_result
             
-        except json.JSONDecodeError as e:
-            logger.warning(f"Failed to parse themes JSON: {e}")
-            return {}
         except Exception as e:
             logger.warning(f"Theme extraction failed: {e}")
             return {}
@@ -734,4 +671,3 @@ class TranslationService:
 
 # Singleton instance
 translation_service = TranslationService()
-
