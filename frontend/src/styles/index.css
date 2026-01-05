@@ -1,3 +1,35 @@
 @import './fonts.css';
 @import './tailwind.css';
 @import './theme.css';
+
+/* 全屏模式样式优化 */
+:fullscreen {
+  width: 100vw;
+  height: 100vh;
+}
+
+:-webkit-full-screen {
+  width: 100vw;
+  height: 100vh;
+}
+
+:-moz-full-screen {
+  width: 100vw;
+  height: 100vh;
+}
+
+:-ms-fullscreen {
+  width: 100vw;
+  height: 100vh;
+}
+
+/* 全屏时确保容器占据整个屏幕 */
+:fullscreen .min-h-screen,
+:-webkit-full-screen .min-h-screen,
+:-moz-full-screen .min-h-screen,
+:-ms-fullscreen .min-h-screen {
+  width: 100vw;
+  height: 100vh;
+  margin: 0;
+  padding: 0;
+}

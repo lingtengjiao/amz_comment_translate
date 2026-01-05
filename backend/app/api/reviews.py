@@ -156,18 +156,15 @@ async def get_reviews(
 @router.get("/{asin}/export")
 async def export_reviews(
     asin: str,
-    format: str = Query("xlsx", pattern="^(xlsx|csv)$"),
     db: AsyncSession = Depends(get_db)
 ):
     """
-    Export all reviews for a product as Excel or CSV.
-    
-    Query parameters:
-    - format: Export format (xlsx or csv)
+    Export all reviews for a product as Excel (XLSX).
+    Includes insights and theme highlights data.
     """
     service = ReviewService(db)
     
-    # Get all reviews (no pagination)
+    # Get all reviews (no pagination) with insights and theme highlights
     reviews, total = await service.get_product_reviews(
         asin=asin,
         page=1,
@@ -177,9 +174,55 @@ async def export_reviews(
     if not reviews:
         raise HTTPException(status_code=404, detail="No reviews found")
     
-    # Convert to DataFrame
+    # Convert to DataFrame with insights and theme highlights
     data = []
     for r in reviews:
+        # Format insights
+        insights_text = ""
+        if r.insights and len(r.insights) > 0:
+            insight_parts = []
+            for insight in r.insights:
+                insight_str = f"[{insight.insight_type}] {insight.quote}"
+                if insight.quote_translated:
+                    insight_str += f" | 翻译: {insight.quote_translated}"
+                if insight.analysis:
+                    insight_str += f" | 分析: {insight.analysis}"
+                if insight.dimension:
+                    insight_str += f" | 维度: {insight.dimension}"
+                insight_parts.append(insight_str)
+            insights_text = " | ".join(insight_parts)
+        
+        # Format theme highlights
+        theme_parts = []
+        if r.theme_highlights and len(r.theme_highlights) > 0:
+            for theme in r.theme_highlights:
+                theme_label_map = {
+                    "who": "Who（使用者）",
+                    "where": "Where（使用场景）",
+                    "when": "When（使用时机）",
+                    "unmet_needs": "未被满足的需求",
+                    "pain_points": "Pain Points（痛点）",
+                    "benefits": "Benefits（收益/好处）",
+                    "features": "Features（功能特性）",
+                    "comparison": "Comparison（对比）"
+                }
+                theme_label = theme_label_map.get(theme.theme_type, theme.theme_type)
+                
+                # Format items
+                if theme.items and len(theme.items) > 0:
+                    item_texts = []
+                    for item in theme.items:
+                        item_str = item.get("content", "")
+                        if item.get("content_original"):
+                            item_str += f" ({item['content_original']})"
+                        if item.get("explanation"):
+                            item_str += f" - {item['explanation']}"
+                        item_texts.append(item_str)
+                    theme_str = f"{theme_label}: {', '.join(item_texts)}"
+                    theme_parts.append(theme_str)
+        
+        themes_text = " | ".join(theme_parts) if theme_parts else ""
+        
         data.append({
             "评分 (Rating)": r.rating,
             "评论标题 (Title)": r.title_original,
@@ -190,29 +233,24 @@ async def export_reviews(
             "作者 (Author)": r.author,
             "日期 (Date)": r.review_date,
             "认证购买 (Verified)": "是" if r.verified_purchase else "否",
-            "有用票数 (Helpful)": r.helpful_votes
+            "有用票数 (Helpful)": r.helpful_votes,
+            "提取洞察 (Insights)": insights_text,
+            "提取主题 (Theme Highlights)": themes_text
         })
     
     df = pd.DataFrame(data)
     
-    # Generate file
+    # Generate Excel file
     output = BytesIO()
-    
-    if format == "xlsx":
-        df.to_excel(output, index=False, engine='openpyxl')
-        media_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        filename = f"reviews_{asin}.xlsx"
-    else:
-        df.to_csv(output, index=False, encoding='utf-8-sig')
-        media_type = "text/csv"
-        filename = f"reviews_{asin}.csv"
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        df.to_excel(writer, index=False, sheet_name='Reviews')
     
     output.seek(0)
     
     return StreamingResponse(
         output,
-        media_type=media_type,
-        headers={"Content-Disposition": f"attachment; filename={filename}"}
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename=reviews_{asin}.xlsx"}
     )
 
 

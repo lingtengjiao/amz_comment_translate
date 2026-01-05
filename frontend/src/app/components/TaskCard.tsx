@@ -17,7 +17,7 @@ export const TaskCard = memo(function TaskCard({ task, onClick }: TaskCardProps)
 
   const handleClick = () => {
     // 允许查看任何状态的任务
-    onClick();
+      onClick();
   };
 
   return (

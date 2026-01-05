@@ -185,20 +185,20 @@ export const ReviewCard = memo(function ReviewCard({
               {/* 检查是否有翻译内容 */}
               {review.translatedText ? (
                 <>
-                  {/* Translated Title if exists */}
-                  {review.translatedTitle && (
-                    <p className="text-gray-900 dark:text-white font-bold mb-2.5 leading-snug">{review.translatedTitle}</p>
-                  )}
-                  
-                  {highlightEnabled ? (
-                    <ThemeHighlightedText 
-                      text={review.translatedText} 
-                      activeThemes={activeThemes} 
-                      allTags={allTags}
-                      className="text-gray-900 dark:text-white leading-relaxed" 
-                    />
-                  ) : (
-                    <p className="text-gray-900 dark:text-white leading-relaxed whitespace-pre-wrap">{review.translatedText}</p>
+              {/* Translated Title if exists */}
+              {review.translatedTitle && (
+                <p className="text-gray-900 dark:text-white font-bold mb-2.5 leading-snug">{review.translatedTitle}</p>
+              )}
+              
+              {highlightEnabled ? (
+                <ThemeHighlightedText 
+                  text={review.translatedText} 
+                  activeThemes={activeThemes} 
+                  allTags={allTags}
+                  className="text-gray-900 dark:text-white leading-relaxed" 
+                />
+              ) : (
+                <p className="text-gray-900 dark:text-white leading-relaxed whitespace-pre-wrap">{review.translatedText}</p>
                   )}
                 </>
               ) : (

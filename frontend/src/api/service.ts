@@ -510,10 +510,9 @@ export async function getReviews(params: {
  * 导出评论（兼容现有后端）
  */
 export async function exportReviewsByAsin(
-  asin: string,
-  format: 'xlsx' | 'csv' = 'xlsx'
+  asin: string
 ): Promise<Blob> {
-  const url = `${API_BASE}/reviews/${asin}/export?format=${format}`;
+  const url = `${API_BASE}/reviews/${asin}/export`;
   const response = await fetch(url);
   if (!response.ok) {
     throw new ApiError(response.status, response.statusText);

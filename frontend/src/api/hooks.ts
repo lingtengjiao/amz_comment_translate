@@ -345,27 +345,16 @@ export function useExport(asin: string | undefined): UseExport {
   const [exporting, setExporting] = useState(false);
 
   const exportCSV = useCallback(async () => {
-    if (!asin) return;
-    
-    setExporting(true);
-    try {
-      const blob = await apiService.exportReviewsByAsin(asin, 'csv');
-      const filename = `reviews_${asin}_${new Date().toISOString().split('T')[0]}.csv`;
-      apiService.downloadFile(blob, filename);
-    } catch (err) {
-      console.error('Export CSV failed:', err);
-      throw err;
-    } finally {
-      setExporting(false);
-    }
-  }, [asin]);
+    // CSV export is no longer supported
+    throw new Error('CSV export is no longer supported. Please use XLSX export.');
+  }, []);
 
   const exportXLSX = useCallback(async () => {
     if (!asin) return;
     
     setExporting(true);
     try {
-      const blob = await apiService.exportReviewsByAsin(asin, 'xlsx');
+      const blob = await apiService.exportReviewsByAsin(asin);
       const filename = `reviews_${asin}_${new Date().toISOString().split('T')[0]}.xlsx`;
       apiService.downloadFile(blob, filename);
     } catch (err) {

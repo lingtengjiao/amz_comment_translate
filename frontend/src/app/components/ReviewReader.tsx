@@ -9,7 +9,9 @@ import {
   EyeOff,
   RefreshCw,
   Check,
-  Tag
+  Tag,
+  Maximize2,
+  Minimize2
 } from 'lucide-react';
 import { useState, useMemo, useRef, useEffect, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
@@ -79,7 +81,9 @@ export function ReviewReader() {
   const [bulletPointsTranslated, setBulletPointsTranslated] = useState(false); // 五点是否已翻译
   const [apiRatingDistribution, setApiRatingDistribution] = useState<{5: number; 4: number; 3: number; 2: number; 1: number}>({ 5: 0, 4: 0, 3: 0, 2: 0, 1: 0 });
   const [apiSentimentDistribution, setApiSentimentDistribution] = useState<{positive: number; neutral: number; negative: number}>({ positive: 0, neutral: 0, negative: 0 });
+  const [isFullscreen, setIsFullscreen] = useState(false);
   const pageSize = 50;
+  const pageContainerRef = useRef<HTMLDivElement | null>(null);
 
   // 加载产品统计信息和评论
   const fetchData = useCallback(async () => {
@@ -107,7 +111,7 @@ export function ReviewReader() {
       
       // 检查五点是否已翻译（有五点原文但没有翻译，或者没有五点则视为已完成）
       const hasBulletPoints = statsResponse.product.bullet_points && statsResponse.product.bullet_points.length > 0;
-      const hasBulletPointsTranslated = statsResponse.product.bullet_points_translated && statsResponse.product.bullet_points_translated.length > 0;
+      const hasBulletPointsTranslated = !!(statsResponse.product.bullet_points_translated && statsResponse.product.bullet_points_translated.length > 0);
       const hasTitle = !!statsResponse.product.title;
       const hasTitleTranslated = !!statsResponse.product.title_translated;
       
@@ -136,6 +140,144 @@ export function ReviewReader() {
   useEffect(() => {
     fetchData();
   }, [fetchData]);
+
+  // 全屏功能 - 获取全屏元素（兼容所有浏览器）
+  const getFullscreenElement = useCallback(() => {
+    return (
+      document.fullscreenElement ||
+      (document as any).webkitFullscreenElement ||
+      (document as any).mozFullScreenElement ||
+      (document as any).msFullscreenElement ||
+      null
+    );
+  }, []);
+
+
+  // 全屏功能 - 退出全屏（兼容所有浏览器）
+  const exitFullscreen = useCallback(async () => {
+    if (document.exitFullscreen) {
+      await document.exitFullscreen();
+    } else if ((document as any).webkitExitFullscreen) {
+      await (document as any).webkitExitFullscreen();
+    } else if ((document as any).mozCancelFullScreen) {
+      await (document as any).mozCancelFullScreen();
+    } else if ((document as any).msExitFullscreen) {
+      await (document as any).msExitFullscreen();
+    } else {
+      throw new Error('浏览器不支持退出全屏功能');
+    }
+  }, []);
+
+  // 全屏切换 - 真正的系统级全屏，隐藏地址栏和标签页
+  // 核心：必须作用于 document.documentElement，必须由用户点击触发
+  const handleFullscreenClick = (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    
+    // 核心：必须作用于 document.documentElement (整个网页)
+    const element = document.documentElement;
+    
+    // 检测当前是否处于全屏状态
+    if (!document.fullscreenElement && 
+        !(document as any).webkitFullscreenElement && 
+        !(document as any).mozFullScreenElement && 
+        !(document as any).msFullscreenElement) {
+      // 进入系统级全屏 - 直接调用，不使用 call()
+      if (element.requestFullscreen) {
+        // 标准 API
+        element.requestFullscreen().catch((err: any) => {
+          console.error('全屏失败:', err);
+          toast.error('全屏失败', err.message || '请检查浏览器设置');
+        });
+      } else if ((element as any).webkitRequestFullscreen) {
+        // Chrome/Safari - 注意是 webkitRequestFullscreen (小写screen)
+        (element as any).webkitRequestFullscreen();
+      } else if ((element as any).webkitRequestFullScreen) {
+        // Chrome/Safari 旧版本 - 注意是 webkitRequestFullScreen (大写Screen)
+        (element as any).webkitRequestFullScreen();
+      } else if ((element as any).mozRequestFullScreen) {
+        // Firefox
+        (element as any).mozRequestFullScreen();
+      } else if ((element as any).msRequestFullscreen) {
+        // IE/Edge
+        (element as any).msRequestFullscreen();
+      } else {
+        toast.error('不支持全屏', '您的浏览器不支持全屏功能');
+      }
+    } else {
+      // 退出全屏
+      if (document.exitFullscreen) {
+        document.exitFullscreen().catch((err: any) => {
+          console.error('退出全屏失败:', err);
+          toast.error('退出全屏失败', err.message);
+        });
+      } else if ((document as any).webkitExitFullscreen) {
+        (document as any).webkitExitFullscreen();
+      } else if ((document as any).mozCancelFullScreen) {
+        (document as any).mozCancelFullScreen();
+      } else if ((document as any).msExitFullscreen) {
+        (document as any).msExitFullscreen();
+      }
+    }
+  };
+
+  // 监听全屏状态变化（兼容所有浏览器）
+  useEffect(() => {
+    const handleFullscreenChange = () => {
+      const isFullscreenNow = !!getFullscreenElement();
+      console.log('全屏状态变化:', isFullscreenNow);
+      setIsFullscreen(isFullscreenNow);
+      
+      // 全屏时添加样式，确保内容占满整个屏幕
+      if (isFullscreenNow) {
+        document.documentElement.style.width = '100%';
+        document.documentElement.style.height = '100%';
+        document.body.style.width = '100%';
+        document.body.style.height = '100%';
+        document.body.style.margin = '0';
+        document.body.style.padding = '0';
+        if (pageContainerRef.current) {
+          pageContainerRef.current.style.width = '100vw';
+          pageContainerRef.current.style.height = '100vh';
+          pageContainerRef.current.style.margin = '0';
+          pageContainerRef.current.style.padding = '0';
+        }
+      } else {
+        // 退出全屏时恢复样式
+        document.documentElement.style.width = '';
+        document.documentElement.style.height = '';
+        document.body.style.width = '';
+        document.body.style.height = '';
+        document.body.style.margin = '';
+        document.body.style.padding = '';
+        if (pageContainerRef.current) {
+          pageContainerRef.current.style.width = '';
+          pageContainerRef.current.style.height = '';
+          pageContainerRef.current.style.margin = '';
+          pageContainerRef.current.style.padding = '';
+        }
+      }
+    };
+
+    // 标准事件
+    document.addEventListener('fullscreenchange', handleFullscreenChange);
+    // WebKit (Safari/Chrome)
+    document.addEventListener('webkitfullscreenchange', handleFullscreenChange);
+    // Mozilla (Firefox)
+    document.addEventListener('mozfullscreenchange', handleFullscreenChange);
+    // IE/Edge
+    document.addEventListener('MSFullscreenChange', handleFullscreenChange);
+
+    // 初始化状态
+    handleFullscreenChange();
+
+    return () => {
+      document.removeEventListener('fullscreenchange', handleFullscreenChange);
+      document.removeEventListener('webkitfullscreenchange', handleFullscreenChange);
+      document.removeEventListener('mozfullscreenchange', handleFullscreenChange);
+      document.removeEventListener('MSFullscreenChange', handleFullscreenChange);
+    };
+  }, [getFullscreenElement]);
 
   // 轮询翻译进度
   useEffect(() => {
@@ -481,27 +623,11 @@ export function ReviewReader() {
     };
   }, [linkRating, totalReviews, translatedCount, reviewsWithInsights, reviewsWithThemes, apiRatingDistribution, apiSentimentDistribution]);
 
-  const handleExportCSV = async () => {
-    if (!asin) return;
-
-    try {
-      const blob = await apiService.exportReviewsByAsin(asin, 'csv');
-      const link = document.createElement('a');
-      link.href = URL.createObjectURL(blob);
-      link.download = `reviews_${asin}_${new Date().toISOString().split('T')[0]}.csv`;
-      link.click();
-      toast.success('导出成功', '文件已开始下载');
-    } catch (err) {
-      console.error('Export failed:', err);
-      toast.error('导出失败', '请重试');
-    }
-  };
-
   const handleExportXLSX = async () => {
     if (!asin) return;
 
     try {
-      const blob = await apiService.exportReviewsByAsin(asin, 'xlsx');
+      const blob = await apiService.exportReviewsByAsin(asin);
       const link = document.createElement('a');
       link.href = URL.createObjectURL(blob);
       link.download = `reviews_${asin}_${new Date().toISOString().split('T')[0]}.xlsx`;
@@ -632,13 +758,35 @@ export function ReviewReader() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50 transition-colors">
+    <div 
+      ref={pageContainerRef} 
+      className={`min-h-screen bg-gray-50 transition-colors ${isFullscreen ? 'w-full h-full' : ''}`}
+      style={isFullscreen ? { width: '100vw', height: '100vh', overflow: 'auto' } : {}}
+    >
       {/* Header */}
       <header className="bg-white border-b border-gray-200 sticky top-0 z-20 shadow-sm">
         <div className="max-w-[1600px] mx-auto px-4 sm:px-6 lg:px-8 py-3">
           <div className="flex items-center justify-between gap-4">
-            {/* Left: Back Button + Title */}
+            {/* Left: Fullscreen Button + Back Button + Title */}
             <div className="flex items-center gap-3 flex-1 min-w-0">
+              <button
+                type="button"
+                onClick={handleFullscreenClick}
+                className="inline-flex items-center justify-center gap-2 rounded-md border border-input bg-background px-3 py-2 text-sm font-medium ring-offset-background transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 flex-shrink-0"
+                title={isFullscreen ? '退出全屏' : '进入全屏'}
+              >
+                {isFullscreen ? (
+                  <>
+                    <Minimize2 className="size-4" />
+                    全屏
+                  </>
+                ) : (
+                  <>
+                    <Maximize2 className="size-4" />
+                    全屏
+                  </>
+                )}
+              </button>
               <Button
                 variant="ghost"
                 size="sm"
@@ -743,10 +891,6 @@ export function ReviewReader() {
                   )}
                 </Button>
               )}
-              <Button onClick={handleExportCSV} variant="outline" size="sm" className="gap-2">
-                <Download className="size-4" />
-                CSV
-              </Button>
               <Button onClick={handleExportXLSX} size="sm" className="gap-2">
                 <FileSpreadsheet className="size-4" />
                 XLSX

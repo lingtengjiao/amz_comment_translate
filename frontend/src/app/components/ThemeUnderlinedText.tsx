@@ -72,12 +72,12 @@ export function ThemeUnderlinedText({ text, activeThemes, allTags, className = '
           const foundIndex = searchText.indexOf(searchPattern, index);
           if (foundIndex === -1) break;
           
-          matches.push({
-            start: foundIndex,
-            end: foundIndex + pattern.length,
-            underlineColor: underlineColor,
-            text: text.slice(foundIndex, foundIndex + pattern.length)
-          });
+            matches.push({
+              start: foundIndex,
+              end: foundIndex + pattern.length,
+              underlineColor: underlineColor,
+              text: text.slice(foundIndex, foundIndex + pattern.length)
+            });
           
           index = foundIndex + 1;
         }
