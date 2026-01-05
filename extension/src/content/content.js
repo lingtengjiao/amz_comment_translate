@@ -651,24 +651,57 @@ function handleStopClick() {
   stopCollection();
 }
 
-// Chrome Message Listener
-chrome.runtime.onMessage.addListener((msg, sender, sendRes) => {
-  if (msg.type === 'OPEN_OVERLAY') {
+/**
+ * Chrome Message Listener
+ * [UPDATED] Added handler for 'GET_PAGE_INFO' to support Popup
+ */
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  // 1. 处理 Popup 获取页面信息的请求 (修复 ASIN 不显示的问题)
+  if (msg.type === 'GET_PAGE_INFO') {
+    const asin = detectASIN(); // 使用增强版的 detectASIN
+    const info = getProductInfo(); // 获取标题等信息
+    
+    sendResponse({
+      asin: asin,
+      title: info.title,
+      success: !!asin
+    });
+    return true; // 保持消息通道开启 (虽然这里是同步的，但好习惯)
+  }
+
+  // 2. 处理打开采集面板的请求
+  else if (msg.type === 'OPEN_OVERLAY') {
     const asin = detectASIN();
-    showOverlay({ status: 'ready', asin, title: getProductInfo().title });
-    sendRes({ success: true });
-  } else if (msg.type === 'COLLECTION_PROGRESS') {
+    const info = getProductInfo();
+    showOverlay({ 
+      status: 'ready', 
+      asin: asin, 
+      title: info.title 
+    });
+    sendResponse({ success: true });
+    return true;
+  }
+
+  // 3. 处理后台传来的采集进度
+  else if (msg.type === 'COLLECTION_PROGRESS') {
+    // 计算总体进度: (当前页/总页数 * 权重) + (当前星级进度)
+    // 简化显示：只显示百分比文本
+    const percent = Math.min(Math.round((msg.page / msg.pagesPerStar) * 20 + (msg.star - 1) * 20), 99);
+    
     updateOverlay({
       status: 'collecting',
       message: msg.message,
-      progress: Math.min(Math.round((msg.page/msg.pagesPerStar)*20 + (msg.star-1)*20), 95),
+      progress: percent,
       reviewCount: msg.totalReviews
     });
-  } else if (msg.type === 'COLLECTION_COMPLETE') {
+  } 
+
+  // 4. 处理采集完成
+  else if (msg.type === 'COLLECTION_COMPLETE') {
     const asin = detectASIN();
     showOverlay({
       status: msg.success ? 'complete' : 'error',
-      message: msg.success ? `采集完成! 共${msg.reviewCount}条` : `失败: ${msg.error}`,
+      message: msg.success ? `采集完成! 共 ${msg.reviewCount} 条` : `失败: ${msg.error}`,
       dashboardUrl: `${CONFIG.DASHBOARD_URL}/products/${asin}`
     });
   }
