@@ -168,104 +168,69 @@ export function ReviewReader() {
     }
   }, []);
 
-  // 全屏切换 - 真正的系统级全屏，隐藏地址栏和标签页
-  // 核心：必须作用于 document.documentElement，必须由用户点击触发
-  const handleFullscreenClick = (e: React.MouseEvent) => {
+  // 全屏切换 - 针对页面容器进行全屏，实现真正的沉浸式
+  const handleFullscreenClick = async (e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
     
-    // 核心：必须作用于 document.documentElement (整个网页)
-    const element = document.documentElement;
-    
-    // 检测当前是否处于全屏状态
-    if (!document.fullscreenElement && 
-        !(document as any).webkitFullscreenElement && 
-        !(document as any).mozFullScreenElement && 
-        !(document as any).msFullscreenElement) {
-      // 进入系统级全屏 - 直接调用，不使用 call()
-      if (element.requestFullscreen) {
-        // 标准 API
-        element.requestFullscreen().catch((err: any) => {
-          console.error('全屏失败:', err);
-          toast.error('全屏失败', err.message || '请检查浏览器设置');
-        });
-      } else if ((element as any).webkitRequestFullscreen) {
-        // Chrome/Safari - 注意是 webkitRequestFullscreen (小写screen)
-        (element as any).webkitRequestFullscreen();
-      } else if ((element as any).webkitRequestFullScreen) {
-        // Chrome/Safari 旧版本 - 注意是 webkitRequestFullScreen (大写Screen)
-        (element as any).webkitRequestFullScreen();
-      } else if ((element as any).mozRequestFullScreen) {
-        // Firefox
-        (element as any).mozRequestFullScreen();
-      } else if ((element as any).msRequestFullscreen) {
-        // IE/Edge
-        (element as any).msRequestFullscreen();
+    // 1. 获取要全屏的目标容器
+    const element = pageContainerRef.current;
+    if (!element) return;
+
+    // 2. 检查当前全屏状态（兼容性写法）
+    const fullscreenElement = getFullscreenElement();
+    const isCurrentElementFullscreen = fullscreenElement === element;
+
+    try {
+      if (!isCurrentElementFullscreen) {
+        // --- 进入全屏 ---
+        if (element.requestFullscreen) {
+          await element.requestFullscreen();
+        } else if ((element as any).webkitRequestFullscreen) {
+          await (element as any).webkitRequestFullscreen();
+        } else if ((element as any).webkitRequestFullScreen) {
+          await (element as any).webkitRequestFullScreen();
+        } else if ((element as any).mozRequestFullScreen) {
+          await (element as any).mozRequestFullScreen();
+        } else if ((element as any).msRequestFullscreen) {
+          await (element as any).msRequestFullscreen();
+        } else {
+          toast.error('不支持全屏', '您的浏览器不支持全屏功能');
+        }
       } else {
-        toast.error('不支持全屏', '您的浏览器不支持全屏功能');
+        // --- 退出全屏 ---
+        if (document.exitFullscreen) {
+          await document.exitFullscreen();
+        } else if ((document as any).webkitExitFullscreen) {
+          await (document as any).webkitExitFullscreen();
+        } else if ((document as any).mozCancelFullScreen) {
+          await (document as any).mozCancelFullScreen();
+        } else if ((document as any).msExitFullscreen) {
+          await (document as any).msExitFullscreen();
+        }
       }
-    } else {
-      // 退出全屏
-      if (document.exitFullscreen) {
-        document.exitFullscreen().catch((err: any) => {
-          console.error('退出全屏失败:', err);
-          toast.error('退出全屏失败', err.message);
-        });
-      } else if ((document as any).webkitExitFullscreen) {
-        (document as any).webkitExitFullscreen();
-      } else if ((document as any).mozCancelFullScreen) {
-        (document as any).mozCancelFullScreen();
-      } else if ((document as any).msExitFullscreen) {
-        (document as any).msExitFullscreen();
-      }
+    } catch (err) {
+      console.error('全屏切换失败:', err);
+      toast.error('全屏切换失败', '可能是浏览器权限限制');
     }
   };
 
-  // 监听全屏状态变化（兼容所有浏览器）
+  // 监听全屏状态变化
   useEffect(() => {
     const handleFullscreenChange = () => {
-      const isFullscreenNow = !!getFullscreenElement();
-      console.log('全屏状态变化:', isFullscreenNow);
-      setIsFullscreen(isFullscreenNow);
+      // 检查当前全屏元素是否为我们的容器
+      const currentFullscreenElement = getFullscreenElement();
+      const isNowFullscreen = currentFullscreenElement === pageContainerRef.current;
       
-      // 全屏时添加样式，确保内容占满整个屏幕
-      if (isFullscreenNow) {
-        document.documentElement.style.width = '100%';
-        document.documentElement.style.height = '100%';
-        document.body.style.width = '100%';
-        document.body.style.height = '100%';
-        document.body.style.margin = '0';
-        document.body.style.padding = '0';
-        if (pageContainerRef.current) {
-          pageContainerRef.current.style.width = '100vw';
-          pageContainerRef.current.style.height = '100vh';
-          pageContainerRef.current.style.margin = '0';
-          pageContainerRef.current.style.padding = '0';
-        }
-      } else {
-        // 退出全屏时恢复样式
-        document.documentElement.style.width = '';
-        document.documentElement.style.height = '';
-        document.body.style.width = '';
-        document.body.style.height = '';
-        document.body.style.margin = '';
-        document.body.style.padding = '';
-        if (pageContainerRef.current) {
-          pageContainerRef.current.style.width = '';
-          pageContainerRef.current.style.height = '';
-          pageContainerRef.current.style.margin = '';
-          pageContainerRef.current.style.padding = '';
-        }
-      }
+      setIsFullscreen(isNowFullscreen);
+      
+      // 注意：不需要手动修改 body 样式了
+      // 浏览器会对全屏元素自动应用 user-agent 样式
     };
 
-    // 标准事件
     document.addEventListener('fullscreenchange', handleFullscreenChange);
-    // WebKit (Safari/Chrome)
     document.addEventListener('webkitfullscreenchange', handleFullscreenChange);
-    // Mozilla (Firefox)
     document.addEventListener('mozfullscreenchange', handleFullscreenChange);
-    // IE/Edge
     document.addEventListener('MSFullscreenChange', handleFullscreenChange);
 
     // 初始化状态
@@ -760,8 +725,13 @@ export function ReviewReader() {
   return (
     <div 
       ref={pageContainerRef} 
-      className={`min-h-screen bg-gray-50 transition-colors ${isFullscreen ? 'w-full h-full' : ''}`}
-      style={isFullscreen ? { width: '100vw', height: '100vh', overflow: 'auto' } : {}}
+      // 关键样式解释：
+      // 1. overflow-y-auto: 确保全屏时内容长了可以滚动
+      // 2. bg-gray-50: 防止全屏后背景变黑
+      // 3. w-full h-full: 常规状态下占满父容器
+      className={`min-h-screen bg-gray-50 transition-colors overflow-y-auto ${
+        isFullscreen ? 'p-0' : ''
+      }`}
     >
       {/* Header */}
       <header className="bg-white border-b border-gray-200 sticky top-0 z-20 shadow-sm">
@@ -773,17 +743,17 @@ export function ReviewReader() {
                 type="button"
                 onClick={handleFullscreenClick}
                 className="inline-flex items-center justify-center gap-2 rounded-md border border-input bg-background px-3 py-2 text-sm font-medium ring-offset-background transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 flex-shrink-0"
-                title={isFullscreen ? '退出全屏' : '进入全屏'}
+                title={isFullscreen ? '退出沉浸模式 (Esc)' : '进入沉浸模式'}
               >
                 {isFullscreen ? (
                   <>
                     <Minimize2 className="size-4" />
-                    全屏
+                    退出
                   </>
                 ) : (
                   <>
                     <Maximize2 className="size-4" />
-                    全屏
+                    沉浸
                   </>
                 )}
               </button>
