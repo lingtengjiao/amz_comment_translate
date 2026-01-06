@@ -383,6 +383,8 @@ import type {
   ApiTask,
   ApiDimensionListResponse,
   ApiDimensionGenerateResponse,
+  ApiReportGenerateResponse,
+  ApiReportPreviewResponse,
 } from './types';
 
 /**
@@ -513,6 +515,138 @@ export async function generateDimensions(asin: string): Promise<ApiDimensionGene
   return response.json();
 }
 
+// ============== 报告生成相关 ==============
+
+import type { 
+  ApiReportCreateResponse, 
+  ApiReportListResponse, 
+  ProductReport 
+} from './types';
+
+/**
+ * 生成产品分析报告（AI 深度分析，自动持久化）
+ * 需要 30-60 秒，因为需要调用 AI 进行深度分析
+ * 报告会自动存入数据库，支持历史回溯
+ */
+export async function generateReport(asin: string): Promise<ApiReportCreateResponse> {
+  const response = await fetch(`${API_BASE}/products/${asin}/report/generate`, {
+    method: 'POST',
+  });
+  if (!response.ok) {
+    const errorText = await response.text();
+    let message = response.statusText;
+    try {
+      const errorJson = JSON.parse(errorText);
+      message = errorJson.detail || errorJson.message || message;
+    } catch {
+      message = errorText || message;
+    }
+    throw new ApiError(response.status, message);
+  }
+  return response.json();
+}
+
+/**
+ * 获取报告预览数据（不调用 AI，仅返回统计数据）
+ * 用于前端展示进度和数据预览
+ * 同时返回是否存在历史报告
+ */
+export async function getReportPreview(asin: string): Promise<ApiReportPreviewResponse> {
+  const response = await fetch(`${API_BASE}/products/${asin}/report/preview`);
+  if (!response.ok) {
+    const errorText = await response.text();
+    let message = response.statusText;
+    try {
+      const errorJson = JSON.parse(errorText);
+      message = errorJson.detail || errorJson.message || message;
+    } catch {
+      message = errorText || message;
+    }
+    throw new ApiError(response.status, message);
+  }
+  return response.json();
+}
+
+/**
+ * 获取产品的历史报告列表
+ * 按创建时间倒序排列
+ */
+export async function getReportHistory(asin: string, limit: number = 10): Promise<ApiReportListResponse> {
+  const response = await fetch(`${API_BASE}/products/${asin}/reports?limit=${limit}`);
+  if (!response.ok) {
+    const errorText = await response.text();
+    let message = response.statusText;
+    try {
+      const errorJson = JSON.parse(errorText);
+      message = errorJson.detail || errorJson.message || message;
+    } catch {
+      message = errorText || message;
+    }
+    throw new ApiError(response.status, message);
+  }
+  return response.json();
+}
+
+/**
+ * 获取产品最新的报告（秒开）
+ * 如果没有历史报告，返回 404
+ */
+export async function getLatestReport(asin: string): Promise<ProductReport> {
+  const response = await fetch(`${API_BASE}/products/${asin}/reports/latest`);
+  if (!response.ok) {
+    const errorText = await response.text();
+    let message = response.statusText;
+    try {
+      const errorJson = JSON.parse(errorText);
+      message = errorJson.detail || errorJson.message || message;
+    } catch {
+      message = errorText || message;
+    }
+    throw new ApiError(response.status, message);
+  }
+  return response.json();
+}
+
+/**
+ * 根据 ID 获取特定报告
+ */
+export async function getReportById(asin: string, reportId: string): Promise<ProductReport> {
+  const response = await fetch(`${API_BASE}/products/${asin}/reports/${reportId}`);
+  if (!response.ok) {
+    const errorText = await response.text();
+    let message = response.statusText;
+    try {
+      const errorJson = JSON.parse(errorText);
+      message = errorJson.detail || errorJson.message || message;
+    } catch {
+      message = errorText || message;
+    }
+    throw new ApiError(response.status, message);
+  }
+  return response.json();
+}
+
+/**
+ * 删除指定报告
+ */
+export async function deleteReport(asin: string, reportId: string): Promise<{ success: boolean; message: string }> {
+  const response = await fetch(`${API_BASE}/products/${asin}/reports/${reportId}`, {
+    method: 'DELETE',
+  });
+  if (!response.ok) {
+    const errorText = await response.text();
+    let message = response.statusText;
+    try {
+      const errorJson = JSON.parse(errorText);
+      message = errorJson.detail || errorJson.message || message;
+    } catch {
+      message = errorText || message;
+    }
+    throw new ApiError(response.status, message);
+  }
+  return response.json();
+}
+
 /**
  * 获取评论列表（兼容现有后端）
  */
@@ -620,6 +754,14 @@ const apiService = {
   // 产品维度
   getDimensions,
   generateDimensions,
+  
+  // 报告生成（支持持久化）
+  generateReport,
+  getReportPreview,
+  getReportHistory,
+  getLatestReport,
+  getReportById,
+  deleteReport,
 };
 
 export default apiService;

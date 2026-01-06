@@ -15,79 +15,64 @@ export interface ThemeTag {
   question?: string;
 }
 
-// 主题类型配置（只包含元数据，patterns 为空，由后端 AI 填充）
+/**
+ * [UPDATED] 5W 营销模型主题类型配置
+ * - Who: 使用者/人群
+ * - Where: 使用地点/场景
+ * - When: 使用时刻/时机
+ * - Why: 购买动机 (Purchase Driver)
+ * - What: 待办任务 (Jobs to be Done)
+ */
 export const themeTagsPreset: ThemeTag[] = [
   {
     id: 'who',
-    label: 'Who（使用者）',
+    label: 'Who（使用者/人群）',
     color: 'text-blue-900',
     bgColor: 'bg-blue-100/90',
     darkBgColor: 'dark:bg-blue-500/30',
     darkTextColor: 'dark:text-blue-200',
-    patterns: [] // 由后端 AI 动态填充
+    patterns: [], // 由后端 AI 动态填充
+    question: '谁在使用？如：老年人、宠物主、学生'
   },
   {
     id: 'where',
-    label: 'Where（使用场景）',
+    label: 'Where（使用地点）',
     color: 'text-purple-900',
     bgColor: 'bg-purple-100/90',
     darkBgColor: 'dark:bg-purple-500/30',
     darkTextColor: 'dark:text-purple-200',
-    patterns: []
+    patterns: [],
+    question: '在哪里使用？如：卧室、办公室、车上'
   },
   {
     id: 'when',
-    label: 'When（使用时机）',
+    label: 'When（使用时刻）',
     color: 'text-green-900',
     bgColor: 'bg-green-100/90',
     darkBgColor: 'dark:bg-green-500/30',
     darkTextColor: 'dark:text-green-200',
-    patterns: []
+    patterns: [],
+    question: '什么时候使用？如：睡前、停电时、旅行时'
   },
   {
-    id: 'unmet_needs',
-    label: '未被满足的需求',
-    color: 'text-red-900',
-    bgColor: 'bg-red-100/90',
-    darkBgColor: 'dark:bg-red-500/30',
-    darkTextColor: 'dark:text-red-200',
-    patterns: []
-  },
-  {
-    id: 'pain_points',
-    label: 'Pain Points（痛点）',
-    color: 'text-orange-900',
-    bgColor: 'bg-orange-100/90',
-    darkBgColor: 'dark:bg-orange-500/30',
-    darkTextColor: 'dark:text-orange-200',
-    patterns: []
-  },
-  {
-    id: 'benefits',
-    label: 'Benefits（收益/好处）',
-    color: 'text-emerald-900',
-    bgColor: 'bg-emerald-100/90',
-    darkBgColor: 'dark:bg-emerald-500/30',
-    darkTextColor: 'dark:text-emerald-200',
-    patterns: []
-  },
-  {
-    id: 'features',
-    label: 'Features（功能特性）',
-    color: 'text-amber-900',
-    bgColor: 'bg-amber-100/90',
-    darkBgColor: 'dark:bg-amber-500/30',
-    darkTextColor: 'dark:text-amber-200',
-    patterns: []
-  },
-  {
-    id: 'comparison',
-    label: 'Comparison（对比）',
+    id: 'why',
+    label: 'Why（购买动机）',
     color: 'text-pink-900',
     bgColor: 'bg-pink-100/90',
     darkBgColor: 'dark:bg-pink-500/30',
     darkTextColor: 'dark:text-pink-200',
-    patterns: []
+    patterns: [],
+    question: '为什么买？如：旧的坏了、送礼、被种草'
+  },
+  {
+    id: 'what',
+    label: 'What（待办任务）',
+    color: 'text-orange-900',
+    bgColor: 'bg-orange-100/90',
+    darkBgColor: 'dark:bg-orange-500/30',
+    darkTextColor: 'dark:text-orange-200',
+    patterns: [],
+    question: '用来做什么？如：清理宠物毛、缓解背痛'
   }
 ];
 

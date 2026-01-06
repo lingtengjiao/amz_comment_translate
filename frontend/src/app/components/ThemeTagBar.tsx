@@ -1,34 +1,24 @@
-import { Plus, Sparkles, X, Tag, Loader2 } from 'lucide-react';
+import { Tag, Loader2 } from 'lucide-react';
 import { type ThemeTag } from './ThemeHighlight';
 import { memo } from 'react';
 
 interface ThemeTagBarProps {
-  allTags: ThemeTag[]; // 所有标签（预设 + 自定义）
+  allTags: ThemeTag[]; // 5W 主题标签
   activeThemes: string[];
   onToggleTheme: (themeId: string) => void;
-  onAddCustomTag: () => void;
 }
 
-export const ThemeTagBar = memo(function ThemeTagBar({ allTags, activeThemes, onToggleTheme, onAddCustomTag }: ThemeTagBarProps) {
+export const ThemeTagBar = memo(function ThemeTagBar({ allTags, activeThemes, onToggleTheme }: ThemeTagBarProps) {
   return (
     <div className="p-4 border-b border-gray-200 dark:border-gray-700 space-y-3">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <Tag className="size-4 text-gray-500 dark:text-gray-400" />
-          <h3 className="text-sm font-medium text-gray-700 dark:text-gray-300">主题标签高亮</h3>
+          <h3 className="text-sm font-medium text-gray-700 dark:text-gray-300">5W 主题标签</h3>
           <span className="text-xs text-gray-500 dark:text-gray-400">
             点击标签在评论中高亮对应内容
           </span>
         </div>
-        
-        {/* Add Custom Tag Button */}
-        <button
-          onClick={onAddCustomTag}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium bg-blue-600 text-white hover:bg-blue-700 transition-colors"
-        >
-          <Plus className="size-4" />
-          添加标签
-        </button>
       </div>
       
       <div className="flex flex-wrap gap-2">

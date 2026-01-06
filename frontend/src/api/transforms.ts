@@ -61,34 +61,57 @@ export function transformReview(apiReview: ApiReview): Review {
     videos: apiReview.video_url ? [apiReview.video_url] : undefined,
     // AI 深度解读
     insights: insights && insights.length > 0 ? insights : undefined,
-    // 主题高亮内容，过滤掉 _empty 标记（表示已处理但无主题）
-    themeHighlights: apiReview.theme_highlights?.filter(th => th.theme_type !== '_empty').map(th => {
-      // 使用新的 items 格式，如果不存在则从 keywords 向后兼容转换
-      let items: Array<{ content: string; content_original?: string; content_translated?: string; explanation?: string }> = [];
+    // [UPDATED] 主题高亮内容 - 支持 5W 模型 + 带证据的可解释结构
+    // 后端现在是一条记录=一个标签，需要按 theme_type 聚合
+    themeHighlights: (() => {
+      const highlights = apiReview.theme_highlights?.filter(th => th.theme_type !== '_empty');
+      if (!highlights || highlights.length === 0) return undefined;
       
-      if (th.items && Array.isArray(th.items) && th.items.length > 0) {
-        items = th.items.map(item => ({
-          content: item.content,
-          content_original: item.content_original || undefined,
-          content_translated: item.content_translated || undefined,
-          explanation: item.explanation || undefined,
-        }));
-      } else if (th.keywords && Array.isArray(th.keywords) && th.keywords.length > 0) {
-        // 向后兼容：将旧的 keywords 格式转换为新的 items 格式
-        items = th.keywords.map((kw: string) => ({
-          content: kw,
-          content_original: undefined,
-          content_translated: undefined,
-          explanation: undefined,
-        }));
-      }
+      // 按 theme_type 聚合
+      const groupedByType = new Map<string, Array<{ content: string; content_original?: string; quote_translated?: string; content_translated?: string; explanation?: string }>>();
       
-      return {
-        themeType: th.theme_type as Review['themeHighlights'][0]['themeType'],
-        items,
-        keywords: th.keywords || undefined, // 保留向后兼容
-      };
-    }) || undefined,
+      highlights.forEach(th => {
+        const themeType = th.theme_type;
+        if (!groupedByType.has(themeType)) {
+          groupedByType.set(themeType, []);
+        }
+        
+        // 新结构：一条记录=一个标签，直接使用顶层字段
+        if (th.label_name) {
+          groupedByType.get(themeType)!.push({
+            content: th.label_name,
+            content_original: th.quote || undefined,
+            quote_translated: th.quote_translated || undefined,
+            explanation: th.explanation || undefined,
+          });
+        }
+        // 向后兼容：旧的 items 格式
+        else if (th.items && Array.isArray(th.items) && th.items.length > 0) {
+          th.items.forEach(item => {
+            groupedByType.get(themeType)!.push({
+              content: item.content,
+              content_original: item.content_original || undefined,
+              quote_translated: item.quote_translated || undefined,
+              content_translated: item.content_translated || undefined,
+              explanation: item.explanation || undefined,
+            });
+          });
+        }
+      });
+      
+      // 转换为前端格式
+      const result: Review['themeHighlights'] = [];
+      groupedByType.forEach((items, themeType) => {
+        if (items.length > 0) {
+          result.push({
+            themeType: themeType as Review['themeHighlights'][0]['themeType'],
+            items,
+          });
+        }
+      });
+      
+      return result.length > 0 ? result : undefined;
+    })(),
     isPinned: apiReview.is_pinned || false,
     isHidden: apiReview.is_hidden || false,
     tags: undefined,

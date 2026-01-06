@@ -31,12 +31,15 @@ export interface ReviewInsight {
   dimension?: string;      // 产品维度：如"音质"、"价格"、"易用性"等
 }
 
-/** 主题内容项 */
+/** 
+ * [UPDATED] 主题内容项 - 带证据的可解释结构
+ */
 export interface ThemeItem {
-  content: string;                     // 中文内容（关键词/短语/句子）
-  content_original?: string;           // 原始英文内容（可选）
-  content_translated?: string;          // 翻译（可选）
-  explanation?: string;                // 解释说明（可选）
+  content: string;                     // 标签名称（如：老年人、卧室）
+  content_original?: string;           // 原文证据（英文）
+  quote_translated?: string;           // [NEW] 原文证据翻译（中文）
+  content_translated?: string;          // 翻译（可选，向后兼容）
+  explanation?: string;                // 归类理由
 }
 
 /** 评论主题高亮 */
@@ -281,21 +284,37 @@ export interface ApiInsight {
 
 /** 后端主题内容项响应 */
 export interface ApiThemeItem {
-  content: string;                     // 中文内容
-  content_original?: string | null;    // 原始英文内容（可选）
-  content_translated?: string | null;  // 翻译（可选）
-  explanation?: string | null;        // 解释说明（可选）
+  content: string;                     // 标签名称
+  content_original?: string | null;    // 原文证据（英文）
+  quote_translated?: string | null;    // [NEW] 原文证据翻译（中文）
+  content_translated?: string | null;  // 翻译（可选，向后兼容）
+  explanation?: string | null;         // 归类理由
 }
 
-/** 后端主题高亮响应 */
+/** 
+ * [UPDATED] 后端主题高亮响应 - 5W 模型 + 带证据的可解释结构
+ * 新结构：一条记录 = 一个标签
+ */
 export interface ApiThemeHighlight {
-  theme_type: string;                 // who/where/when/unmet_needs/pain_points/benefits/features/comparison
-  items: ApiThemeItem[];               // 该主题识别到的内容项列表
-  keywords?: string[] | null;          // 已废弃：向后兼容字段
+  theme_type: string;                 // who/where/when/why/what
+  label_name?: string | null;         // [NEW] 标签名称（如：老年人、卧室）
+  quote?: string | null;              // [NEW] 原文证据（英文）
+  quote_translated?: string | null;   // [NEW] 原文证据翻译（中文）
+  explanation?: string | null;        // [NEW] 归类理由
+  context_label_id?: string | null;   // [NEW] 关联的标签库ID
+  items?: ApiThemeItem[] | null;      // [DEPRECATED] 旧版内容项列表，向后兼容
+  keywords?: string[] | null;         // [DEPRECATED] 已废弃
 }
 
-/** 主题类型枚举 */
-export type ThemeTypeId = 'who' | 'where' | 'when' | 'unmet_needs' | 'pain_points' | 'benefits' | 'features' | 'comparison';
+/** 
+ * [UPDATED] 5W 营销模型主题类型枚举
+ * - who: 使用者/人群
+ * - where: 使用地点/场景  
+ * - when: 使用时刻/时机
+ * - why: 购买动机 (Purchase Driver)
+ * - what: 待办任务 (Jobs to be Done)
+ */
+export type ThemeTypeId = 'who' | 'where' | 'when' | 'why' | 'what';
 
 export interface ApiReview {
   id: string;
@@ -430,4 +449,81 @@ export interface ApiDimensionGenerateResponse {
   message: string;
   product_id: string;
   dimensions: ProductDimension[];
+}
+
+// ============== 报告生成相关类型 ==============
+
+/** 报告统计数据 */
+export interface ReportStats {
+  total_reviews: number;
+  context_stats?: {
+    who: string;
+    scene: string;
+    why: string;
+    what: string;
+  };
+  insight_stats?: {
+    weakness: string;
+    strength: string;
+  };
+  // 结构化数据（用于前端可视化）
+  top_who?: Array<{ name: string; count: number }>;
+  top_where?: Array<{ name: string; count: number }>;
+  top_when?: Array<{ name: string; count: number }>;
+  top_why?: Array<{ name: string; count: number }>;
+  top_what?: Array<{ name: string; count: number }>;
+  top_weaknesses?: Array<{ dimension: string; count: number; quotes: string[] }>;
+  top_strengths?: Array<{ dimension: string; count: number; quotes: string[] }>;
+}
+
+/** 持久化报告对象 */
+export interface ProductReport {
+  id: string;
+  product_id: string;
+  title: string | null;
+  content: string;
+  analysis_data: ReportStats | null;
+  report_type: string;
+  status: string;
+  error_message: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+/** 报告生成响应（旧版，向后兼容） */
+export interface ApiReportGenerateResponse {
+  success: boolean;
+  report: string | null;
+  stats: ReportStats | null;
+  error: string | null;
+}
+
+/** 报告生成响应（新版，持久化） */
+export interface ApiReportCreateResponse {
+  success: boolean;
+  report: ProductReport | null;
+  stats: ReportStats | null;
+  error: string | null;
+}
+
+/** 报告预览响应 */
+export interface ApiReportPreviewResponse {
+  success: boolean;
+  product?: {
+    id: string;
+    asin: string;
+    title: string;
+  };
+  stats: ReportStats | null;
+  has_existing_report?: boolean;
+  latest_report_id?: string | null;
+  latest_report_date?: string | null;
+  error: string | null;
+}
+
+/** 报告列表响应 */
+export interface ApiReportListResponse {
+  success: boolean;
+  reports: ProductReport[];
+  total: number;
 }

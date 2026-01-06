@@ -6,6 +6,7 @@ import { Toaster } from './components/ui/sonner';
 // Lazy load route components
 const TaskList = lazy(() => import('./components/TaskList').then(m => ({ default: m.TaskList })));
 const ReviewReader = lazy(() => import('./components/ReviewReader').then(m => ({ default: m.ReviewReader })));
+const ReportPage = lazy(() => import('./components/ReportPage').then(m => ({ default: m.ReportPage })));
 
 // Loading fallback component
 function LoadingFallback() {
@@ -27,6 +28,8 @@ export default function App() {
           <Routes>
             <Route path="/" element={<TaskList />} />
             <Route path="/reader/:taskId" element={<ReviewReader />} />
+            <Route path="/report/:asin" element={<ReportPage />} />
+            <Route path="/report/:asin/:reportId" element={<ReportPage />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </Suspense>

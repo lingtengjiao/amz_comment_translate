@@ -36,6 +36,12 @@ from app.api.schemas import (
     ContextLabelCreateRequest,
     ContextLabelUpdateRequest,
     ContextLabelGenerateResponse,
+    # Report Generation
+    ReportGenerateResponse,
+    ReportPreviewResponse,
+    ProductReportResponse,
+    ProductReportListResponse,
+    ProductReportCreateResponse,
 )
 from app.services.review_service import ReviewService
 from app.models.task import TaskType
@@ -421,12 +427,16 @@ async def trigger_translation(
     if not product:
         raise HTTPException(status_code=404, detail="Product not found")
     
-    # Count pending reviews
+    # Count pending reviews (including processing and failed - to retry stuck/failed translations)
     pending_count_result = await db.execute(
         select(func.count(Review.id)).where(
             and_(
                 Review.product_id == product.id,
-                Review.translation_status == TranslationStatus.PENDING.value
+                Review.translation_status.in_([
+                    TranslationStatus.PENDING.value,
+                    TranslationStatus.PROCESSING.value,
+                    TranslationStatus.FAILED.value
+                ])
             )
         )
     )
@@ -1156,6 +1166,359 @@ async def delete_context_label(
             "deleted": True
         }
     }
+
+
+# ============== Report Generation API ==============
+
+@products_router.post("/{asin}/report/generate", response_model=ProductReportCreateResponse)
+async def generate_product_report(
+    asin: str,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    生成产品分析报告并持久化存储（Report Generation）。
+    
+    这是智能报告生成模块的核心接口，它会：
+    1. **数据聚合**: 从数据库中聚合 5W (Who/Where/When/Why/What) 和维度洞察数据
+    2. **统计画像**: 计算 Top N 人群、场景、动机、痛点、爽点等
+    3. **AI 撰写**: 将结构化数据填入 Prompt，调用 LLM 生成 Markdown 格式的战略报告
+    4. **持久化存储**: 报告自动存入数据库，支持历史回溯
+    
+    报告内容包括：
+    - 执行摘要 (Executive Summary)
+    - 用户与场景画像 (User & Context)
+    - 致命痛点与改进建议 (Critical Issues)
+    - 产品亮点与爽点 (Key Strengths)
+    - 营销卖点重构建议 (Marketing Strategy)
+    - 数据附录 (Data Appendix)
+    
+    **前置条件：**
+    - 产品需要有至少 10 条已翻译的评论
+    - 建议先运行主题提取 (extract-themes) 和洞察提取 (extract-insights)
+    
+    **注意：** 报告生成需要 30-60 秒，因为需要调用 AI 进行深度分析。
+    """
+    from sqlalchemy import select
+    from app.models.product import Product
+    from app.services.summary_service import SummaryService
+    
+    # Get product
+    product_result = await db.execute(
+        select(Product).where(Product.asin == asin)
+    )
+    product = product_result.scalar_one_or_none()
+    
+    if not product:
+        raise HTTPException(status_code=404, detail="产品不存在")
+    
+    summary_service = SummaryService(db)
+    
+    try:
+        result = await summary_service.generate_report(product.id, save_to_db=True)
+        
+        if result["success"]:
+            logger.info(f"成功为产品 {asin} 生成分析报告并存入数据库")
+        else:
+            logger.warning(f"产品 {asin} 报告生成失败: {result.get('error')}")
+        
+        # 构建响应
+        report_data = result.get("report")
+        report_response = None
+        if report_data and isinstance(report_data, dict):
+            report_response = ProductReportResponse(
+                id=report_data.get("id", ""),
+                product_id=report_data.get("product_id", ""),
+                title=report_data.get("title"),
+                content=report_data.get("content", ""),
+                analysis_data=report_data.get("analysis_data"),
+                report_type=report_data.get("report_type", "comprehensive"),
+                status=report_data.get("status", "completed"),
+                error_message=report_data.get("error_message"),
+                created_at=report_data.get("created_at"),
+                updated_at=report_data.get("updated_at")
+            )
+        
+        return ProductReportCreateResponse(
+            success=result["success"],
+            report=report_response,
+            stats=result.get("stats"),
+            error=result.get("error")
+        )
+        
+    except Exception as e:
+        logger.error(f"报告生成发生异常: {e}")
+        raise HTTPException(status_code=500, detail=f"报告生成失败: {str(e)}")
+
+
+@products_router.get("/{asin}/report/preview", response_model=ReportPreviewResponse)
+async def get_report_preview(
+    asin: str,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    获取报告预览数据（不调用 AI，仅返回统计数据）。
+    
+    用途：
+    1. 前端展示"正在分析..."时的进度提示
+    2. 调试和查看原始聚合数据
+    3. 在生成报告前预览数据是否充足
+    4. 检查是否存在历史报告（has_existing_report）
+    
+    返回：
+    - 产品基本信息
+    - 5W 统计数据（Who/Where/When/Why/What）
+    - 维度洞察统计（痛点/爽点）
+    - 历史报告信息（如果有）
+    
+    此接口响应速度很快（<1s），可用于实时显示分析进度。
+    """
+    from sqlalchemy import select
+    from app.models.product import Product
+    from app.services.summary_service import SummaryService
+    
+    # Get product
+    product_result = await db.execute(
+        select(Product).where(Product.asin == asin)
+    )
+    product = product_result.scalar_one_or_none()
+    
+    if not product:
+        raise HTTPException(status_code=404, detail="产品不存在")
+    
+    summary_service = SummaryService(db)
+    
+    try:
+        result = await summary_service.get_report_preview(product.id)
+        
+        return ReportPreviewResponse(
+            success=result["success"],
+            product=result.get("product"),
+            stats=result.get("stats"),
+            has_existing_report=result.get("has_existing_report", False),
+            latest_report_id=result.get("latest_report_id"),
+            latest_report_date=result.get("latest_report_date"),
+            error=result.get("error")
+        )
+        
+    except Exception as e:
+        logger.error(f"获取报告预览失败: {e}")
+        raise HTTPException(status_code=500, detail=f"获取预览失败: {str(e)}")
+
+
+@products_router.get("/{asin}/reports", response_model=ProductReportListResponse)
+async def get_product_reports(
+    asin: str,
+    limit: int = 10,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    获取产品的历史报告列表。
+    
+    返回该产品所有生成过的报告，按创建时间倒序排列。
+    可用于：
+    1. 对比不同时期的报告，看痛点是否解决
+    2. 查看历史分析报告
+    3. 快速打开之前的报告（秒开）
+    """
+    from sqlalchemy import select
+    from app.models.product import Product
+    from app.services.summary_service import SummaryService
+    
+    # Get product
+    product_result = await db.execute(
+        select(Product).where(Product.asin == asin)
+    )
+    product = product_result.scalar_one_or_none()
+    
+    if not product:
+        raise HTTPException(status_code=404, detail="产品不存在")
+    
+    summary_service = SummaryService(db)
+    
+    try:
+        reports = await summary_service.get_report_history(product.id, limit=limit)
+        
+        report_responses = [
+            ProductReportResponse(
+                id=str(r.id),
+                product_id=str(r.product_id),
+                title=r.title,
+                content=r.content,
+                analysis_data=r.analysis_data,
+                report_type=r.report_type,
+                status=r.status,
+                error_message=r.error_message,
+                created_at=r.created_at.isoformat() if r.created_at else None,
+                updated_at=r.updated_at.isoformat() if r.updated_at else None
+            )
+            for r in reports
+        ]
+        
+        return ProductReportListResponse(
+            success=True,
+            reports=report_responses,
+            total=len(report_responses)
+        )
+        
+    except Exception as e:
+        logger.error(f"获取报告列表失败: {e}")
+        raise HTTPException(status_code=500, detail=f"获取报告列表失败: {str(e)}")
+
+
+@products_router.get("/{asin}/reports/latest", response_model=ProductReportResponse)
+async def get_latest_report(
+    asin: str,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    获取产品最新的报告（秒开，不用重新生成）。
+    
+    如果存在历史报告，直接返回最新的一份。
+    如果没有历史报告，返回 404。
+    """
+    from sqlalchemy import select
+    from app.models.product import Product
+    from app.services.summary_service import SummaryService
+    
+    # Get product
+    product_result = await db.execute(
+        select(Product).where(Product.asin == asin)
+    )
+    product = product_result.scalar_one_or_none()
+    
+    if not product:
+        raise HTTPException(status_code=404, detail="产品不存在")
+    
+    summary_service = SummaryService(db)
+    
+    try:
+        report = await summary_service.get_latest_report(product.id)
+        
+        if not report:
+            raise HTTPException(status_code=404, detail="暂无报告，请先点击生成")
+        
+        return ProductReportResponse(
+            id=str(report.id),
+            product_id=str(report.product_id),
+            title=report.title,
+            content=report.content,
+            analysis_data=report.analysis_data,
+            report_type=report.report_type,
+            status=report.status,
+            error_message=report.error_message,
+            created_at=report.created_at.isoformat() if report.created_at else None,
+            updated_at=report.updated_at.isoformat() if report.updated_at else None
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"获取最新报告失败: {e}")
+        raise HTTPException(status_code=500, detail=f"获取报告失败: {str(e)}")
+
+
+@products_router.get("/{asin}/reports/{report_id}", response_model=ProductReportResponse)
+async def get_report_by_id(
+    asin: str,
+    report_id: str,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    根据报告 ID 获取特定报告。
+    """
+    from sqlalchemy import select
+    from uuid import UUID as PyUUID
+    from app.models.product import Product
+    from app.services.summary_service import SummaryService
+    
+    # Get product
+    product_result = await db.execute(
+        select(Product).where(Product.asin == asin)
+    )
+    product = product_result.scalar_one_or_none()
+    
+    if not product:
+        raise HTTPException(status_code=404, detail="产品不存在")
+    
+    summary_service = SummaryService(db)
+    
+    try:
+        report = await summary_service.get_report_by_id(PyUUID(report_id))
+        
+        if not report:
+            raise HTTPException(status_code=404, detail="报告不存在")
+        
+        # 验证报告属于该产品
+        if report.product_id != product.id:
+            raise HTTPException(status_code=404, detail="报告不属于该产品")
+        
+        return ProductReportResponse(
+            id=str(report.id),
+            product_id=str(report.product_id),
+            title=report.title,
+            content=report.content,
+            analysis_data=report.analysis_data,
+            report_type=report.report_type,
+            status=report.status,
+            error_message=report.error_message,
+            created_at=report.created_at.isoformat() if report.created_at else None,
+            updated_at=report.updated_at.isoformat() if report.updated_at else None
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"获取报告失败: {e}")
+        raise HTTPException(status_code=500, detail=f"获取报告失败: {str(e)}")
+
+
+@products_router.delete("/{asin}/reports/{report_id}")
+async def delete_report(
+    asin: str,
+    report_id: str,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    删除指定报告。
+    """
+    from sqlalchemy import select
+    from uuid import UUID as PyUUID
+    from app.models.product import Product
+    from app.services.summary_service import SummaryService
+    
+    # Get product
+    product_result = await db.execute(
+        select(Product).where(Product.asin == asin)
+    )
+    product = product_result.scalar_one_or_none()
+    
+    if not product:
+        raise HTTPException(status_code=404, detail="产品不存在")
+    
+    summary_service = SummaryService(db)
+    
+    try:
+        # 先检查报告是否存在并属于该产品
+        report = await summary_service.get_report_by_id(PyUUID(report_id))
+        
+        if not report:
+            raise HTTPException(status_code=404, detail="报告不存在")
+        
+        if report.product_id != product.id:
+            raise HTTPException(status_code=404, detail="报告不属于该产品")
+        
+        success = await summary_service.delete_report(PyUUID(report_id))
+        
+        if success:
+            return {"success": True, "message": "报告已删除"}
+        else:
+            raise HTTPException(status_code=500, detail="删除失败")
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"删除报告失败: {e}")
+        raise HTTPException(status_code=500, detail=f"删除报告失败: {str(e)}")
 
 
 # ============== Review Actions API ==============

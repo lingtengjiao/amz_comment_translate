@@ -23,14 +23,13 @@ import { ProductInfoCard } from './ProductInfoCard';
 import { StatsCards } from './StatsCards';
 import { FilterBar } from './FilterBar';
 import { ThemeTagBar } from './ThemeTagBar';
-import { AddThemeTagModal } from './AddThemeTagModal';
 import { MediaTabContent } from './MediaTabContent';
 import { HiddenReviewsModal } from './HiddenReviewsModal';
 import { EditReviewModal } from './EditReviewModal';
 import { ConfirmDialog } from './ConfirmDialog';
 import { InfoDialog } from './InfoDialog';
 import { Progress } from './ui/progress';
-import { themeTagsPreset, colorConfigMap, buildThemeTagsFromHighlights, type ThemeTag } from './ThemeHighlight';
+import { themeTagsPreset, buildThemeTagsFromHighlights, type ThemeTag } from './ThemeHighlight';
 import { apiService, transformStatsToTask, transformReviews } from '@/api';
 import type { Task, Review, FilterRating, FilterSentiment, SortOption, ReviewThemeHighlight } from '@/api/types';
 import { toast } from '../utils/toast';
@@ -53,8 +52,6 @@ export function ReviewReader() {
   const [highlightEnabled, setHighlightEnabled] = useState(false);
   const [insightsExpanded, setInsightsExpanded] = useState(true); // 默认展开所有洞察
   const [activeThemes, setActiveThemes] = useState<string[]>([]);
-  const [customTags, setCustomTags] = useState<ThemeTag[]>([]);
-  const [showAddTagModal, setShowAddTagModal] = useState(false);
   const [sortOption, setSortOption] = useState<SortOption>('date-desc');
   const [searchQuery, setSearchQuery] = useState('');
   const [isTranslating, setIsTranslating] = useState(false);
@@ -87,6 +84,7 @@ export function ReviewReader() {
   const [newlyTranslatedIds, setNewlyTranslatedIds] = useState<Set<string>>(new Set()); // 跟踪刚刚翻译完成的评论（触发打字机动画）
   const pageSize = 50;
   const pageContainerRef = useRef<HTMLDivElement | null>(null);
+  const pollingRef = useRef<{ active: boolean; timer: NodeJS.Timeout | null }>({ active: false, timer: null }); // 轮询状态管理
 
   // 加载产品统计信息和评论
   const fetchData = useCallback(async () => {
@@ -143,6 +141,17 @@ export function ReviewReader() {
   useEffect(() => {
     fetchData();
   }, [fetchData]);
+
+  // 清理轮询定时器（组件卸载或完整分析完成时）
+  useEffect(() => {
+    return () => {
+      if (pollingRef.current.timer) {
+        clearTimeout(pollingRef.current.timer);
+        pollingRef.current.timer = null;
+      }
+      pollingRef.current.active = false;
+    };
+  }, []);
 
   // 全屏切换 - 文档级全屏 + CSS fixed 定位
   // 核心：使用 document.documentElement.requestFullscreen() 让整个文档全屏
@@ -202,7 +211,7 @@ export function ReviewReader() {
 
   // 智能增量更新评论（翻译过程中使用）
   const updateReviewsIncrementally = useCallback(async () => {
-    if (!asin || !task) return;
+    if (!asin) return;
     
     try {
       // 同时获取产品统计信息和评论
@@ -214,57 +223,56 @@ export function ReviewReader() {
       // 更新产品信息（标题和五点翻译）
       const product = statsResponse.product;
       
-      // 更新 task 中的产品信息（ProductInfoCard 会自动处理打字机效果）
+      const newReviews = transformReviews(reviewsResponse.reviews);
+      
+      // 使用函数式更新，避免闭包问题
       setTask(prevTask => {
-        if (!prevTask) return prevTask;
-        return {
+        if (!prevTask) {
+          // 如果没有 task，使用产品统计创建新的 task
+          const newTask = transformStatsToTask(statsResponse, newReviews);
+          return newTask;
+        }
+        
+        // 更新产品信息
+        const updatedTask = {
           ...prevTask,
           titleTranslated: product.title_translated || prevTask.titleTranslated,
           bulletPointsTranslated: product.bullet_points_translated || prevTask.bulletPointsTranslated
         };
-      });
-      
-      const newReviews = transformReviews(reviewsResponse.reviews);
-      
-      // 找出新翻译完成的评论（之前没有翻译，现在有了）
-      const freshlyTranslatedIds: string[] = [];
-      const currentReviewsMap = new Map(task.reviews.map(r => [r.id, r]));
-      
-      newReviews.forEach(newReview => {
-        const oldReview = currentReviewsMap.get(newReview.id);
-        // 检测：之前没有翻译 -> 现在有翻译
-        if (oldReview && !oldReview.translatedText && newReview.translatedText) {
-          // 检查是否已经标记过
-          if (!newlyTranslatedIds.has(newReview.id)) {
+        
+        // 找出新翻译完成的评论（之前没有翻译，现在有了）
+        const freshlyTranslatedIds: string[] = [];
+        const currentReviewsMap = new Map(prevTask.reviews.map(r => [r.id, r]));
+        
+        newReviews.forEach(newReview => {
+          const oldReview = currentReviewsMap.get(newReview.id);
+          // 检测：之前没有翻译 -> 现在有翻译
+          if (oldReview && !oldReview.translatedText && newReview.translatedText) {
             freshlyTranslatedIds.push(newReview.id);
           }
-        }
-      });
-      
-      // 标记新翻译的评论（触发打字机动画）
-      if (freshlyTranslatedIds.length > 0) {
-        console.log('New translations detected:', freshlyTranslatedIds);
-        
-        setNewlyTranslatedIds(prev => {
-          const updated = new Set(prev);
-          freshlyTranslatedIds.forEach(id => updated.add(id));
-          return updated;
         });
         
-        // 5秒后移除标记（让动画有时间完成）
-        setTimeout(() => {
+        // 标记新翻译的评论（触发打字机动画）
+        if (freshlyTranslatedIds.length > 0) {
+          console.log('New translations detected:', freshlyTranslatedIds);
+          
           setNewlyTranslatedIds(prev => {
             const updated = new Set(prev);
-            freshlyTranslatedIds.forEach(id => updated.delete(id));
+            freshlyTranslatedIds.forEach(id => updated.add(id));
             return updated;
           });
-        }, 8000);
-      }
-      
-      // 增量合并：保留本地状态（如 isPinned, isHidden），更新翻译内容
-      setTask(prevTask => {
-        if (!prevTask) return prevTask;
+          
+          // 8秒后移除标记（让动画有时间完成）
+          setTimeout(() => {
+            setNewlyTranslatedIds(prev => {
+              const updated = new Set(prev);
+              freshlyTranslatedIds.forEach(id => updated.delete(id));
+              return updated;
+            });
+          }, 8000);
+        }
         
+        // 增量合并：保留本地状态（如 isPinned, isHidden），更新翻译内容
         const mergedReviews = newReviews.map(newReview => {
           const oldReview = currentReviewsMap.get(newReview.id);
           if (oldReview) {
@@ -279,7 +287,7 @@ export function ReviewReader() {
         });
         
         return {
-          ...prevTask,
+          ...updatedTask,
           reviews: mergedReviews
         };
       });
@@ -287,7 +295,7 @@ export function ReviewReader() {
     } catch (err) {
       console.error('Failed to update reviews incrementally:', err);
     }
-  }, [asin, task, currentPage, pageSize, newlyTranslatedIds]);
+  }, [asin, currentPage, pageSize]);
 
   // 轮询翻译进度（仅在非完整分析模式下使用）
   useEffect(() => {
@@ -450,49 +458,7 @@ export function ReviewReader() {
     );
   };
 
-  // Handle add custom tag
-  const handleAddCustomTag = () => {
-    setShowAddTagModal(true);
-  };
-
-  // Handle custom tag confirmation with AI processing simulation
-  const handleConfirmCustomTag = (label: string, question: string, colorKey: string) => {
-    const colorConfig = colorConfigMap[colorKey];
-    const newTag: ThemeTag = {
-      id: `custom-${Date.now()}`,
-      label,
-      color: colorConfig.text,
-      bgColor: colorConfig.bg,
-      darkBgColor: colorConfig.darkBg,
-      darkTextColor: colorConfig.darkText,
-      patterns: [],
-      isCustom: true,
-      isProcessing: true,
-      question
-    };
-
-    setCustomTags(prev => [...prev, newTag]);
-    setShowAddTagModal(false);
-
-    // Simulate AI processing
-    setTimeout(() => {
-      const mockPatterns = generateMockPatterns(question);
-      setCustomTags(prev => 
-        prev.map(tag => 
-          tag.id === newTag.id 
-            ? { ...tag, patterns: mockPatterns, isProcessing: false }
-            : tag
-        )
-      );
-    }, 3000);
-  };
-
-  const generateMockPatterns = (question: string): string[] => {
-    const commonKeywords = ['家里', '办公室', '早上', '晚上', '孩子', '朋友', '方便', '简单', '问题', '满意'];
-    return commonKeywords.slice(0, 5 + Math.floor(Math.random() * 5));
-  };
-
-  // 合并所有评论的动态主题关键词到预设标签
+  // 合并所有评论的动态主题关键词到预设标签（5W 模型）
   const allTags = useMemo(() => {
     // 收集所有评论的主题高亮数据
     const allHighlights: ReviewThemeHighlight[] = [];
@@ -521,11 +487,9 @@ export function ReviewReader() {
       }
     });
     
-    // 从后端 AI 提取的内容构建主题标签
-    const mergedPresets = buildThemeTagsFromHighlights(allHighlights);
-    
-    return [...mergedPresets, ...customTags];
-  }, [task?.reviews, customTags]);
+    // 从后端 AI 提取的内容构建主题标签（5W 模型）
+    return buildThemeTagsFromHighlights(allHighlights);
+  }, [task?.reviews]);
 
   const handleManageTags = (id: string) => {
     if (!task) return;
@@ -706,19 +670,19 @@ export function ReviewReader() {
   
   // 完整分析：一键处理翻译+洞察+主题
   const [analysisPhase, setAnalysisPhase] = useState<'idle' | 'translating' | 'insights' | 'themes' | 'complete'>('idle');
+  const phase2TriggeredRef = useRef(false); // 使用 ref 避免闭包问题
   
   const handleFullAnalysis = async () => {
     if (!asin) return;
     
     setIsFullAnalysis(true);
-
-    // 用于追踪是否已触发Phase 2
-    let phase2Triggered = false;
+    phase2TriggeredRef.current = false; // 重置 Phase 2 触发标志
+    pollingRef.current.active = true; // 标记轮询为活跃状态
 
     // Phase 2: 触发洞察和主题提取，并持续轮询更新
     const triggerPhase2 = async () => {
-      if (phase2Triggered) return;
-      phase2Triggered = true;
+      if (phase2TriggeredRef.current) return;
+      phase2TriggeredRef.current = true;
       
       console.log('Triggering Phase 2: insights and themes extraction');
       setAnalysisPhase('insights');
@@ -744,6 +708,11 @@ export function ReviewReader() {
         
         // 开始轮询洞察和主题进度，直到完成
         const checkPhase2Progress = async () => {
+          // 检查轮询是否应该继续
+          if (!pollingRef.current.active) {
+            return;
+          }
+          
           try {
             const stats = await apiService.getProductStats(asin);
             const total = stats.product.translated_reviews;
@@ -760,7 +729,8 @@ export function ReviewReader() {
             console.log('Phase 2 progress:', { 
               total, withInsights, withThemes,
               insightProgress: total > 0 ? Math.round((withInsights / total) * 100) : 0,
-              themeProgress: total > 0 ? Math.round((withThemes / total) * 100) : 0
+              themeProgress: total > 0 ? Math.round((withThemes / total) * 100) : 0,
+              pollingActive: pollingRef.current.active
             });
             
             // 检查是否全部完成（洞察和主题都处理完所有已翻译评论）
@@ -771,20 +741,27 @@ export function ReviewReader() {
               toast.success('完整分析完成！', `已处理 ${total} 条评论`);
               setIsFullAnalysis(false);
               setIsTranslating(false);
+              pollingRef.current.active = false; // 停止轮询
+              if (pollingRef.current.timer) {
+                clearTimeout(pollingRef.current.timer);
+                pollingRef.current.timer = null;
+              }
               // 最后刷新一次数据
               await fetchData();
-            } else {
+            } else if (pollingRef.current.active) {
               // 继续轮询
-              setTimeout(checkPhase2Progress, 2000);
+              pollingRef.current.timer = setTimeout(checkPhase2Progress, 2000);
             }
           } catch (err) {
             console.error('Failed to check Phase 2 progress:', err);
-            setTimeout(checkPhase2Progress, 3000);
+            if (pollingRef.current.active) {
+              pollingRef.current.timer = setTimeout(checkPhase2Progress, 3000);
+            }
           }
         };
         
         // 开始轮询 Phase 2 进度
-        setTimeout(checkPhase2Progress, 2000);
+        pollingRef.current.timer = setTimeout(checkPhase2Progress, 2000);
         
       } catch (err) {
         console.error('Failed to trigger insight/theme extraction:', err);
@@ -831,8 +808,10 @@ export function ReviewReader() {
       
       // 轮询翻译进度，完成后自动触发洞察和主题提取
       const checkProgress = async () => {
-        // 防止重复触发 Phase 2
-        if (phase2Triggered) return;
+        // 检查轮询是否应该继续
+        if (!pollingRef.current.active || phase2TriggeredRef.current) {
+          return;
+        }
         
         try {
           const stats = await apiService.getProductStats(asin);
@@ -856,27 +835,28 @@ export function ReviewReader() {
           console.log('Full analysis progress check:', { 
             progress, translated, total, 
             translationDone, bulletsDone, titleDone,
-            status: stats.product.translation_status 
+            status: stats.product.translation_status,
+            pollingActive: pollingRef.current.active
           });
           
-          if (translationDone && bulletsDone && titleDone && !phase2Triggered) {
+          if (translationDone && bulletsDone && titleDone && !phase2TriggeredRef.current) {
             setIsTranslating(false);
             toast.success('翻译完成', '正在自动提取洞察和主题...');
             await triggerPhase2();
-          } else if (!phase2Triggered) {
+          } else if (pollingRef.current.active && !phase2TriggeredRef.current) {
             // 继续轮询
-            setTimeout(checkProgress, 2000);
+            pollingRef.current.timer = setTimeout(checkProgress, 2000);
           }
         } catch (err) {
           console.error('Failed to check progress:', err);
-          if (!phase2Triggered) {
-            setTimeout(checkProgress, 2000);
+          if (pollingRef.current.active && !phase2TriggeredRef.current) {
+            pollingRef.current.timer = setTimeout(checkProgress, 3000);
           }
         }
       };
       
       // 开始轮询
-      setTimeout(checkProgress, 2000);
+      pollingRef.current.timer = setTimeout(checkProgress, 2000);
       
     } catch (err) {
       console.error('Failed to start full analysis:', err);
@@ -1253,13 +1233,12 @@ export function ReviewReader() {
               setInsightsExpanded={setInsightsExpanded}
             />
             
-            {/* Theme Tag Bar */}
+            {/* Theme Tag Bar - 5W 主题标签 */}
             {highlightEnabled && (
               <ThemeTagBar 
                 allTags={allTags}
                 activeThemes={activeThemes}
                 onToggleTheme={handleToggleTheme}
-                onAddCustomTag={handleAddCustomTag}
               />
             )}
           </div>
@@ -1344,14 +1323,6 @@ export function ReviewReader() {
           hiddenReviews={task.reviews.filter(r => r.isHidden)}
           onClose={() => setShowHiddenModal(false)}
           onRestore={handleToggleHidden}
-        />
-      )}
-
-      {/* Add Custom Tag Modal */}
-      {showAddTagModal && (
-        <AddThemeTagModal
-          onClose={() => setShowAddTagModal(false)}
-          onConfirm={handleConfirmCustomTag}
         />
       )}
 

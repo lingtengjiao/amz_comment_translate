@@ -1,6 +1,8 @@
-import { Star, Copy, Check } from 'lucide-react';
+import { Star, Copy, Check, FileText, Sparkles } from 'lucide-react';
 import { useState, memo, useEffect, useRef } from 'react';
 import { Card } from './ui/card';
+import { Button } from './ui/button';
+import { ProductReportDialog } from './ProductReportDialog';
 import type { Task } from '../data/mockData';
 
 interface ProductInfoCardProps {
@@ -17,6 +19,7 @@ interface ProductInfoCardProps {
 
 export const ProductInfoCard = memo(function ProductInfoCard({ task, ratingStats, isTranslating = false }: ProductInfoCardProps) {
   const [copied, setCopied] = useState(false);
+  const [isReportDialogOpen, setIsReportDialogOpen] = useState(false);
   
   // 打字机效果状态
   const [displayedTitle, setDisplayedTitle] = useState('');
@@ -146,6 +149,18 @@ export const ProductInfoCard = memo(function ProductInfoCard({ task, ratingStats
                   <span className="text-3xl text-gray-900 dark:text-white font-bold">{ratingStats.averageRating}</span>
                 </div>
               </div>
+              
+              {/* Generate Report Button */}
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setIsReportDialogOpen(true)}
+                className="w-full gap-2 border-emerald-300 dark:border-emerald-700 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-900/30 hover:border-emerald-400"
+              >
+                <FileText className="size-4" />
+                <span>生成产品报告</span>
+                <Sparkles className="size-3.5 text-yellow-500" />
+              </Button>
 
               {/* Review Stats - Compact and Subtle */}
               <div className="px-3 py-2.5 bg-gray-100/50 dark:bg-gray-700/20 rounded text-xs space-y-1.5">
@@ -288,6 +303,15 @@ export const ProductInfoCard = memo(function ProductInfoCard({ task, ratingStats
           </div>
         </div>
       </div>
+      
+      {/* Product Report Dialog */}
+      <ProductReportDialog
+        isOpen={isReportDialogOpen}
+        onClose={() => setIsReportDialogOpen(false)}
+        asin={task.asin}
+        productTitle={task.titleTranslated || task.title}
+        ratingStats={ratingStats}
+      />
     </Card>
   );
 });

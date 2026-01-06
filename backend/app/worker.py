@@ -209,13 +209,14 @@ def task_process_reviews(self, product_id: str, task_id: str):
         )
         db.commit()
         
-        # Get pending reviews - ordered by review_date descending (newest first, matching frontend display)
+        # Get pending reviews (including processing and failed - to retry stuck/failed translations)
+        # ordered by review_date descending (newest first, matching frontend display)
         result = db.execute(
             select(Review)
             .where(
                 and_(
                     Review.product_id == product_id,
-                    Review.translation_status == "pending"
+                    Review.translation_status.in_(["pending", "processing", "failed"])
                 )
             )
             .order_by(Review.review_date.desc().nullslast(), Review.created_at.desc())
@@ -755,11 +756,13 @@ def task_extract_themes(self, product_id: str):
                             continue
                         
                         for item in items:
-                            # 获取标签信息
+                            # 获取标签信息（兼容两种格式：tag/quote 或 content/content_original）
                             label_name = item.get("content", "").strip()
-                            quote = item.get("content_original") or None          # 原文证据
-                            quote_translated = item.get("quote_translated") or None  # [NEW] 中文翻译证据
-                            explanation = item.get("explanation") or None          # 归类理由
+                            # 原文证据（兼容 quote 和 content_original）
+                            quote = item.get("quote") or item.get("content_original") or None
+                            # 中文翻译证据（兼容 quote_translated 和 content_translated）
+                            quote_translated = item.get("quote_translated") or item.get("content_translated") or None
+                            explanation = item.get("explanation") or None
                             
                             if not label_name:
                                 continue

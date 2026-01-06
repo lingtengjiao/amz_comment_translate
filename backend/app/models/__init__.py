@@ -8,6 +8,7 @@ from app.models.insight import ReviewInsight
 from app.models.theme_highlight import ReviewThemeHighlight, ThemeType, THEME_CONFIG
 from app.models.product_dimension import ProductDimension
 from app.models.product_context_label import ProductContextLabel, ContextType, CONTEXT_TYPE_CONFIG
+from app.models.report import ProductReport, ReportType, ReportStatus
 
 __all__ = [
     "Product", 
@@ -20,6 +21,9 @@ __all__ = [
     "ProductDimension",
     "ProductContextLabel",
     "ContextType",
-    "CONTEXT_TYPE_CONFIG"
+    "CONTEXT_TYPE_CONFIG",
+    "ProductReport",
+    "ReportType",
+    "ReportStatus"
 ]
 

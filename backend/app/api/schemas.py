@@ -134,20 +134,31 @@ class ContextType(str, Enum):
 
 
 class ThemeItemResponse(BaseModel):
-    """Single theme item response"""
-    content: str                        # 中文内容（关键词/短语/句子）
-    content_original: Optional[str] = None  # 原始英文内容（可选）
-    content_translated: Optional[str] = None  # 翻译（可选）
-    explanation: Optional[str] = None   # 解释说明（可选）
+    """Single theme item response - 带证据的可解释结构"""
+    content: str                        # 标签名称（如：老年人、卧室）
+    content_original: Optional[str] = None  # 原文证据（英文）
+    quote_translated: Optional[str] = None  # [NEW] 原文证据翻译（中文）
+    content_translated: Optional[str] = None  # 翻译（可选，向后兼容）
+    explanation: Optional[str] = None   # 归类理由
     
     model_config = ConfigDict(from_attributes=True)
 
 
 class ReviewThemeResponse(BaseModel):
-    """Single theme highlight response"""
-    theme_type: str                     # 主题类型
-    items: List[ThemeItemResponse]      # 该主题识别到的内容项列表
-    keywords: Optional[List[str]] = None  # 已废弃：向后兼容字段
+    """
+    [UPDATED] Single theme highlight response - 5W 模型
+    新结构：一条记录 = 一个标签，通过 label_name 等顶层字段直接返回
+    """
+    theme_type: str                     # 主题类型：who/where/when/why/what
+    # [NEW] 新字段 - 一条记录一个标签
+    label_name: Optional[str] = None    # 标签名称
+    quote: Optional[str] = None         # 原文证据（英文）
+    quote_translated: Optional[str] = None  # 原文证据翻译（中文）
+    explanation: Optional[str] = None   # 归类理由
+    context_label_id: Optional[str] = None  # 关联的标签库ID
+    # [DEPRECATED] 旧字段 - 向后兼容
+    items: Optional[List[ThemeItemResponse]] = None
+    keywords: Optional[List[str]] = None
     
     model_config = ConfigDict(from_attributes=True)
 
@@ -275,7 +286,10 @@ class ReviewResponse(BaseModel):
     @field_validator('theme_highlights', mode='before')
     @classmethod
     def parse_theme_highlights(cls, v):
-        """Convert ORM objects to list of dicts if needed, filter out _empty markers"""
+        """
+        [UPDATED] Convert ORM objects to list of dicts
+        支持新结构（一条记录=一个标签）和旧结构（items 数组）
+        """
         if v is None:
             return []
         if isinstance(v, list) and len(v) > 0:
@@ -287,26 +301,53 @@ class ReviewResponse(BaseModel):
                     if item.theme_type == '_empty':
                         continue
                     
-                    # Use items field if available, otherwise fallback to keywords for backward compatibility
-                    items_data = []
-                    if hasattr(item, 'items') and item.items:
+                    # [NEW] 新结构：一条记录=一个标签，使用顶层字段
+                    if hasattr(item, 'label_name') and item.label_name:
+                        result.append({
+                            'theme_type': item.theme_type,
+                            'label_name': item.label_name,
+                            'quote': item.quote if hasattr(item, 'quote') else None,
+                            'quote_translated': item.quote_translated if hasattr(item, 'quote_translated') else None,
+                            'explanation': item.explanation if hasattr(item, 'explanation') else None,
+                            'context_label_id': str(item.context_label_id) if hasattr(item, 'context_label_id') and item.context_label_id else None,
+                            'items': item.items if hasattr(item, 'items') else None,
+                            'keywords': None
+                        })
+                    # [DEPRECATED] 旧结构：使用 items 数组
+                    elif hasattr(item, 'items') and item.items:
                         items_data = item.items
+                        result.append({
+                            'theme_type': item.theme_type,
+                            'label_name': None,
+                            'quote': None,
+                            'quote_translated': None,
+                            'explanation': None,
+                            'context_label_id': None,
+                            'items': items_data,
+                            'keywords': item.keywords if hasattr(item, 'keywords') and isinstance(item.keywords, list) else None
+                        })
+                    # [DEPRECATED] 更旧的结构：使用 keywords
                     elif hasattr(item, 'keywords') and item.keywords:
-                        # Convert old keywords format to new items format
+                        items_data = []
                         for kw in item.keywords:
                             if isinstance(kw, str):
                                 items_data.append({
                                     'content': kw,
                                     'content_original': None,
+                                    'quote_translated': None,
                                     'content_translated': None,
                                     'explanation': None
                                 })
-                    
-                    result.append({
-                        'theme_type': item.theme_type,
-                        'items': items_data,
-                        'keywords': item.keywords if hasattr(item, 'keywords') and isinstance(item.keywords, list) else []
-                    })
+                        result.append({
+                            'theme_type': item.theme_type,
+                            'label_name': None,
+                            'quote': None,
+                            'quote_translated': None,
+                            'explanation': None,
+                            'context_label_id': None,
+                            'items': items_data,
+                            'keywords': item.keywords
+                        })
                 return result
             # If it's already a list of dicts, filter out _empty types
             elif isinstance(v[0], dict):
@@ -594,4 +635,135 @@ class ContextLabelGenerateResponse(BaseModel):
             }
         }
     )
+
+
+# ============== Report Generation Schemas ==============
+
+class ReportStatsResponse(BaseModel):
+    """报告统计数据响应"""
+    total_reviews: int = Field(..., description="已翻译评论总数")
+    context_stats: Optional[dict] = Field(None, description="5W 统计数据")
+    insight_stats: Optional[dict] = Field(None, description="维度洞察统计数据")
+
+
+class ReportGenerateResponse(BaseModel):
+    """报告生成响应"""
+    success: bool
+    report: Optional[str] = Field(None, description="Markdown 格式的分析报告")
+    stats: Optional[ReportStatsResponse] = Field(None, description="报告使用的统计数据")
+    error: Optional[str] = Field(None, description="错误信息（如果失败）")
+    
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "success": True,
+                "report": "# 产品机会与改进战略报告\n\n## 🎯 1. 执行摘要...",
+                "stats": {
+                    "total_reviews": 150,
+                    "context_stats": {
+                        "who": "老年人(45), 宠物主(23)",
+                        "scene": "卧室(30), 客厅(20) / 睡前(25), 早晨(15)",
+                        "why": "送礼(40), 替换旧品(20)",
+                        "what": "清理宠物毛(50), 去除异味(30)"
+                    },
+                    "insight_stats": {
+                        "weakness": "- **电池续航** (25次): \"充电太慢\"",
+                        "strength": "- **外观设计** (40次): \"颜值很高\""
+                    }
+                },
+                "error": None
+            }
+        }
+    )
+
+
+class ReportPreviewResponse(BaseModel):
+    """报告预览响应（不调用 AI，仅返回统计数据）"""
+    success: bool
+    product: Optional[dict] = Field(None, description="产品基本信息")
+    stats: Optional[ReportStatsResponse] = Field(None, description="统计数据预览")
+    has_existing_report: bool = Field(False, description="是否存在历史报告")
+    latest_report_id: Optional[str] = Field(None, description="最新报告 ID")
+    latest_report_date: Optional[str] = Field(None, description="最新报告生成时间")
+    error: Optional[str] = Field(None, description="错误信息（如果失败）")
+    
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "success": True,
+                "product": {
+                    "id": "550e8400-e29b-41d4-a716-446655440000",
+                    "asin": "B0XXXXXXXXX",
+                    "title": "产品名称"
+                },
+                "stats": {
+                    "total_reviews": 150,
+                    "context_stats": {
+                        "who": "老年人(45), 宠物主(23)",
+                        "scene": "卧室(30) / 睡前(25)",
+                        "why": "送礼(40)",
+                        "what": "清理宠物毛(50)"
+                    },
+                    "insight_stats": {
+                        "weakness": "- **电池续航** (25次)",
+                        "strength": "- **外观设计** (40次)"
+                    }
+                },
+                "has_existing_report": True,
+                "latest_report_id": "550e8400-e29b-41d4-a716-446655440001",
+                "latest_report_date": "2024-01-15T10:30:00+00:00",
+                "error": None
+            }
+        }
+    )
+
+
+# ============== Product Report (Persisted) Schemas ==============
+
+class ProductReportResponse(BaseModel):
+    """持久化报告响应"""
+    id: str = Field(..., description="报告 UUID")
+    product_id: str = Field(..., description="产品 UUID")
+    title: Optional[str] = Field(None, description="报告标题")
+    content: str = Field(..., description="Markdown 格式的报告内容")
+    analysis_data: Optional[dict] = Field(None, description="结构化分析数据")
+    report_type: str = Field("comprehensive", description="报告类型")
+    status: str = Field("completed", description="报告状态")
+    error_message: Optional[str] = Field(None, description="错误信息")
+    created_at: Optional[str] = Field(None, description="创建时间")
+    updated_at: Optional[str] = Field(None, description="更新时间")
+    
+    model_config = ConfigDict(
+        from_attributes=True,
+        json_schema_extra={
+            "example": {
+                "id": "550e8400-e29b-41d4-a716-446655440001",
+                "product_id": "550e8400-e29b-41d4-a716-446655440000",
+                "title": "产品深度洞察报告 - 2024-01-15 10:30",
+                "content": "# 产品机会与改进战略报告\n\n## 🎯 1. 执行摘要...",
+                "analysis_data": {
+                    "total_reviews": 150,
+                    "top_who": [{"name": "老年人", "count": 45}]
+                },
+                "report_type": "comprehensive",
+                "status": "completed",
+                "created_at": "2024-01-15T10:30:00+00:00"
+            }
+        }
+    )
+
+
+class ProductReportListResponse(BaseModel):
+    """报告列表响应"""
+    success: bool
+    reports: List[ProductReportResponse] = Field(default_factory=list)
+    total: int = Field(0, description="报告总数")
+
+
+class ProductReportCreateResponse(BaseModel):
+    """报告生成响应（持久化版本）"""
+    success: bool
+    report: Optional[ProductReportResponse] = Field(None, description="生成的报告")
+    stats: Optional[dict] = Field(None, description="分析统计数据")
+    error: Optional[str] = Field(None, description="错误信息")
 

@@ -16,6 +16,7 @@ if TYPE_CHECKING:
     from app.models.task import Task
     from app.models.product_dimension import ProductDimension
     from app.models.product_context_label import ProductContextLabel
+    from app.models.report import ProductReport
 
 
 class Product(Base):
@@ -88,6 +89,11 @@ class Product(Base):
     )
     context_labels: Mapped[List["ProductContextLabel"]] = relationship(
         "ProductContextLabel",
+        back_populates="product",
+        cascade="all, delete-orphan"
+    )
+    reports: Mapped[List["ProductReport"]] = relationship(
+        "ProductReport",
         back_populates="product",
         cascade="all, delete-orphan"
     )
