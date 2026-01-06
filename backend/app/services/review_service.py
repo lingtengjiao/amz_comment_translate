@@ -276,14 +276,14 @@ class ReviewService:
     async def get_pending_reviews(
         self,
         product_id: UUID,
-        limit: int = 50
+        limit: int = 1000  # ✅ 将默认限制从 50 提升到 1000，避免翻译时遗漏评论
     ) -> List[Review]:
         """
         Get reviews pending translation.
         
         Args:
             product_id: Product UUID
-            limit: Max number of reviews to return
+            limit: Max number of reviews to return (default: 1000)
             
         Returns:
             List of Review instances

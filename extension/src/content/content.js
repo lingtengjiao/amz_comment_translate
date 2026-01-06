@@ -380,72 +380,100 @@ async function fetchReviewsPage(url) {
 }
 
 /**
- * Collect reviews for a specific star rating
- * [UPDATED] Uses humanLikeDelay for smarter waiting
+ * [OPTIMIZED] Collect reviews with Concurrency Support
+ * Supports 'fast' mode (parallel requests) and 'stable' mode (serial)
  */
-async function collectReviewsByStar(asin, star, maxPages, onProgress) {
+async function collectReviewsByStar(asin, star, maxPages, onProgress, speedMode = 'stable') {
   const allReviews = [];
   const seenReviewIds = new Set();
-  let consecutiveDuplicatePages = 0;
-  let consecutiveErrors = 0;
+  
+  // 配置并发参数
+  // fast: 一次发3个请求，间隔短
+  // stable: 一次发1个请求，间隔长
+  const BATCH_SIZE = speedMode === 'fast' ? 3 : 1; 
+  const BATCH_DELAY = speedMode === 'fast' ? 2000 : CONFIG.DELAY_BETWEEN_PAGES.min;
 
-  console.log(`[Star ${star}] Starting collection...`);
+  console.log(`[Star ${star}] Starting collection in ${speedMode} mode (Batch Size: ${BATCH_SIZE})...`);
 
-  for (let currentPage = 1; currentPage <= maxPages; currentPage++) {
+  // 分批循环
+  for (let startPage = 1; startPage <= maxPages; startPage += BATCH_SIZE) {
     if (shouldStop) break;
 
-    const url = buildReviewsUrl(asin, star, currentPage);
-    
+    // 1. 构建当前批次的任务
+    const endPage = Math.min(startPage + BATCH_SIZE - 1, maxPages);
+    const pageNumbers = [];
+    for (let p = startPage; p <= endPage; p++) pageNumbers.push(p);
+
     onProgress({
       currentStar: star,
-      currentPage,
+      currentPage: endPage, // 显示当前批次的最大页码
       maxPages,
-      message: `正在采集 ${star} 星评论... 第 ${currentPage}/${maxPages} 页`
+      message: `正在并发采集 ${star} 星... 第 ${pageNumbers.join(',')} 页`
     });
 
     try {
-      const { reviews } = await fetchReviewsPage(url);
-      
-      let newReviewsCount = 0;
-      for (const review of reviews) {
-        if (!seenReviewIds.has(review.review_id)) {
-          seenReviewIds.add(review.review_id);
-          allReviews.push(review);
-          newReviewsCount++;
+      // 2. 并发执行请求 (Promise.all)
+      const tasks = pageNumbers.map(page => {
+        const url = buildReviewsUrl(asin, star, page);
+        // 给每个请求一点微小的错峰延迟(100-300ms)，避免瞬间并发触发防火墙
+        const staggerDelay = (page - startPage) * 300; 
+        return new Promise(resolve => {
+          setTimeout(() => {
+            fetchReviewsPage(url)
+              .then(data => resolve({ page, ...data, success: true }))
+              .catch(err => resolve({ page, success: false, error: err }));
+          }, staggerDelay);
+        });
+      });
+
+      const results = await Promise.all(tasks);
+
+      // 3. 处理批次结果
+      let batchNewReviews = 0;
+      let hasCaptcha = false;
+
+      for (const res of results) {
+        if (!res.success) {
+          console.error(`[Star ${star}] Failed page ${res.page}:`, res.error);
+          if (res.error && res.error.message === 'CAPTCHA_DETECTED') hasCaptcha = true;
+          continue;
+        }
+
+        // 数据去重与合并
+        for (const review of res.reviews) {
+          if (!seenReviewIds.has(review.review_id)) {
+            seenReviewIds.add(review.review_id);
+            allReviews.push(review);
+            batchNewReviews++;
+          }
         }
       }
-      
-      console.log(`[Star ${star}] Page ${currentPage}: ${newReviewsCount} new reviews`);
 
-      // Empty/Duplicate detection
-      if (reviews.length === 0 || newReviewsCount === 0) {
-        consecutiveDuplicatePages++;
-        if (consecutiveDuplicatePages >= 2) break; // Stop after 2 empty pages
-      } else {
-        consecutiveDuplicatePages = 0;
-      }
-      
-      consecutiveErrors = 0;
+      console.log(`[Star ${star}] Batch ${startPage}-${endPage}: Got ${batchNewReviews} new reviews`);
 
-      // [NEW] Human-like delay between pages
-      if (currentPage < maxPages) {
-        const delayPromise = humanLikeDelay(CONFIG.DELAY_BETWEEN_PAGES.min, 1500);
-        console.log(`[Star ${star}] Resting for ${delayPromise.delay}ms...`);
-        await delayPromise;
-      }
-
-    } catch (error) {
-      console.error(`[Star ${star}] Error on page ${currentPage}:`, error);
-      
-      if (error.message === 'CAPTCHA_DETECTED') {
-        onProgress({ error: '检测到验证码，采集暂停。请手动在页面输入验证码后重试。' });
+      // 4. 熔断机制：如果遇到验证码，立即停止
+      if (hasCaptcha) {
+        onProgress({ error: '检测到验证码，为了安全已暂停采集。' });
         shouldStop = true;
         break;
       }
 
-      consecutiveErrors++;
-      if (consecutiveErrors >= 3) break;
-      await humanLikeDelay(4000, 2000); // Longer wait on error
+      // 5. 空数据检测：如果这一批全是空的，可能已经到底了，提前结束
+      if (batchNewReviews === 0 && allReviews.length > 0) {
+        console.log(`[Star ${star}] No new reviews in batch, assuming end of list.`);
+        break;
+      }
+
+      // 6. 批次间休息 (模拟真人翻页阅读时间)
+      if (endPage < maxPages) {
+        const delayPromise = humanLikeDelay(BATCH_DELAY, 1000);
+        console.log(`[Wait] Resting for ${delayPromise.delay}ms...`);
+        await delayPromise;
+      }
+
+    } catch (error) {
+      console.error(`[Star ${star}] Batch error:`, error);
+      await humanLikeDelay(5000, 0); // 发生大错误时多歇会儿
     }
   }
 

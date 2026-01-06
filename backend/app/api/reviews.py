@@ -118,7 +118,7 @@ async def ingest_reviews(
 async def get_reviews(
     asin: str,
     page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=100),
+    page_size: int = Query(20, ge=1, le=1000),  # ✅ 将单页最大限制从 100 提升到 1000，支持大批量展示
     rating: Optional[int] = Query(None, ge=1, le=5),
     sentiment: Optional[str] = Query(None, pattern="^(positive|neutral|negative)$"),
     status: Optional[str] = Query(None, pattern="^(pending|processing|completed|failed)$"),
