@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1.4
 # Build stage
 FROM node:20-alpine AS builder
 
@@ -6,8 +7,11 @@ WORKDIR /app
 # Copy package files
 COPY package*.json ./
 
-# Install dependencies (使用 npm install 因为没有 lock 文件)
-RUN npm install --registry=https://registry.npmmirror.com
+# Install dependencies with BuildKit cache mount
+# 利用 Docker BuildKit 缓存，已下载过的包不需要重新下载
+RUN --mount=type=cache,target=/root/.npm \
+    npm config set registry https://registry.npmmirror.com && \
+    npm ci --prefer-offline || npm install --prefer-offline
 
 # Copy source code
 COPY . .

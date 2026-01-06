@@ -32,14 +32,16 @@ export function mapTranslationStatus(status: string): TaskStatus {
  * 将后端评论数据转换为前端格式
  */
 export function transformReview(apiReview: ApiReview): Review {
-  // 转换 insights 数据
-  const insights = apiReview.insights?.map(insight => ({
-    type: insight.type as 'strength' | 'weakness' | 'suggestion' | 'scenario' | 'emotion',
-    quote: insight.quote,
-    quoteTranslated: insight.quote_translated || undefined,
-    analysis: insight.analysis,
-    dimension: insight.dimension || undefined,
-  }));
+  // 转换 insights 数据，过滤掉 _empty 标记（表示已处理但无洞察）
+  const insights = apiReview.insights
+    ?.filter(insight => insight.type !== '_empty')
+    .map(insight => ({
+      type: insight.type as 'strength' | 'weakness' | 'suggestion' | 'scenario' | 'emotion',
+      quote: insight.quote,
+      quoteTranslated: insight.quote_translated || undefined,
+      analysis: insight.analysis,
+      dimension: insight.dimension || undefined,
+    }));
   
   return {
     id: apiReview.id,
@@ -59,8 +61,8 @@ export function transformReview(apiReview: ApiReview): Review {
     videos: apiReview.video_url ? [apiReview.video_url] : undefined,
     // AI 深度解读
     insights: insights && insights.length > 0 ? insights : undefined,
-    // 主题高亮内容
-    themeHighlights: apiReview.theme_highlights?.map(th => {
+    // 主题高亮内容，过滤掉 _empty 标记（表示已处理但无主题）
+    themeHighlights: apiReview.theme_highlights?.filter(th => th.theme_type !== '_empty').map(th => {
       // 使用新的 items 格式，如果不存在则从 keywords 向后兼容转换
       let items: Array<{ content: string; content_original?: string; content_translated?: string; explanation?: string }> = [];
       

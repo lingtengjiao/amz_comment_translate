@@ -1,9 +1,10 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { ChevronDown, ChevronRight, Sparkles } from 'lucide-react';
 import type { Review } from '../data/mockData';
 
 interface ReviewInsightsProps {
   review: Review;
+  expanded?: boolean; // 全局控制的展开状态
 }
 
 const insightTypeLabels = {
@@ -14,8 +15,14 @@ const insightTypeLabels = {
   emotion: '情感洞察'
 } as const;
 
-export function ReviewInsights({ review }: ReviewInsightsProps) {
-  const [isExpanded, setIsExpanded] = useState(false);
+export function ReviewInsights({ review, expanded = true }: ReviewInsightsProps) {
+  // 本地展开状态，默认跟随全局设置
+  const [isExpanded, setIsExpanded] = useState(expanded);
+
+  // 当全局展开状态变化时，同步本地状态
+  useEffect(() => {
+    setIsExpanded(expanded);
+  }, [expanded]);
 
   if (!review.insights || review.insights.length === 0) {
     return null;
@@ -33,13 +40,16 @@ export function ReviewInsights({ review }: ReviewInsightsProps) {
         ) : (
           <ChevronRight className="size-4 text-gray-400" />
         )}
-        <Sparkles className="size-4 text-gray-400" />
-        <h4 className="text-gray-700 dark:text-gray-300">深度解读</h4>
+        <Sparkles className="size-4 text-amber-500" />
+        <h4 className="text-gray-700 dark:text-gray-300 font-medium">深度解读</h4>
+        <span className="text-xs text-gray-400 dark:text-gray-500">
+          ({review.insights.length} 条洞察)
+        </span>
       </button>
 
       {/* Insights List - Two Column Layout */}
       {isExpanded && (
-        <div className="space-y-4">
+        <div className="space-y-4 pl-6 border-l-2 border-amber-200 dark:border-amber-800">
           {review.insights.map((insight, index) => (
             <div key={index}>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">

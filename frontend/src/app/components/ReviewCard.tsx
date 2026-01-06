@@ -1,4 +1,4 @@
-import { memo } from 'react';
+import { memo, useState, useEffect, useRef } from 'react';
 import { Star, ShieldCheck, Image as ImageIcon, Video, ThumbsUp, Pin } from 'lucide-react';
 import { Card } from './ui/card';
 import { Badge } from './ui/badge';
@@ -22,6 +22,8 @@ interface ReviewCardProps {
   onDelete: (id: string) => void;
   onToggleHidden: (id: string) => void;
   onTogglePin: (id: string) => void;
+  isNewlyTranslated?: boolean; // 是否刚刚翻译完成（触发打字机动画）
+  insightsExpanded?: boolean; // 是否展开洞察（全局控制）
 }
 
 export const ReviewCard = memo(function ReviewCard({ 
@@ -33,10 +35,31 @@ export const ReviewCard = memo(function ReviewCard({
   onEdit,
   onDelete,
   onToggleHidden,
-  onTogglePin
+  onTogglePin,
+  isNewlyTranslated = false,
+  insightsExpanded = true
 }: ReviewCardProps) {
   const hasImages = review.images && review.images.length > 0;
   const hasVideos = review.videos && review.videos.length > 0;
+  
+  // 新翻译的短暂高亮效果（无打字机动画，更简洁）
+  const [showNewBadge, setShowNewBadge] = useState(false);
+  const badgeShownRef = useRef(false);
+  
+  // 检测新翻译完成，显示短暂高亮
+  useEffect(() => {
+    if (isNewlyTranslated && review.translatedText && !badgeShownRef.current) {
+      badgeShownRef.current = true;
+      setShowNewBadge(true);
+      
+      // 3秒后移除高亮效果
+      const timer = setTimeout(() => {
+        setShowNewBadge(false);
+      }, 3000);
+      
+      return () => clearTimeout(timer);
+    }
+  }, [isNewlyTranslated, review.translatedText]);
 
   // Don't render hidden reviews
   if (review.isHidden) {
@@ -44,8 +67,10 @@ export const ReviewCard = memo(function ReviewCard({
   }
 
   return (
-    <Card className={`overflow-hidden bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 ${
+    <Card className={`overflow-hidden bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 transition-all duration-500 ${
       review.isPinned ? 'ring-2 ring-orange-400 dark:ring-orange-500' : ''
+    } ${
+      showNewBadge ? 'ring-2 ring-emerald-400 dark:ring-emerald-500 shadow-lg shadow-emerald-100 dark:shadow-emerald-900/30 animate-pulse-once' : ''
     }`}>
       {/* Pinned Badge */}
       {review.isPinned && (
@@ -177,28 +202,43 @@ export const ReviewCard = memo(function ReviewCard({
 
           {/* Translated Text - Right Column - EMPHASIZED */}
           <div className="relative group">
-            <div className="rounded-xl bg-gradient-to-br from-blue-50 to-indigo-50 dark:from-blue-950/30 dark:to-indigo-950/30 p-4 h-full border border-blue-100 dark:border-blue-900/50 hover:border-blue-300 dark:hover:border-blue-800/50 hover:shadow-md dark:hover:shadow-blue-900/20 transition-all">
+            <div className={`rounded-xl p-4 h-full border transition-all duration-500 ${
+              showNewBadge
+                ? 'bg-gradient-to-br from-emerald-50 to-teal-50 dark:from-emerald-950/30 dark:to-teal-950/30 border-emerald-200 dark:border-emerald-800/50 shadow-inner' 
+                : 'bg-gradient-to-br from-blue-50 to-indigo-50 dark:from-blue-950/30 dark:to-indigo-950/30 border-blue-100 dark:border-blue-900/50 hover:border-blue-300 dark:hover:border-blue-800/50 hover:shadow-md dark:hover:shadow-blue-900/20'
+            }`}>
               <div className="flex items-center gap-2 mb-3">
-                <span className="text-xs text-blue-700 dark:text-blue-400 font-semibold">中文译文</span>
+                <span className={`text-xs font-semibold ${
+                  showNewBadge
+                    ? 'text-emerald-700 dark:text-emerald-400' 
+                    : 'text-blue-700 dark:text-blue-400'
+                }`}>
+                  {showNewBadge ? '✨ 刚刚翻译' : '中文译文'}
+                </span>
               </div>
               
               {/* 检查是否有翻译内容 */}
               {review.translatedText ? (
                 <>
-              {/* Translated Title if exists */}
-              {review.translatedTitle && (
-                <p className="text-gray-900 dark:text-white font-bold mb-2.5 leading-snug">{review.translatedTitle}</p>
-              )}
-              
-              {highlightEnabled ? (
-                <ThemeHighlightedText 
-                  text={review.translatedText} 
-                  activeThemes={activeThemes} 
-                  allTags={allTags}
-                  className="text-gray-900 dark:text-white leading-relaxed" 
-                />
-              ) : (
-                <p className="text-gray-900 dark:text-white leading-relaxed whitespace-pre-wrap">{review.translatedText}</p>
+                  {/* Translated Title */}
+                  {review.translatedTitle && (
+                    <p className="text-gray-900 dark:text-white font-bold mb-2.5 leading-snug">
+                      {review.translatedTitle}
+                    </p>
+                  )}
+                  
+                  {/* Translated Body */}
+                  {highlightEnabled ? (
+                    <ThemeHighlightedText 
+                      text={review.translatedText} 
+                      activeThemes={activeThemes} 
+                      allTags={allTags}
+                      className="text-gray-900 dark:text-white leading-relaxed"
+                    />
+                  ) : (
+                    <p className="text-gray-900 dark:text-white leading-relaxed whitespace-pre-wrap">
+                      {review.translatedText}
+                    </p>
                   )}
                 </>
               ) : (
@@ -211,7 +251,7 @@ export const ReviewCard = memo(function ReviewCard({
         </div>
         
         {/* Review Insights */}
-        <ReviewInsights review={review} />
+        <ReviewInsights review={review} expanded={insightsExpanded} />
       </div>
     </Card>
   );

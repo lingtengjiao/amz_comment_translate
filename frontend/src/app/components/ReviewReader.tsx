@@ -51,6 +51,7 @@ export function ReviewReader() {
   const [ratingFilter, setRatingFilter] = useState<FilterRating>('all');
   const [sentimentFilter, setSentimentFilter] = useState<FilterSentiment>('all');
   const [highlightEnabled, setHighlightEnabled] = useState(false);
+  const [insightsExpanded, setInsightsExpanded] = useState(true); // 默认展开所有洞察
   const [activeThemes, setActiveThemes] = useState<string[]>([]);
   const [customTags, setCustomTags] = useState<ThemeTag[]>([]);
   const [showAddTagModal, setShowAddTagModal] = useState(false);
@@ -58,6 +59,7 @@ export function ReviewReader() {
   const [searchQuery, setSearchQuery] = useState('');
   const [isTranslating, setIsTranslating] = useState(false);
   const [translationProgress, setTranslationProgress] = useState(0);
+  const [isFullAnalysis, setIsFullAnalysis] = useState(false); // 完整分析模式（翻译+洞察+主题）
   const [displayedReviews, setDisplayedReviews] = useState(10);
   const loadMoreRef = useRef<HTMLDivElement>(null);
   const [showHiddenModal, setShowHiddenModal] = useState(false);
@@ -82,6 +84,7 @@ export function ReviewReader() {
   const [apiRatingDistribution, setApiRatingDistribution] = useState<{5: number; 4: number; 3: number; 2: number; 1: number}>({ 5: 0, 4: 0, 3: 0, 2: 0, 1: 0 });
   const [apiSentimentDistribution, setApiSentimentDistribution] = useState<{positive: number; neutral: number; negative: number}>({ positive: 0, neutral: 0, negative: 0 });
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [newlyTranslatedIds, setNewlyTranslatedIds] = useState<Set<string>>(new Set()); // 跟踪刚刚翻译完成的评论（触发打字机动画）
   const pageSize = 50;
   const pageContainerRef = useRef<HTMLDivElement | null>(null);
 
@@ -197,9 +200,98 @@ export function ReviewReader() {
     };
   }, []);
 
-  // 轮询翻译进度
+  // 智能增量更新评论（翻译过程中使用）
+  const updateReviewsIncrementally = useCallback(async () => {
+    if (!asin || !task) return;
+    
+    try {
+      // 同时获取产品统计信息和评论
+      const [statsResponse, reviewsResponse] = await Promise.all([
+        apiService.getProductStats(asin),
+        apiService.getReviews({ asin, page: currentPage, pageSize })
+      ]);
+      
+      // 更新产品信息（标题和五点翻译）
+      const product = statsResponse.product;
+      
+      // 更新 task 中的产品信息（ProductInfoCard 会自动处理打字机效果）
+      setTask(prevTask => {
+        if (!prevTask) return prevTask;
+        return {
+          ...prevTask,
+          titleTranslated: product.title_translated || prevTask.titleTranslated,
+          bulletPointsTranslated: product.bullet_points_translated || prevTask.bulletPointsTranslated
+        };
+      });
+      
+      const newReviews = transformReviews(reviewsResponse.reviews);
+      
+      // 找出新翻译完成的评论（之前没有翻译，现在有了）
+      const freshlyTranslatedIds: string[] = [];
+      const currentReviewsMap = new Map(task.reviews.map(r => [r.id, r]));
+      
+      newReviews.forEach(newReview => {
+        const oldReview = currentReviewsMap.get(newReview.id);
+        // 检测：之前没有翻译 -> 现在有翻译
+        if (oldReview && !oldReview.translatedText && newReview.translatedText) {
+          // 检查是否已经标记过
+          if (!newlyTranslatedIds.has(newReview.id)) {
+            freshlyTranslatedIds.push(newReview.id);
+          }
+        }
+      });
+      
+      // 标记新翻译的评论（触发打字机动画）
+      if (freshlyTranslatedIds.length > 0) {
+        console.log('New translations detected:', freshlyTranslatedIds);
+        
+        setNewlyTranslatedIds(prev => {
+          const updated = new Set(prev);
+          freshlyTranslatedIds.forEach(id => updated.add(id));
+          return updated;
+        });
+        
+        // 5秒后移除标记（让动画有时间完成）
+        setTimeout(() => {
+          setNewlyTranslatedIds(prev => {
+            const updated = new Set(prev);
+            freshlyTranslatedIds.forEach(id => updated.delete(id));
+            return updated;
+          });
+        }, 8000);
+      }
+      
+      // 增量合并：保留本地状态（如 isPinned, isHidden），更新翻译内容
+      setTask(prevTask => {
+        if (!prevTask) return prevTask;
+        
+        const mergedReviews = newReviews.map(newReview => {
+          const oldReview = currentReviewsMap.get(newReview.id);
+          if (oldReview) {
+            // 保留本地 UI 状态，更新翻译数据
+            return {
+              ...newReview,
+              isPinned: oldReview.isPinned,
+              isHidden: oldReview.isHidden,
+            };
+          }
+          return newReview;
+        });
+        
+        return {
+          ...prevTask,
+          reviews: mergedReviews
+        };
+      });
+      
+    } catch (err) {
+      console.error('Failed to update reviews incrementally:', err);
+    }
+  }, [asin, task, currentPage, pageSize, newlyTranslatedIds]);
+
+  // 轮询翻译进度（仅在非完整分析模式下使用）
   useEffect(() => {
-    if (!isTranslating) return;
+    if (!isTranslating || isFullAnalysis) return; // 完整分析模式有独立的轮询逻辑
     
     const interval = setInterval(async () => {
       if (!asin) return;
@@ -213,9 +305,16 @@ export function ReviewReader() {
         setTranslationProgress(progress);
         setTranslatedCount(translated);
         
-        if (stats.product.translation_status === 'completed' || progress >= 100) {
+        // 增量更新评论列表（流式效果）
+        await updateReviewsIncrementally();
+        
+        const bulletsDone = !stats.product.bullet_points || 
+                           (stats.product.bullet_points_translated && stats.product.bullet_points_translated.length > 0);
+        const titleDone = !stats.product.title || !!stats.product.title_translated;
+        
+        if ((stats.product.translation_status === 'completed' || progress >= 100) && bulletsDone && titleDone) {
           setIsTranslating(false);
-          // 刷新数据
+          // 最终刷新确保数据一致
           fetchData();
         }
       } catch (err) {
@@ -224,7 +323,7 @@ export function ReviewReader() {
     }, 2000);
     
     return () => clearInterval(interval);
-  }, [isTranslating, asin, fetchData]);
+  }, [isTranslating, isFullAnalysis, asin, fetchData, updateReviewsIncrementally]);
 
   // Review action handlers
   const handleEdit = (id: string) => {
@@ -605,6 +704,189 @@ export function ReviewReader() {
   // 提取主题高亮
   const [isExtractingThemes, setIsExtractingThemes] = useState(false);
   
+  // 完整分析：一键处理翻译+洞察+主题
+  const [analysisPhase, setAnalysisPhase] = useState<'idle' | 'translating' | 'insights' | 'themes' | 'complete'>('idle');
+  
+  const handleFullAnalysis = async () => {
+    if (!asin) return;
+    
+    setIsFullAnalysis(true);
+
+    // 用于追踪是否已触发Phase 2
+    let phase2Triggered = false;
+
+    // Phase 2: 触发洞察和主题提取，并持续轮询更新
+    const triggerPhase2 = async () => {
+      if (phase2Triggered) return;
+      phase2Triggered = true;
+      
+      console.log('Triggering Phase 2: insights and themes extraction');
+      setAnalysisPhase('insights');
+      toast.info('正在提取洞察和主题...', '数据将实时更新到页面');
+      
+      try {
+        // 同时触发洞察和主题提取
+        const [insightResult, themeResult] = await Promise.allSettled([
+          apiService.triggerInsightExtraction(asin),
+          apiService.triggerThemeExtraction(asin)
+        ]);
+        
+        // 检查结果
+        const insightSuccess = insightResult.status === 'fulfilled';
+        const themeSuccess = themeResult.status === 'fulfilled';
+        
+        if (!insightSuccess) {
+          console.error('Insight extraction failed:', insightResult);
+        }
+        if (!themeSuccess) {
+          console.error('Theme extraction failed:', themeResult);
+        }
+        
+        // 开始轮询洞察和主题进度，直到完成
+        const checkPhase2Progress = async () => {
+          try {
+            const stats = await apiService.getProductStats(asin);
+            const total = stats.product.translated_reviews;
+            const withInsights = stats.product.reviews_with_insights || 0;
+            const withThemes = stats.product.reviews_with_themes || 0;
+            
+            // 更新统计数据
+            setReviewsWithInsights(withInsights);
+            setReviewsWithThemes(withThemes);
+            
+            // 更新评论列表，显示新的洞察和主题
+            await updateReviewsIncrementally();
+            
+            console.log('Phase 2 progress:', { 
+              total, withInsights, withThemes,
+              insightProgress: total > 0 ? Math.round((withInsights / total) * 100) : 0,
+              themeProgress: total > 0 ? Math.round((withThemes / total) * 100) : 0
+            });
+            
+            // 检查是否全部完成（洞察和主题都处理完所有已翻译评论）
+            const allDone = withInsights >= total && withThemes >= total;
+            
+            if (allDone) {
+              setAnalysisPhase('complete');
+              toast.success('完整分析完成！', `已处理 ${total} 条评论`);
+              setIsFullAnalysis(false);
+              setIsTranslating(false);
+              // 最后刷新一次数据
+              await fetchData();
+            } else {
+              // 继续轮询
+              setTimeout(checkPhase2Progress, 2000);
+            }
+          } catch (err) {
+            console.error('Failed to check Phase 2 progress:', err);
+            setTimeout(checkPhase2Progress, 3000);
+          }
+        };
+        
+        // 开始轮询 Phase 2 进度
+        setTimeout(checkPhase2Progress, 2000);
+        
+      } catch (err) {
+        console.error('Failed to trigger insight/theme extraction:', err);
+        toast.warning('提取洞察和主题时出现问题', '请手动触发');
+        setIsFullAnalysis(false);
+        setAnalysisPhase('idle');
+        fetchData();
+      }
+    };
+
+    try {
+      // 先检查当前翻译状态
+      const stats = await apiService.getProductStats(asin);
+      const total = stats.product.total_reviews;
+      const translated = stats.product.translated_reviews;
+      const bulletsDone = !stats.product.bullet_points || 
+                         (stats.product.bullet_points_translated && stats.product.bullet_points_translated.length > 0);
+      const titleDone = !stats.product.title || !!stats.product.title_translated;
+      const translationDone = stats.product.translation_status === 'completed' || 
+                             (translated >= total && total > 0);
+      
+      console.log('Full analysis initial check:', { 
+        translated, total, translationDone, bulletsDone, titleDone,
+        status: stats.product.translation_status 
+      });
+      
+      // 如果翻译已经完成，直接跳到 Phase 2
+      if (translationDone && bulletsDone && titleDone) {
+        console.log('Translation already complete, skipping to Phase 2');
+        toast.info('翻译已完成', '正在直接提取洞察和主题...');
+        setIsTranslating(false);
+        await triggerPhase2();
+        return;
+      }
+      
+      // 需要先翻译
+      setIsTranslating(true);
+      setTranslationProgress(0);
+      setAnalysisPhase('translating');
+      
+      // 触发翻译
+      await apiService.triggerTranslation(asin);
+      toast.success('完整分析已启动', '正在翻译评论，完成后将自动提取洞察和主题...');
+      
+      // 轮询翻译进度，完成后自动触发洞察和主题提取
+      const checkProgress = async () => {
+        // 防止重复触发 Phase 2
+        if (phase2Triggered) return;
+        
+        try {
+          const stats = await apiService.getProductStats(asin);
+          const total = stats.product.total_reviews;
+          const translated = stats.product.translated_reviews;
+          const progress = total > 0 ? Math.round((translated / total) * 100) : 0;
+          
+          setTranslationProgress(progress);
+          setTranslatedCount(translated);
+          
+          // 增量更新评论列表（流式效果）
+          await updateReviewsIncrementally();
+          
+          // 翻译完成条件检查
+          const bulletsDone = !stats.product.bullet_points || 
+                             (stats.product.bullet_points_translated && stats.product.bullet_points_translated.length > 0);
+          const titleDone = !stats.product.title || !!stats.product.title_translated;
+          const translationDone = stats.product.translation_status === 'completed' || 
+                                 (translated >= total && total > 0);
+          
+          console.log('Full analysis progress check:', { 
+            progress, translated, total, 
+            translationDone, bulletsDone, titleDone,
+            status: stats.product.translation_status 
+          });
+          
+          if (translationDone && bulletsDone && titleDone && !phase2Triggered) {
+            setIsTranslating(false);
+            toast.success('翻译完成', '正在自动提取洞察和主题...');
+            await triggerPhase2();
+          } else if (!phase2Triggered) {
+            // 继续轮询
+            setTimeout(checkProgress, 2000);
+          }
+        } catch (err) {
+          console.error('Failed to check progress:', err);
+          if (!phase2Triggered) {
+            setTimeout(checkProgress, 2000);
+          }
+        }
+      };
+      
+      // 开始轮询
+      setTimeout(checkProgress, 2000);
+      
+    } catch (err) {
+      console.error('Failed to start full analysis:', err);
+      setIsTranslating(false);
+      setIsFullAnalysis(false);
+      setAnalysisPhase('idle');
+      toast.error('启动完整分析失败', '请重试');
+    }
+  };
+  
   const handleExtractThemes = async () => {
     if (!asin) return;
     
@@ -737,7 +1019,49 @@ export function ReviewReader() {
                 <ExternalLink className="size-4" />
                 查看产品
               </Button>
-              {/* 翻译按钮 - 三种状态：已翻译、翻译中、开始翻译 */}
+              {/* 完整分析按钮 - 一键处理（翻译+洞察+主题），优先显示 */}
+              {(() => {
+                const allTranslated = totalReviews > 0 && translatedCount >= totalReviews && bulletPointsTranslated;
+                const allAnalyzed = allTranslated && 
+                                   reviewsWithInsights >= translatedCount && 
+                                   reviewsWithThemes >= translatedCount;
+                
+                if (allAnalyzed) {
+                  return (
+                    <Button 
+                      disabled 
+                      size="sm" 
+                      variant="outline"
+                      className="gap-2 min-w-[120px] text-blue-600 border-blue-600"
+                      title="所有分析已完成"
+                    >
+                      <Check className="size-4" />
+                      分析完成
+                    </Button>
+                  );
+                } else if (isFullAnalysis || (isTranslating && isFullAnalysis)) {
+                  return (
+                    <Button disabled size="sm" className="gap-2 min-w-[120px] bg-blue-600">
+                      <PlayCircle className="size-4 animate-spin" />
+                      完整分析中
+                    </Button>
+                  );
+                } else if (!allTranslated && !isTranslating) {
+                  return (
+                    <Button 
+                      onClick={handleFullAnalysis}
+                      size="sm"
+                      className="gap-2 min-w-[120px] bg-blue-600 hover:bg-blue-700"
+                      title="一键完成翻译、洞察提取和主题提取（推荐）"
+                    >
+                      <Languages className="size-4" />
+                      完整分析
+                    </Button>
+                  );
+                }
+                return null;
+              })()}
+              {/* 翻译按钮 - 仅翻译模式 */}
               {(() => {
                 // 判断是否全部翻译完成
                 const allTranslated = totalReviews > 0 && translatedCount >= totalReviews && bulletPointsTranslated;
@@ -754,34 +1078,38 @@ export function ReviewReader() {
                       已翻译
                     </Button>
                   );
-                } else if (isTranslating) {
+                } else if (isTranslating && !isFullAnalysis) {
                   return (
                     <Button disabled size="sm" className="gap-2 min-w-[100px]">
                       <PlayCircle className="size-4 animate-spin" />
                       翻译中
                     </Button>
                   );
-                } else {
+                } else if (!isFullAnalysis) {
                   return (
                     <Button 
                       onClick={handleStartTranslation}
                       size="sm"
-                      className="gap-2 bg-emerald-600 hover:bg-emerald-700"
+                      variant="outline"
+                      className="gap-2 bg-emerald-600 hover:bg-emerald-700 text-white"
+                      title="仅翻译评论"
                     >
                       <Languages className="size-4" />
-                      开始翻译
+                      仅翻译
                     </Button>
                   );
                 }
+                return null;
               })()}
-              {/* 提取洞察按钮 - 仅在有翻译评论且翻译未进行时显示 */}
-              {translatedCount > 0 && !isTranslating && (
+              {/* 提取洞察按钮 - 仅在有翻译评论且未进行完整分析时显示 */}
+              {translatedCount > 0 && !isTranslating && !isFullAnalysis && (
                 <Button 
                   onClick={handleExtractInsights}
                   disabled={isExtractingInsights}
                   variant="outline"
                   size="sm"
                   className="gap-2"
+                  title="单独提取洞察（如需仅翻译可使用'仅翻译'按钮）"
                 >
                   {isExtractingInsights ? (
                     <>
@@ -796,14 +1124,15 @@ export function ReviewReader() {
                   )}
                 </Button>
               )}
-              {/* 提取主题按钮 - 仅在有翻译评论且翻译未进行时显示 */}
-              {translatedCount > 0 && !isTranslating && (
+              {/* 提取主题按钮 - 仅在有翻译评论且未进行完整分析时显示 */}
+              {translatedCount > 0 && !isTranslating && !isFullAnalysis && (
                 <Button 
                   onClick={handleExtractThemes}
                   disabled={isExtractingThemes}
                   variant="outline"
                   size="sm"
                   className="gap-2"
+                  title="单独提取主题（如需仅翻译可使用'仅翻译'按钮）"
                 >
                   {isExtractingThemes ? (
                     <>
@@ -825,14 +1154,56 @@ export function ReviewReader() {
             </div>
           </div>
 
-          {/* Translation Progress Bar */}
-          {isTranslating && (
+          {/* Translation/Analysis Progress Bar */}
+          {(isTranslating || isFullAnalysis) && (
             <div className="mt-3 space-y-2">
-              <div className="flex items-center justify-between text-sm">
-                <span className="text-gray-600">正在翻译评论...</span>
-                <span className="text-gray-900 font-medium">{translationProgress}%</span>
-              </div>
-              <Progress value={translationProgress} className="h-2" />
+              {/* 翻译进度 */}
+              {analysisPhase === 'translating' && (
+                <>
+                  <div className="flex items-center justify-between text-sm">
+                    <span className="text-gray-600">
+                      {isFullAnalysis ? '📝 正在翻译评论...' : '正在翻译评论...'}
+                    </span>
+                    <span className="text-gray-900 font-medium">{translationProgress}%</span>
+                  </div>
+                  <Progress value={translationProgress} className="h-2" />
+                </>
+              )}
+              
+              {/* 洞察和主题提取进度 */}
+              {(analysisPhase === 'insights' || analysisPhase === 'themes') && (
+                <>
+                  <div className="flex items-center justify-between text-sm">
+                    <span className="text-gray-600">
+                      🔍 正在提取洞察和主题...
+                    </span>
+                    <span className="text-gray-900 font-medium">
+                      洞察: {reviewsWithInsights}/{translatedCount} | 主题: {reviewsWithThemes}/{translatedCount}
+                    </span>
+                  </div>
+                  <div className="flex gap-2">
+                    <Progress 
+                      value={translatedCount > 0 ? (reviewsWithInsights / translatedCount) * 100 : 0} 
+                      className="h-2 flex-1" 
+                    />
+                    <Progress 
+                      value={translatedCount > 0 ? (reviewsWithThemes / translatedCount) * 100 : 0} 
+                      className="h-2 flex-1" 
+                    />
+                  </div>
+                  <p className="text-xs text-gray-500">
+                    数据正在实时更新到页面...
+                  </p>
+                </>
+              )}
+              
+              {/* 完成状态 */}
+              {analysisPhase === 'complete' && (
+                <div className="flex items-center gap-2 text-sm text-green-600">
+                  <Check className="size-4" />
+                  <span>完整分析已完成！</span>
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -841,7 +1212,7 @@ export function ReviewReader() {
       {/* Main Content */}
       <main className="max-w-[1600px] mx-auto px-4 sm:px-6 lg:px-8 py-6">
         {/* Product Information Card */}
-        <ProductInfoCard task={task} ratingStats={ratingStats} />
+        <ProductInfoCard task={task} ratingStats={ratingStats} isTranslating={isTranslating} />
 
         {/* Statistics Cards */}
         <StatsCards ratingStats={ratingStats} />
@@ -878,6 +1249,8 @@ export function ReviewReader() {
               setSortOption={setSortOption}
               highlightEnabled={highlightEnabled}
               setHighlightEnabled={setHighlightEnabled}
+              insightsExpanded={insightsExpanded}
+              setInsightsExpanded={setInsightsExpanded}
             />
             
             {/* Theme Tag Bar */}
@@ -927,6 +1300,8 @@ export function ReviewReader() {
                     onDelete={handleDelete}
                     onToggleHidden={handleToggleHidden}
                     onTogglePin={handleTogglePin}
+                    isNewlyTranslated={newlyTranslatedIds.has(review.id)}
+                    insightsExpanded={insightsExpanded}
                   />
                 ))
               )}

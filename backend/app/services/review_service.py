@@ -199,14 +199,23 @@ class ReviewService:
                 import json
                 image_urls_json = json.dumps(image_urls)
             
+            # 防御性截断：确保字段不超过数据库列长度限制
+            author = review_data.get("author")
+            if author and len(author) > 500:
+                author = author[:497] + "..."
+            
+            video_url = review_data.get("video_url")
+            if video_url and len(video_url) > 500:
+                video_url = video_url[:500]
+            
             review_records.append({
                 "id": uuid.uuid4(),
                 "product_id": product_id,
                 "review_id": review_id,
-                "author": review_data.get("author"),
+                "author": author,
                 "rating": review_data.get("rating", 0),
-                "title_original": review_data.get("title"),
-                "body_original": review_data.get("body", ""),
+                "title_original": review_data.get("title"),  # TEXT 类型，无需截断
+                "body_original": review_data.get("body", ""),  # TEXT 类型，无需截断
                 "review_date": review_date,
                 "verified_purchase": review_data.get("verified_purchase", False),
                 "helpful_votes": review_data.get("helpful_votes", 0),
@@ -214,7 +223,7 @@ class ReviewService:
                 "has_video": review_data.get("has_video", False),
                 "has_images": review_data.get("has_images", False),
                 "image_urls": image_urls_json,
-                "video_url": review_data.get("video_url"),
+                "video_url": video_url,
                 "sentiment": "neutral",
                 "translation_status": TranslationStatus.PENDING.value
             })
@@ -400,7 +409,8 @@ class ReviewService:
         
         # Apply pagination
         offset = (page - 1) * page_size
-        query = query.order_by(Review.created_at.desc()).offset(offset).limit(page_size)
+        # 默认按评论日期降序排序（与前端显示顺序一致）
+        query = query.order_by(Review.review_date.desc().nullslast(), Review.created_at.desc()).offset(offset).limit(page_size)
         
         result = await self.db.execute(query)
         reviews = list(result.scalars().all())

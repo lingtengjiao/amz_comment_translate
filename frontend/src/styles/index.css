@@ -33,3 +33,94 @@
   margin: 0;
   padding: 0;
 }
+
+/* 翻译完成动画 - 单次脉冲效果 */
+@keyframes pulse-once {
+  0% {
+    box-shadow: 0 0 0 0 rgba(52, 211, 153, 0.7);
+    transform: scale(1);
+  }
+  50% {
+    box-shadow: 0 0 20px 10px rgba(52, 211, 153, 0.3);
+    transform: scale(1.005);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(52, 211, 153, 0);
+    transform: scale(1);
+  }
+}
+
+.animate-pulse-once {
+  animation: pulse-once 1s ease-out;
+}
+
+/* 翻译内容淡入效果 */
+@keyframes fade-in-up {
+  0% {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-fade-in-up {
+  animation: fade-in-up 0.5s ease-out;
+}
+
+/* 打字机光标闪烁效果 */
+@keyframes blink {
+  0%, 50% {
+    opacity: 1;
+  }
+  51%, 100% {
+    opacity: 0;
+  }
+}
+
+.animate-blink {
+  animation: blink 0.8s infinite;
+}
+
+/* 打字机文本渐显效果 */
+@keyframes typewriter-reveal {
+  from {
+    opacity: 0.3;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.typewriter-text {
+  animation: typewriter-reveal 0.1s ease-out;
+}
+
+/* 翻译文本容器动画 */
+@keyframes slide-in-fade {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-slide-in {
+  animation: slide-in-fade 0.4s ease-out forwards;
+}
+
+/* 翻译标题动画 */
+.translation-title-enter {
+  animation: slide-in-fade 0.3s ease-out forwards;
+}
+
+/* 翻译正文动画 - 稍有延迟 */
+.translation-body-enter {
+  animation: slide-in-fade 0.4s ease-out 0.15s forwards;
+  opacity: 0;
+}

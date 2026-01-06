@@ -1,4 +1,4 @@
-import { Search, Filter } from 'lucide-react';
+import { Search, Filter, ChevronDown, ChevronUp, Lightbulb } from 'lucide-react';
 import {
   Select,
   SelectContent,
@@ -6,6 +6,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from './ui/select';
+import { Button } from './ui/button';
 
 type FilterRating = 'all' | '5' | '4' | '3' | '2' | '1';
 type FilterSentiment = 'all' | 'positive' | 'negative' | 'neutral';
@@ -22,6 +23,8 @@ interface FilterBarProps {
   setSortOption: (value: SortOption) => void;
   highlightEnabled: boolean;
   setHighlightEnabled: (value: boolean) => void;
+  insightsExpanded: boolean;
+  setInsightsExpanded: (value: boolean) => void;
 }
 
 export function FilterBar({
@@ -34,7 +37,9 @@ export function FilterBar({
   sortOption,
   setSortOption,
   highlightEnabled,
-  setHighlightEnabled
+  setHighlightEnabled,
+  insightsExpanded,
+  setInsightsExpanded
 }: FilterBarProps) {
   return (
     <div className="p-4 border-b border-gray-200 dark:border-gray-700 space-y-4">
@@ -105,8 +110,21 @@ export function FilterBar({
           </Select>
         </div>
 
-        {/* Right side: Highlight Toggle */}
-        <div className="flex items-center gap-3">
+        {/* Right side: Insights Toggle & Highlight Toggle */}
+        <div className="flex items-center gap-4">
+          {/* 折叠/展开洞察按钮 */}
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setInsightsExpanded(!insightsExpanded)}
+            className="flex items-center gap-1.5 text-amber-700 dark:text-amber-400 border-amber-300 dark:border-amber-600 hover:bg-amber-50 dark:hover:bg-amber-900/20"
+          >
+            <Lightbulb className="size-4" />
+            <span>{insightsExpanded ? '收起洞察' : '展开洞察'}</span>
+            {insightsExpanded ? <ChevronUp className="size-4" /> : <ChevronDown className="size-4" />}
+          </Button>
+          
+          {/* 主题高亮复选框 */}
           <label className="flex items-center gap-2 cursor-pointer">
             <input
               type="checkbox"

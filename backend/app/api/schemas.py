@@ -242,13 +242,14 @@ class ReviewResponse(BaseModel):
     @field_validator('insights', mode='before')
     @classmethod
     def parse_insights(cls, v):
-        """Convert ORM objects to list of dicts if needed"""
+        """Convert ORM objects to list of dicts if needed, filter out _empty markers"""
         if v is None:
             return []
         if isinstance(v, list) and len(v) > 0:
             # Check if it's a list of ORM objects
             if hasattr(v[0], '__dict__'):
-                return [
+                # Filter out _empty markers (processed but no insights)
+                filtered = [
                     {
                         'type': item.insight_type,
                         'quote': item.quote,
@@ -257,13 +258,18 @@ class ReviewResponse(BaseModel):
                         'dimension': item.dimension
                     }
                     for item in v
+                    if item.insight_type != '_empty'  # Filter out empty markers
                 ]
+                return filtered
+            # If it's already a list of dicts, filter out _empty types
+            elif isinstance(v[0], dict):
+                return [item for item in v if item.get('type') != '_empty']
         return v
     
     @field_validator('theme_highlights', mode='before')
     @classmethod
     def parse_theme_highlights(cls, v):
-        """Convert ORM objects to list of dicts if needed"""
+        """Convert ORM objects to list of dicts if needed, filter out _empty markers"""
         if v is None:
             return []
         if isinstance(v, list) and len(v) > 0:
@@ -271,6 +277,10 @@ class ReviewResponse(BaseModel):
             if hasattr(v[0], '__dict__'):
                 result = []
                 for item in v:
+                    # Filter out _empty markers (processed but no themes)
+                    if item.theme_type == '_empty':
+                        continue
+                    
                     # Use items field if available, otherwise fallback to keywords for backward compatibility
                     items_data = []
                     if hasattr(item, 'items') and item.items:
@@ -292,6 +302,9 @@ class ReviewResponse(BaseModel):
                         'keywords': item.keywords if hasattr(item, 'keywords') and isinstance(item.keywords, list) else []
                     })
                 return result
+            # If it's already a list of dicts, filter out _empty types
+            elif isinstance(v[0], dict):
+                return [item for item in v if item.get('theme_type') != '_empty']
         return v
 
 

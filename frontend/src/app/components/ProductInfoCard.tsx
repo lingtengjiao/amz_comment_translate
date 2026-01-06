@@ -1,5 +1,5 @@
 import { Star, Copy, Check } from 'lucide-react';
-import { useState, memo } from 'react';
+import { useState, memo, useEffect, useRef } from 'react';
 import { Card } from './ui/card';
 import type { Task } from '../data/mockData';
 
@@ -12,10 +12,83 @@ interface ProductInfoCardProps {
     reviewsWithInsights: number;
     reviewsWithThemes: number;
   };
+  isTranslating?: boolean; // 是否正在翻译中（用于触发打字机效果）
 }
 
-export const ProductInfoCard = memo(function ProductInfoCard({ task, ratingStats }: ProductInfoCardProps) {
+export const ProductInfoCard = memo(function ProductInfoCard({ task, ratingStats, isTranslating = false }: ProductInfoCardProps) {
   const [copied, setCopied] = useState(false);
+  
+  // 打字机效果状态
+  const [displayedTitle, setDisplayedTitle] = useState('');
+  const [displayedBullets, setDisplayedBullets] = useState<string[]>([]);
+  const [titleTypingComplete, setTitleTypingComplete] = useState(true);
+  const [bulletsTypingComplete, setBulletsTypingComplete] = useState(true);
+  const prevTitleRef = useRef<string | undefined>();
+  const prevBulletsRef = useRef<string[] | undefined>();
+  
+  // 检测标题翻译完成，触发打字机效果
+  useEffect(() => {
+    if (task.titleTranslated && task.titleTranslated !== prevTitleRef.current) {
+      // 新翻译完成
+      if (prevTitleRef.current === undefined || prevTitleRef.current === '') {
+        // 之前没有翻译，现在有了，开始打字机效果
+        setTitleTypingComplete(false);
+        setDisplayedTitle('');
+        
+        let charIndex = 0;
+        const titleText = task.titleTranslated;
+        const interval = setInterval(() => {
+          charIndex += Math.ceil(Math.random() * 2) + 1;
+          if (charIndex >= titleText.length) {
+            setDisplayedTitle(titleText);
+            setTitleTypingComplete(true);
+            clearInterval(interval);
+          } else {
+            setDisplayedTitle(titleText.slice(0, charIndex));
+          }
+        }, 25);
+        
+        prevTitleRef.current = task.titleTranslated;
+        return () => clearInterval(interval);
+      }
+    }
+    prevTitleRef.current = task.titleTranslated;
+  }, [task.titleTranslated]);
+  
+  // 检测五点翻译完成，触发打字机效果
+  useEffect(() => {
+    const bullets = task.bulletPointsTranslated;
+    const prevBullets = prevBulletsRef.current;
+    
+    if (bullets && bullets.length > 0) {
+      // 检测是否是新的翻译
+      const isNew = !prevBullets || prevBullets.length === 0;
+      
+      if (isNew) {
+        // 新翻译完成，逐条显示
+        setBulletsTypingComplete(false);
+        setDisplayedBullets([]);
+        
+        let bulletIdx = 0;
+        const interval = setInterval(() => {
+          bulletIdx++;
+          setDisplayedBullets(bullets.slice(0, bulletIdx));
+          if (bulletIdx >= bullets.length) {
+            setBulletsTypingComplete(true);
+            clearInterval(interval);
+          }
+        }, 400);
+        
+        prevBulletsRef.current = bullets;
+        return () => clearInterval(interval);
+      }
+    }
+    prevBulletsRef.current = bullets;
+  }, [task.bulletPointsTranslated]);
+  
+  // 使用实际值或打字机显示值
+  const titleToShow = titleTypingComplete ? task.titleTranslated : displayedTitle;
+  const bulletsToShow = bulletsTypingComplete ? task.bulletPointsTranslated : displayedBullets;
 
   const handleCopyAsin = async () => {
     try {
@@ -141,10 +214,13 @@ export const ProductInfoCard = memo(function ProductInfoCard({ task, ratingStats
 
             {/* Product Title - Bilingual Display */}
             <div className="mb-4 space-y-2">
-              {/* Chinese Title (Primary) */}
-              {task.titleTranslated && (
-                <h2 className="text-emerald-700 dark:text-emerald-400 font-bold leading-snug">
-                  {task.titleTranslated}
+              {/* Chinese Title (Primary) - 带打字机效果 */}
+              {(titleToShow || !titleTypingComplete) && (
+                <h2 className={`text-emerald-700 dark:text-emerald-400 font-bold leading-snug ${!titleTypingComplete ? 'transition-all duration-100' : ''}`}>
+                  {titleToShow}
+                  {!titleTypingComplete && (
+                    <span className="inline-block w-0.5 h-5 bg-emerald-500 ml-0.5 animate-blink align-middle" />
+                  )}
                 </h2>
               )}
               {/* English Title (Original) */}
@@ -154,7 +230,7 @@ export const ProductInfoCard = memo(function ProductInfoCard({ task, ratingStats
                 </p>
               )}
               {/* Fallback if no translations */}
-              {!task.titleTranslated && !task.titleOriginal && (
+              {!titleToShow && titleTypingComplete && !task.titleOriginal && (
                 <h2 className="text-gray-900 dark:text-white font-bold leading-snug">{task.title}</h2>
               )}
               {/* Price */}
@@ -182,16 +258,24 @@ export const ProductInfoCard = memo(function ProductInfoCard({ task, ratingStats
                   </ul>
                 </div>
 
-                {/* Chinese Bullet Points */}
-                {task.bulletPointsTranslated && task.bulletPointsTranslated.length > 0 && (
+                {/* Chinese Bullet Points - 带打字机效果 */}
+                {(bulletsToShow && bulletsToShow.length > 0) && (
                   <div className="p-4 bg-emerald-50/50 dark:bg-emerald-500/10 rounded-lg border border-emerald-100 dark:border-emerald-500/20">
                     <h3 className="text-[10px] uppercase tracking-wider text-emerald-700 dark:text-emerald-400 font-bold mb-3 flex items-center gap-2">
                       <div className="size-2 rounded-full bg-emerald-500" />
                       产品特点
+                      {!bulletsTypingComplete && (
+                        <span className="text-xs text-emerald-500 animate-pulse">翻译中...</span>
+                      )}
                     </h3>
                     <ul className="space-y-2">
-                      {task.bulletPointsTranslated.map((point, index) => (
-                        <li key={index} className="flex items-start gap-2 text-gray-900 dark:text-gray-100 leading-relaxed font-medium">
+                      {bulletsToShow.map((point, index) => (
+                        <li 
+                          key={index} 
+                          className={`flex items-start gap-2 text-gray-900 dark:text-gray-100 leading-relaxed font-medium ${
+                            !bulletsTypingComplete && index === bulletsToShow.length - 1 ? 'animate-slide-in' : ''
+                          }`}
+                        >
                           <span className="text-emerald-500 mt-1">•</span>
                           <span>{point}</span>
                         </li>

@@ -169,7 +169,7 @@ def task_process_reviews(self, product_id: str, task_id: str):
         )
         db.commit()
         
-        # Get pending reviews
+        # Get pending reviews - ordered by review_date descending (newest first, matching frontend display)
         result = db.execute(
             select(Review)
             .where(
@@ -178,6 +178,7 @@ def task_process_reviews(self, product_id: str, task_id: str):
                     Review.translation_status == "pending"
                 )
             )
+            .order_by(Review.review_date.desc().nullslast(), Review.created_at.desc())
         )
         reviews = result.scalars().all()
         
@@ -398,7 +399,7 @@ def task_extract_insights(self, product_id: str):
     db = get_sync_db()
     
     try:
-        # Get translated reviews (completed status)
+        # Get translated reviews (completed status) - ordered by review_date to match page display order
         result = db.execute(
             select(Review)
             .where(
@@ -408,6 +409,7 @@ def task_extract_insights(self, product_id: str):
                     Review.body_translated.isnot(None)
                 )
             )
+            .order_by(Review.review_date.desc().nullslast(), Review.created_at.desc())
         )
         reviews = result.scalars().all()
         
@@ -419,24 +421,20 @@ def task_extract_insights(self, product_id: str):
         
         for review in reviews:
             try:
-                # Skip if review body is too short
-                if not review.body_original or len(review.body_original.strip()) < 30:
-                    processed += 1
-                    continue
-                
-                # Extract insights
+                # 对每条评论都执行洞察提取（即使内容很短，结果可能为空）
                 insights = translation_service.extract_insights(
-                    original_text=review.body_original,
-                    translated_text=review.body_translated
+                    original_text=review.body_original or "",
+                    translated_text=review.body_translated or ""
                 )
                 
+                # 无论是否有洞察，都删除旧数据并记录处理完成
+                # Delete existing insights for this review
+                db.execute(
+                    delete(ReviewInsight).where(ReviewInsight.review_id == review.id)
+                )
+                
+                # Insert new insights (if any)
                 if insights:
-                    # Delete existing insights for this review
-                    db.execute(
-                        delete(ReviewInsight).where(ReviewInsight.review_id == review.id)
-                    )
-                    
-                    # Insert new insights
                     for insight_data in insights:
                         insight = ReviewInsight(
                             review_id=review.id,
@@ -450,6 +448,17 @@ def task_extract_insights(self, product_id: str):
                     
                     insights_extracted += len(insights)
                     logger.debug(f"Extracted {len(insights)} insights for review {review.id}")
+                else:
+                    # 即使没有洞察，也插入一个标记记录，表示已处理
+                    # 这样统计会显示 100%，且下次不会重复处理
+                    empty_marker = ReviewInsight(
+                        review_id=review.id,
+                        insight_type="_empty",  # 特殊标记，表示内容太短无洞察
+                        quote="",
+                        analysis=""
+                    )
+                    db.add(empty_marker)
+                    logger.debug(f"No insights found for review {review.id} (content too short), marked as processed")
                 
                 db.commit()
                 processed += 1
@@ -512,6 +521,7 @@ def task_extract_themes(self, product_id: str):
             .exists()
         )
         
+        # Ordered by review_date to match page display order
         result = db.execute(
             select(Review)
             .where(
@@ -523,6 +533,7 @@ def task_extract_themes(self, product_id: str):
                     ~theme_exists_subquery  # Reviews without theme highlights
                 )
             )
+            .order_by(Review.review_date.desc().nullslast(), Review.created_at.desc())
         )
         reviews = result.scalars().all()
         
@@ -534,19 +545,20 @@ def task_extract_themes(self, product_id: str):
         
         for review in reviews:
             try:
-                # Skip if review body is too short
-                if not review.body_translated or len(review.body_translated.strip()) < 10:
-                    processed += 1
-                    continue
+                # 对每条评论都执行主题提取（即使内容很短，结果可能为空）
+                # 先删除旧的主题数据
+                db.execute(
+                    delete(ReviewThemeHighlight).where(ReviewThemeHighlight.review_id == review.id)
+                )
                 
                 # Extract themes
                 themes = translation_service.extract_themes(
                     original_text=review.body_original or "",
-                    translated_text=review.body_translated
+                    translated_text=review.body_translated or ""
                 )
                 
+                # Insert theme highlights (if any)
                 if themes:
-                    # Insert theme highlights
                     for theme_type, items in themes.items():
                         if items and len(items) > 0:
                             theme_highlight = ReviewThemeHighlight(
@@ -558,6 +570,16 @@ def task_extract_themes(self, product_id: str):
                             themes_extracted += 1
                     
                     logger.debug(f"Extracted {len(themes)} themes for review {review.id}")
+                else:
+                    # 即使没有主题，也插入一个标记记录，表示已处理
+                    # 这样统计会显示 100%，且下次不会重复处理
+                    empty_marker = ReviewThemeHighlight(
+                        review_id=review.id,
+                        theme_type="_empty",  # 特殊标记，表示内容太短无主题
+                        items=[]
+                    )
+                    db.add(empty_marker)
+                    logger.debug(f"No themes found for review {review.id} (content too short), marked as processed")
                 
                 db.commit()
                 processed += 1
