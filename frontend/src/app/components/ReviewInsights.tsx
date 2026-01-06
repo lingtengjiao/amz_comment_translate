@@ -55,6 +55,12 @@ export function ReviewInsights({ review, expanded = true }: ReviewInsightsProps)
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 {/* Left: Original Quote - Bilingual */}
                 <div className="text-right space-y-1">
+                  {/* Dimension Tag */}
+                  {insight.dimension && (
+                    <span className="inline-block px-2 py-0.5 text-xs font-medium rounded-full bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300 mb-1">
+                      {insight.dimension}
+                    </span>
+                  )}
                   {/* Chinese Translation (if available) */}
                   {insight.quoteTranslated && (
                     <p className="text-sm text-gray-700 dark:text-gray-300 leading-relaxed">

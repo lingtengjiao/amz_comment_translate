@@ -1,4 +1,4 @@
-import { Star, MessageSquare, ArrowRight } from 'lucide-react';
+import { Star, MessageSquare, ArrowRight, Loader2 } from 'lucide-react';
 import { Card } from './ui/card';
 import type { Task } from '../data/mockData';
 import { memo, useMemo } from 'react';
@@ -6,9 +6,10 @@ import { memo, useMemo } from 'react';
 interface TaskCardProps {
   task: Task;
   onClick: () => void;
+  isLoading?: boolean;
 }
 
-export const TaskCard = memo(function TaskCard({ task, onClick }: TaskCardProps) {
+export const TaskCard = memo(function TaskCard({ task, onClick, isLoading }: TaskCardProps) {
   // Calculate average rating
   const avgRating = useMemo(() => {
     if (task.reviews.length === 0) return '4.5';
@@ -16,8 +17,9 @@ export const TaskCard = memo(function TaskCard({ task, onClick }: TaskCardProps)
   }, [task.reviews]);
 
   const handleClick = () => {
-    // 允许查看任何状态的任务
-      onClick();
+    // 如果正在加载，不响应点击
+    if (isLoading) return;
+    onClick();
   };
 
   return (
@@ -66,8 +68,17 @@ export const TaskCard = memo(function TaskCard({ task, onClick }: TaskCardProps)
               
               {/* View Detail Indicator */}
               <div className="flex items-center gap-1 text-xs text-gray-400 opacity-0 group-hover:opacity-100 transition-opacity">
-                <span>查看</span>
-                <ArrowRight className="size-3.5 transform group-hover:translate-x-1 transition-transform" />
+                {isLoading ? (
+                  <>
+                    <Loader2 className="size-3.5 animate-spin" />
+                    <span>检查中...</span>
+                  </>
+                ) : (
+                  <>
+                    <span>查看</span>
+                    <ArrowRight className="size-3.5 transform group-hover:translate-x-1 transition-transform" />
+                  </>
+                )}
               </div>
             </div>
           </div>

@@ -116,15 +116,21 @@ class ReviewInsightResponse(BaseModel):
 
 
 class ThemeType(str, Enum):
-    """预设的8个主题类型"""
-    WHO = "who"                    # 使用者 - 蓝色
-    WHERE = "where"                # 使用场景 - 紫色
-    WHEN = "when"                  # 使用时机 - 绿色
-    UNMET_NEEDS = "unmet_needs"    # 未被满足的需求 - 红色
-    PAIN_POINTS = "pain_points"    # 痛点 - 橙色
-    BENEFITS = "benefits"          # 收益/好处 - 翠绿色
-    FEATURES = "features"          # 功能特性 - 琥珀色
-    COMPARISON = "comparison"      # 对比 - 粉色
+    """[UPDATED] 5W 营销模型主题类型"""
+    WHO = "who"      # 人群/角色 - 蓝色
+    WHERE = "where"  # 地点/场景 - 紫色
+    WHEN = "when"    # 时刻/时机 - 绿色
+    WHY = "why"      # 购买动机 - 粉色
+    WHAT = "what"    # 待办任务 - 橙色
+
+
+class ContextType(str, Enum):
+    """5W 上下文类型枚举"""
+    WHO = "who"      # 人群/角色
+    WHERE = "where"  # 地点/场景
+    WHEN = "when"    # 时刻/时机
+    WHY = "why"      # 购买动机
+    WHAT = "what"    # 待办任务
 
 
 class ThemeItemResponse(BaseModel):
@@ -426,4 +432,166 @@ class ProductStatsResponse(BaseModel):
     product: ProductResponse
     rating_distribution: RatingDistribution
     sentiment_distribution: SentimentDistribution
+
+
+# ============== Dimension Schemas ==============
+
+class DimensionResponse(BaseModel):
+    """产品维度响应"""
+    id: UUID
+    product_id: UUID
+    name: str = Field(..., description="维度名称，如：电池续航、外观设计")
+    description: Optional[str] = Field(None, description="维度定义，用于指导 AI 归类")
+    is_ai_generated: bool = Field(True, description="是否由 AI 自动生成")
+    created_at: datetime
+    updated_at: Optional[datetime] = None
+    
+    model_config = ConfigDict(from_attributes=True)
+
+
+class DimensionListResponse(BaseModel):
+    """维度列表响应"""
+    total: int
+    dimensions: List[DimensionResponse]
+
+
+class DimensionCreateRequest(BaseModel):
+    """创建维度请求"""
+    name: str = Field(..., min_length=1, max_length=100, description="维度名称")
+    description: Optional[str] = Field(None, max_length=500, description="维度定义")
+    
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "name": "电池续航",
+                "description": "与充电速度和使用时长相关的问题"
+            }
+        }
+    )
+
+
+class DimensionUpdateRequest(BaseModel):
+    """更新维度请求"""
+    name: Optional[str] = Field(None, min_length=1, max_length=100, description="新的维度名称")
+    description: Optional[str] = Field(None, max_length=500, description="新的维度定义")
+    
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "name": "电池续航",
+                "description": "与充电速度和使用时长相关的问题"
+            }
+        }
+    )
+
+
+class DimensionGenerateResponse(BaseModel):
+    """维度生成响应"""
+    success: bool
+    message: str
+    product_id: UUID
+    dimensions: List[DimensionResponse]
+    
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "success": True,
+                "message": "成功生成 6 个产品维度",
+                "product_id": "550e8400-e29b-41d4-a716-446655440000",
+                "dimensions": [
+                    {
+                        "id": "550e8400-e29b-41d4-a716-446655440001",
+                        "product_id": "550e8400-e29b-41d4-a716-446655440000",
+                        "name": "外观设计",
+                        "description": "产品的外观、颜色、材质等视觉相关评价",
+                        "is_ai_generated": True,
+                        "created_at": "2024-01-01T00:00:00Z"
+                    }
+                ]
+            }
+        }
+    )
+
+
+# ============== 5W Context Label Schemas ==============
+
+class ContextLabelResponse(BaseModel):
+    """5W 上下文标签响应"""
+    id: UUID
+    product_id: UUID
+    type: ContextType = Field(..., description="5W 类型：who/where/when/why/what")
+    name: str = Field(..., description="标签名称，如：老年人、睡前、送礼")
+    description: Optional[str] = Field(None, description="标签定义/描述")
+    count: int = Field(0, description="该标签被命中的次数")
+    is_ai_generated: bool = Field(True, description="是否由 AI 自动生成")
+    created_at: datetime
+    updated_at: Optional[datetime] = None
+    
+    model_config = ConfigDict(from_attributes=True)
+
+
+class ContextLabelListResponse(BaseModel):
+    """5W 标签列表响应"""
+    total: int
+    labels: List[ContextLabelResponse]
+    summary: Optional[dict] = Field(None, description="各类型标签数量统计")
+
+
+class ContextLabelCreateRequest(BaseModel):
+    """创建标签请求"""
+    type: ContextType = Field(..., description="5W 类型：who/where/when/why/what")
+    name: str = Field(..., min_length=1, max_length=100, description="标签名称")
+    description: Optional[str] = Field(None, max_length=500, description="标签定义")
+    
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "type": "who",
+                "name": "老年人",
+                "description": "独居或需要照顾的老年用户群体"
+            }
+        }
+    )
+
+
+class ContextLabelUpdateRequest(BaseModel):
+    """更新标签请求"""
+    name: Optional[str] = Field(None, min_length=1, max_length=100, description="新的标签名称")
+    description: Optional[str] = Field(None, max_length=500, description="新的标签定义")
+    
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "name": "独居老人",
+                "description": "独自居住的老年用户，需要便捷易用的产品"
+            }
+        }
+    )
+
+
+class ContextLabelGenerateResponse(BaseModel):
+    """5W 标签生成响应"""
+    success: bool
+    message: str
+    product_id: UUID
+    labels: dict = Field(..., description="各类型的标签列表")
+    summary: dict = Field(..., description="各类型标签数量统计")
+    
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "success": True,
+                "message": "成功生成 25 个 5W 标签",
+                "product_id": "550e8400-e29b-41d4-a716-446655440000",
+                "labels": {
+                    "who": [{"name": "老年人", "description": "独居老年用户"}],
+                    "where": [{"name": "卧室", "description": "卧室场景"}],
+                    "when": [{"name": "睡前", "description": "睡觉前使用"}],
+                    "why": [{"name": "送礼", "description": "作为礼物送人"}],
+                    "what": [{"name": "缓解背痛", "description": "缓解背部疼痛"}]
+                },
+                "summary": {"who": 5, "where": 4, "when": 6, "why": 5, "what": 5}
+            }
+        }
+    )
 

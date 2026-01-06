@@ -404,3 +404,30 @@ export interface ApiTask {
   created_at: string;
   updated_at: string;
 }
+
+// ============== 产品维度相关类型 ==============
+
+/** 产品维度 */
+export interface ProductDimension {
+  id: string;
+  product_id: string;
+  name: string;
+  description: string | null;
+  is_ai_generated: boolean;
+  created_at: string;
+  updated_at?: string | null;
+}
+
+/** 维度列表响应 */
+export interface ApiDimensionListResponse {
+  total: number;
+  dimensions: ProductDimension[];
+}
+
+/** 维度生成响应 */
+export interface ApiDimensionGenerateResponse {
+  success: boolean;
+  message: string;
+  product_id: string;
+  dimensions: ProductDimension[];
+}

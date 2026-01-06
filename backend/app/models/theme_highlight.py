@@ -1,9 +1,11 @@
 """
 Theme Highlight Model - Stores AI-extracted theme keywords for reviews
+[UPDATED] 重构为一条记录 = 一个标签，增加 label_name 字段关联 product_context_labels
 """
 import uuid
 from datetime import datetime
 from enum import Enum
+from typing import TYPE_CHECKING
 
 from sqlalchemy import String, DateTime, Text, ForeignKey, func, JSON
 from sqlalchemy.dialects.postgresql import UUID
@@ -11,60 +13,46 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.session import Base
 
+if TYPE_CHECKING:
+    from app.models.review import Review
+    from app.models.product_context_label import ProductContextLabel
+
 
 class ThemeType(str, Enum):
-    """预设的8个主题类型"""
-    WHO = "who"                    # 使用者 - 蓝色
-    WHERE = "where"                # 使用场景 - 紫色
-    WHEN = "when"                  # 使用时机 - 绿色
-    UNMET_NEEDS = "unmet_needs"    # 未被满足的需求 - 红色
-    PAIN_POINTS = "pain_points"    # 痛点 - 橙色
-    BENEFITS = "benefits"          # 收益/好处 - 翠绿色
-    FEATURES = "features"          # 功能特性 - 琥珀色
-    COMPARISON = "comparison"      # 对比 - 粉色
+    """[UPDATED] 5W 营销模型主题类型"""
+    WHO = "who"      # 人群/角色
+    WHERE = "where"  # 地点/场景
+    WHEN = "when"    # 时刻/时机
+    WHY = "why"      # 购买动机 (Purchase Driver)
+    WHAT = "what"    # 待办任务 (Jobs to be Done)
 
 
-# 主题配置
+# [UPDATED] 5W 主题配置
 THEME_CONFIG = {
     ThemeType.WHO: {
-        "label": "Who（使用者）",
+        "label": "Who（使用者/人群）",
         "color": "blue",
-        "description": "识别评论中提到的使用人群，如：孩子、老人、上班族等"
+        "description": "识别核心用户画像，如：独居老人、新手宝妈、宠物主、工程师等"
     },
     ThemeType.WHERE: {
-        "label": "Where（使用场景）",
+        "label": "Where（使用地点）",
         "color": "purple", 
-        "description": "识别使用地点和场景，如：家里、办公室、户外等"
+        "description": "识别物理空间和环境，如：小户型厨房、房车(RV)、车库、办公室桌面等"
     },
     ThemeType.WHEN: {
-        "label": "When（使用时机）",
+        "label": "When（使用时刻）",
         "color": "green",
-        "description": "识别使用时间和时机，如：早上、睡前、运动时等"
+        "description": "识别时间点和触发时机，如：睡前、停电时、圣诞节、运动后等"
     },
-    ThemeType.UNMET_NEEDS: {
-        "label": "未被满足的需求",
-        "color": "red",
-        "description": "识别用户的期待和建议，如：希望、如果能、建议等"
-    },
-    ThemeType.PAIN_POINTS: {
-        "label": "Pain Points（痛点）",
-        "color": "orange",
-        "description": "识别问题和不满，如：故障、不好用、太贵等"
-    },
-    ThemeType.BENEFITS: {
-        "label": "Benefits（收益/好处）",
-        "color": "emerald",
-        "description": "识别正面体验，如：方便、省时、舒适等"
-    },
-    ThemeType.FEATURES: {
-        "label": "Features（功能特性）",
-        "color": "amber",
-        "description": "识别产品功能描述，如：尺寸、材质、性能等"
-    },
-    ThemeType.COMPARISON: {
-        "label": "Comparison（对比）",
+    ThemeType.WHY: {
+        "label": "Why（购买动机）",
         "color": "pink",
-        "description": "识别对比内容，如：比之前、相比其他、更好等"
+        "description": "识别购买的触发原因，如：旧的坏了、作为礼物、为了省钱、被TikTok种草等"
+    },
+    ThemeType.WHAT: {
+        "label": "What（待办任务/用途）",
+        "color": "orange",
+        "description": "识别用户试图完成的具体任务(JTBD)，如：清理地毯猫毛、缓解背痛、哄孩子睡觉等"
     }
 }
 
@@ -72,8 +60,17 @@ THEME_CONFIG = {
 class ReviewThemeHighlight(Base):
     """
     ReviewThemeHighlight entity stores AI-extracted theme content for each review.
-    每条评论可以有多个主题，每个主题包含多个内容项（关键词、短语或句子）。
-    每个内容项包含：中文内容、原始英文内容、翻译、解释说明。
+    
+    [UPDATED] 重构设计：一条记录 = 一个标签
+    - 增加 label_name 字段，与 product_context_labels.name 关联
+    - 增加 context_label_id 可选外键，直接关联标签库
+    - 保留 items JSON 用于存储证据和解释（向后兼容）
+    
+    数据结构：
+    - theme_type: "who"
+    - label_name: "老年人"  <-- [NEW] 标签名称
+    - quote: "bought for my grandma"  <-- [NEW] 原文证据
+    - explanation: "评论提到买给奶奶"  <-- [NEW] 归类理由
     """
     __tablename__ = "review_theme_highlights"
 
@@ -94,29 +91,61 @@ class ReviewThemeHighlight(Base):
         String(30),
         nullable=False,
         index=True,
-        comment="主题类型：who/where/when/unmet_needs/pain_points/benefits/features/comparison"
+        comment="主题类型：who/where/when/why/what"
     )
     
-    # 内容项列表，存储为JSON数组
-    # 每个项格式：{
-    #   "content": "孩子",  # 中文内容（关键词/短语/句子）
-    #   "content_original": "for kids",  # 原始英文内容（可选）
-    #   "content_translated": "给孩子",  # 翻译（如果从英文提取，可选）
-    #   "explanation": "评论中提到使用人群是孩子"  # 解释说明（可选）
-    # }
-    items: Mapped[list] = mapped_column(
+    # [NEW] 标签名称 - 关联 product_context_labels.name
+    label_name: Mapped[str | None] = mapped_column(
+        String(100),
+        nullable=True,
+        index=True,
+        comment="标签名称，如：老年人、卧室、睡前（关联 product_context_labels.name）"
+    )
+    
+    # [NEW] 原文证据 - 支持溯源
+    quote: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+        comment="原文证据，如：bought for my grandma"
+    )
+    
+    # [NEW] 中文翻译证据
+    quote_translated: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+        comment="中文翻译证据，如：给奶奶买的"
+    )
+    
+    # [NEW] 归类理由 - 可解释性
+    explanation: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+        comment="归类理由，如：评论明确提到买给奶奶"
+    )
+    
+    # [NEW] 可选外键关联到 product_context_labels
+    context_label_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("product_context_labels.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+        comment="关联的标签库 ID（可选）"
+    )
+    
+    # [DEPRECATED] 保留 items 字段用于向后兼容
+    items: Mapped[list | None] = mapped_column(
         JSON,
-        nullable=False,
-        default=list,
-        comment="该主题在评论中识别到的内容项列表，每个项包含content/content_original/content_translated/explanation"
+        nullable=True,
+        default=None,
+        comment="[已废弃] 旧版内容项列表，请使用 label_name/quote/explanation"
     )
     
-    # 向后兼容：保留 keywords 字段（已废弃，使用 items 代替）
+    # [DEPRECATED] 向后兼容：保留 keywords 字段
     keywords: Mapped[list | None] = mapped_column(
         JSON,
         nullable=True,
         default=None,
-        comment="已废弃：使用 items 字段代替"
+        comment="[已废弃] 使用 label_name 代替"
     )
     
     created_at: Mapped[datetime] = mapped_column(
@@ -129,8 +158,26 @@ class ReviewThemeHighlight(Base):
         "Review",
         back_populates="theme_highlights"
     )
+    
+    # [NEW] Relationship to ProductContextLabel
+    context_label: Mapped["ProductContextLabel"] = relationship(
+        "ProductContextLabel",
+        foreign_keys=[context_label_id]
+    )
 
     def __repr__(self) -> str:
-        items_count = len(self.items) if self.items else 0
-        return f"<ReviewThemeHighlight(id={self.id}, theme={self.theme_type}, items={items_count})>"
+        return f"<ReviewThemeHighlight(type={self.theme_type}, label={self.label_name})>"
+    
+    def to_dict(self) -> dict:
+        """转换为字典格式"""
+        return {
+            "id": str(self.id),
+            "review_id": str(self.review_id),
+            "theme_type": self.theme_type,
+            "label_name": self.label_name,
+            "quote": self.quote,
+            "quote_translated": self.quote_translated,
+            "explanation": self.explanation,
+            "context_label_id": str(self.context_label_id) if self.context_label_id else None
+        }
 

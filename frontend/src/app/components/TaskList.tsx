@@ -2,8 +2,10 @@ import { useNavigate } from 'react-router-dom';
 import { useState, useCallback, useEffect } from 'react';
 import { TaskCard } from './TaskCard';
 import { TaskListHeader } from './TaskListHeader';
+import { DimensionSetupDialog } from './DimensionSetupDialog';
 import { apiService, transformProductsToTasks } from '@/api';
 import type { Task } from '@/api/types';
+import { toast } from 'sonner';
 
 function EmptyState() {
   return (
@@ -46,6 +48,11 @@ export function TaskList() {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  
+  // 维度设置对话框状态
+  const [dimensionDialogOpen, setDimensionDialogOpen] = useState(false);
+  const [selectedTask, setSelectedTask] = useState<Task | null>(null);
+  const [checkingDimensions, setCheckingDimensions] = useState(false);
 
   const fetchTasks = useCallback(async () => {
     setLoading(true);
@@ -66,13 +73,47 @@ export function TaskList() {
     fetchTasks();
   }, [fetchTasks]);
 
-  const handleViewReviews = useCallback((taskId: string) => {
-    // 通过 task 找到对应的 asin
+  // 检查是否有维度，如果没有则显示对话框
+  const handleViewReviews = useCallback(async (taskId: string) => {
     const task = tasks.find(t => t.id === taskId);
-    if (task) {
+    if (!task) return;
+    
+    // 如果没有评论，直接进入
+    if (task.reviewCount === 0) {
       navigate(`/reader/${task.asin}`);
+      return;
+    }
+    
+    setCheckingDimensions(true);
+    
+    try {
+      // 检查是否已有维度
+      const dimensionsResponse = await apiService.getDimensions(task.asin);
+      
+      if (dimensionsResponse.total > 0) {
+        // 已有维度，直接进入
+        navigate(`/reader/${task.asin}`);
+      } else {
+        // 没有维度，显示设置对话框
+        setSelectedTask(task);
+        setDimensionDialogOpen(true);
+      }
+    } catch (err) {
+      console.error('Failed to check dimensions:', err);
+      // 检查失败时，仍然允许进入（兼容旧数据）
+      toast.warning('无法检查分析框架状态，将直接进入');
+      navigate(`/reader/${task.asin}`);
+    } finally {
+      setCheckingDimensions(false);
     }
   }, [navigate, tasks]);
+  
+  // 维度生成完成后进入产品详情
+  const handleDimensionComplete = useCallback(() => {
+    if (selectedTask) {
+      navigate(`/reader/${selectedTask.asin}`);
+    }
+  }, [navigate, selectedTask]);
 
   return (
     <div className="min-h-screen bg-white transition-colors">
@@ -95,11 +136,24 @@ export function TaskList() {
                 key={task.id}
                 task={task}
                 onClick={() => handleViewReviews(task.id)}
+                isLoading={checkingDimensions && selectedTask?.id === task.id}
               />
             ))}
           </div>
         )}
       </main>
+      
+      {/* 维度设置对话框 */}
+      {selectedTask && (
+        <DimensionSetupDialog
+          open={dimensionDialogOpen}
+          onOpenChange={setDimensionDialogOpen}
+          asin={selectedTask.asin}
+          productTitle={selectedTask.title}
+          reviewCount={selectedTask.reviewCount}
+          onComplete={handleDimensionComplete}
+        />
+      )}
     </div>
   );
 }

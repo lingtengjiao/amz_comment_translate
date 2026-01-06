@@ -381,6 +381,8 @@ import type {
   ApiReviewListResponse,
   ApiIngestResponse,
   ApiTask,
+  ApiDimensionListResponse,
+  ApiDimensionGenerateResponse,
 } from './types';
 
 /**
@@ -473,6 +475,40 @@ export async function triggerThemeExtraction(asin: string): Promise<{
   });
   if (!response.ok) {
     throw new ApiError(response.status, response.statusText);
+  }
+  return response.json();
+}
+
+// ============== 产品维度相关 ==============
+
+/**
+ * 获取产品的维度列表
+ */
+export async function getDimensions(asin: string): Promise<ApiDimensionListResponse> {
+  const response = await fetch(`${API_BASE}/products/${asin}/dimensions`);
+  if (!response.ok) {
+    throw new ApiError(response.status, response.statusText);
+  }
+  return response.json();
+}
+
+/**
+ * 触发维度生成（AI 从评论中学习产品专属维度）
+ */
+export async function generateDimensions(asin: string): Promise<ApiDimensionGenerateResponse> {
+  const response = await fetch(`${API_BASE}/products/${asin}/dimensions/generate`, {
+    method: 'POST',
+  });
+  if (!response.ok) {
+    const errorText = await response.text();
+    let message = response.statusText;
+    try {
+      const errorJson = JSON.parse(errorText);
+      message = errorJson.detail || errorJson.message || message;
+    } catch {
+      message = errorText || message;
+    }
+    throw new ApiError(response.status, message);
   }
   return response.json();
 }
@@ -580,6 +616,10 @@ const apiService = {
   
   // 主题高亮提取
   triggerThemeExtraction,
+  
+  // 产品维度
+  getDimensions,
+  generateDimensions,
 };
 
 export default apiService;

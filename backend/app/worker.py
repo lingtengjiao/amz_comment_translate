@@ -57,6 +57,46 @@ def get_sync_db():
     return SyncSession()
 
 
+# ============== Worker 启动时清理卡住的任务 ==============
+
+def cleanup_stuck_reviews():
+    """
+    清理卡在 'processing' 状态的评论。
+    当 Worker 重启时，之前正在处理的评论可能会卡在 processing 状态。
+    这个函数将它们重置为 pending，让它们可以被重新处理。
+    """
+    from app.models.review import Review
+    
+    db = get_sync_db()
+    try:
+        result = db.execute(
+            update(Review)
+            .where(Review.translation_status == "processing")
+            .values(translation_status="pending")
+        )
+        db.commit()
+        
+        if result.rowcount > 0:
+            logger.warning(f"[启动清理] 已将 {result.rowcount} 条卡住的评论重置为 pending 状态")
+        else:
+            logger.info("[启动清理] 没有发现卡住的评论")
+    except Exception as e:
+        logger.error(f"[启动清理] 清理卡住评论失败: {e}")
+        db.rollback()
+    finally:
+        db.close()
+
+
+# 使用 Celery 信号在 Worker 启动时执行清理
+from celery.signals import worker_ready
+
+@worker_ready.connect
+def on_worker_ready(**kwargs):
+    """Worker 启动完成后执行清理"""
+    logger.info("Worker 已就绪，开始检查卡住的任务...")
+    cleanup_stuck_reviews()
+
+
 # ============== 任务1: 五点翻译 ==============
 
 @celery_app.task(bind=True, max_retries=3, default_retry_delay=30)
@@ -383,14 +423,16 @@ def task_extract_insights(self, product_id: str):
     
     This task:
     1. Gets all translated reviews that don't have insights yet
-    2. Calls AI to extract insights
-    3. Saves insights to database
+    2. **[NEW] Loads product-specific dimensions if available**
+    3. Calls AI to extract insights (using dimensions for categorization)
+    4. Saves insights to database
     
     Args:
         product_id: UUID of the product
     """
     from app.models.review import Review
     from app.models.insight import ReviewInsight
+    from app.models.product_dimension import ProductDimension
     from app.services.translation import translation_service
     from sqlalchemy import delete
     
@@ -399,6 +441,25 @@ def task_extract_insights(self, product_id: str):
     db = get_sync_db()
     
     try:
+        # [NEW] 获取产品的维度 Schema（如果有的话）
+        dimension_result = db.execute(
+            select(ProductDimension)
+            .where(ProductDimension.product_id == product_id)
+            .order_by(ProductDimension.created_at)
+        )
+        dimensions = dimension_result.scalars().all()
+        
+        # 转换为 schema 格式
+        dimension_schema = None
+        if dimensions and len(dimensions) > 0:
+            dimension_schema = [
+                {"name": dim.name, "description": dim.description or ""}
+                for dim in dimensions
+            ]
+            logger.info(f"使用 {len(dimension_schema)} 个产品维度进行洞察提取")
+        else:
+            logger.info(f"产品暂无定义维度，使用通用洞察提取逻辑")
+        
         # Get translated reviews (completed status) - ordered by review_date to match page display order
         result = db.execute(
             select(Review)
@@ -422,9 +483,11 @@ def task_extract_insights(self, product_id: str):
         for review in reviews:
             try:
                 # 对每条评论都执行洞察提取（即使内容很短，结果可能为空）
+                # [UPDATED] 传入维度 schema，让 AI 按定义的维度分类
                 insights = translation_service.extract_insights(
                     original_text=review.body_original or "",
-                    translated_text=review.body_translated or ""
+                    translated_text=review.body_translated or "",
+                    dimension_schema=dimension_schema  # [NEW] 注入维度
                 )
                 
                 # 无论是否有洞察，都删除旧数据并记录处理完成
@@ -493,26 +556,145 @@ def task_extract_insights(self, product_id: str):
 @celery_app.task(bind=True, max_retries=2, default_retry_delay=30)
 def task_extract_themes(self, product_id: str):
     """
-    Extract theme keywords for already translated reviews.
+    Extract 5W theme keywords for already translated reviews.
     
     This task:
-    1. Gets all translated reviews that don't have theme highlights yet
-    2. Calls AI to extract 8 theme keywords
-    3. Saves theme highlights to database
+    1. **[NEW] Auto-generates 5W context labels if not exists (Definition phase)**
+    2. Gets all translated reviews that don't have theme highlights yet
+    3. **[NEW] Uses context labels for forced categorization (Execution phase)**
+    4. Calls AI to extract 5W themes with evidence and explanation
+    5. Saves theme highlights to database
     
     Args:
         product_id: UUID of the product
     """
     from app.models.review import Review
     from app.models.theme_highlight import ReviewThemeHighlight
+    from app.models.product_context_label import ProductContextLabel
     from app.services.translation import translation_service
-    from sqlalchemy import delete, exists
+    from sqlalchemy import delete, exists, func
     
     logger.info(f"Starting theme extraction for product {product_id}")
     
     db = get_sync_db()
     
     try:
+        # [NEW] Step 1: 检查是否有 5W 标签库，如果没有则自动生成
+        label_count_result = db.execute(
+            select(func.count(ProductContextLabel.id))
+            .where(ProductContextLabel.product_id == product_id)
+        )
+        label_count = label_count_result.scalar() or 0
+        
+        context_schema = None
+        labels_generated = False
+        
+        if label_count == 0:
+            logger.info(f"产品 {product_id} 暂无 5W 标签库，开始自动学习...")
+            
+            # [NEW] 先获取产品信息（标题和五点）
+            from app.models.product import Product
+            import json as json_lib
+            
+            product_result = db.execute(
+                select(Product).where(Product.id == product_id)
+            )
+            product = product_result.scalar_one_or_none()
+            
+            product_title = ""
+            bullet_points = []
+            
+            if product:
+                product_title = product.title or ""
+                # 解析五点（存储为 JSON 字符串）
+                if product.bullet_points:
+                    try:
+                        bullet_points = json_lib.loads(product.bullet_points) if isinstance(product.bullet_points, str) else product.bullet_points
+                    except:
+                        bullet_points = []
+                logger.info(f"📦 产品信息：{product.asin}，标题长度={len(product_title)}，五点={len(bullet_points)}条")
+            
+            # 获取已翻译的评论样本（至少10条）
+            sample_result = db.execute(
+                select(Review.body_original, Review.body_translated)
+                .where(
+                    and_(
+                        Review.product_id == product_id,
+                        Review.translation_status == "completed",
+                        Review.body_translated.isnot(None),
+                        Review.is_deleted == False
+                    )
+                )
+                .order_by(Review.created_at.desc())
+                .limit(50)
+            )
+            sample_reviews = sample_result.all()
+            
+            if len(sample_reviews) >= 30:
+                # 准备样本文本
+                sample_texts = []
+                for row in sample_reviews:
+                    text = row.body_translated or row.body_original
+                    if text and text.strip():
+                        sample_texts.append(text.strip())
+                
+                if len(sample_texts) >= 30:
+                    # [UPDATED] 调用 AI 学习标签库（传入产品信息）
+                    learned_labels = translation_service.learn_context_labels(
+                        reviews_text=sample_texts,
+                        product_title=product_title,      # [NEW] 产品标题
+                        bullet_points=bullet_points       # [NEW] 五点卖点
+                    )
+                    
+                    if learned_labels:
+                        # 存入数据库
+                        for context_type in ["who", "where", "when", "why", "what"]:
+                            labels = learned_labels.get(context_type, [])
+                            for item in labels:
+                                if isinstance(item, dict) and item.get("name"):
+                                    label = ProductContextLabel(
+                                        product_id=product_id,
+                                        type=context_type,
+                                        name=item["name"].strip(),
+                                        description=item.get("description", "").strip() or None,
+                                        count=0,
+                                        is_ai_generated=True
+                                    )
+                                    db.add(label)
+                        
+                        db.commit()
+                        labels_generated = True
+                        total_labels = sum(len(v) for v in learned_labels.values())
+                        logger.info(f"✅ 自动生成 5W 标签库成功，共 {total_labels} 个标签")
+                    else:
+                        logger.warning(f"⚠️ AI 学习标签库失败，将使用开放提取模式")
+                else:
+                    logger.warning(f"⚠️ 有效样本不足（需要至少30条），将使用开放提取模式")
+            else:
+                logger.warning(f"⚠️ 已翻译评论不足（需要至少30条），将使用开放提取模式")
+        
+        # Step 2: 获取标签库 Schema（如果存在或刚生成）
+        if label_count > 0 or labels_generated:
+            label_result = db.execute(
+                select(ProductContextLabel)
+                .where(ProductContextLabel.product_id == product_id)
+                .order_by(ProductContextLabel.type, ProductContextLabel.created_at)
+            )
+            labels = label_result.scalars().all()
+            
+            if labels:
+                context_schema = {}
+                for label in labels:
+                    if label.type not in context_schema:
+                        context_schema[label.type] = []
+                    context_schema[label.type].append({
+                        "name": label.name,
+                        "description": label.description or ""
+                    })
+                logger.info(f"✅ 使用 5W 标签库进行强制归类，共 {len(labels)} 个标签")
+        else:
+            logger.info(f"ℹ️ 未使用标签库，将使用开放提取模式")
+        
         # Get translated reviews that don't have theme highlights yet
         # Use a subquery to check for existing theme highlights
         theme_exists_subquery = (
@@ -543,6 +725,14 @@ def task_extract_themes(self, product_id: str):
         
         logger.info(f"Found {total_reviews} translated reviews for theme extraction")
         
+        # [NEW] 构建标签名到标签ID的映射表（用于关联 context_label_id）
+        label_id_map = {}  # key: (theme_type, label_name), value: context_label_id
+        if context_schema:
+            for label in labels:
+                key = (label.type, label.name)
+                label_id_map[key] = label.id
+            logger.debug(f"构建标签映射表，共 {len(label_id_map)} 个标签")
+        
         for review in reviews:
             try:
                 # 对每条评论都执行主题提取（即使内容很短，结果可能为空）
@@ -551,35 +741,57 @@ def task_extract_themes(self, product_id: str):
                     delete(ReviewThemeHighlight).where(ReviewThemeHighlight.review_id == review.id)
                 )
                 
-                # Extract themes
+                # [UPDATED] Extract themes with context schema (forced categorization)
                 themes = translation_service.extract_themes(
                     original_text=review.body_original or "",
-                    translated_text=review.body_translated or ""
+                    translated_text=review.body_translated or "",
+                    context_schema=context_schema  # [NEW] 使用标签库进行强制归类
                 )
                 
-                # Insert theme highlights (if any)
+                # [UPDATED] Insert theme highlights - 一条记录 = 一个标签
                 if themes:
                     for theme_type, items in themes.items():
-                        if items and len(items) > 0:
+                        if not items or len(items) == 0:
+                            continue
+                        
+                        for item in items:
+                            # 获取标签信息
+                            label_name = item.get("content", "").strip()
+                            quote = item.get("content_original") or None          # 原文证据
+                            quote_translated = item.get("quote_translated") or None  # [NEW] 中文翻译证据
+                            explanation = item.get("explanation") or None          # 归类理由
+                            
+                            if not label_name:
+                                continue
+                            
+                            # [NEW] 查找对应的 context_label_id
+                            context_label_id = label_id_map.get((theme_type, label_name))
+                            
+                            # 创建一条记录对应一个标签
                             theme_highlight = ReviewThemeHighlight(
                                 review_id=review.id,
                                 theme_type=theme_type,
-                                items=items
+                                label_name=label_name,               # 标签名称
+                                quote=quote,                         # 原文证据
+                                quote_translated=quote_translated,   # [NEW] 中文翻译证据
+                                explanation=explanation,             # 归类理由
+                                context_label_id=context_label_id,   # 关联标签库ID
+                                items=[item]                         # 保留 items 用于向后兼容
                             )
                             db.add(theme_highlight)
                             themes_extracted += 1
                     
-                    logger.debug(f"Extracted {len(themes)} themes for review {review.id}")
+                    logger.debug(f"Extracted {themes_extracted} theme labels for review {review.id}")
                 else:
                     # 即使没有主题，也插入一个标记记录，表示已处理
-                    # 这样统计会显示 100%，且下次不会重复处理
                     empty_marker = ReviewThemeHighlight(
                         review_id=review.id,
-                        theme_type="_empty",  # 特殊标记，表示内容太短无主题
-                        items=[]
+                        theme_type="_empty",
+                        label_name=None,
+                        items=None
                     )
                     db.add(empty_marker)
-                    logger.debug(f"No themes found for review {review.id} (content too short), marked as processed")
+                    logger.debug(f"No themes found for review {review.id}, marked as processed")
                 
                 db.commit()
                 processed += 1

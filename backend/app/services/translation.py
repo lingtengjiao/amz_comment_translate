@@ -89,6 +89,85 @@ BULLET_POINTS_SYSTEM_PROMPT = """你是一位专业的亚马逊产品描述翻�
 - 不要添加任何解释或注释"""
 
 
+# [UPDATED] 维度发现 Prompt (加入产品信息版)
+DIMENSION_DISCOVERY_PROMPT = """你是一位资深的产品经理和用户研究专家。请基于以下**产品官方信息**和**用户评论样本**，构建该产品的核心评价维度模型。
+
+# 产品官方信息
+- **产品标题**: {product_title}
+- **核心卖点 (Bullet Points)**: 
+{bullet_points}
+
+# 用户评论样本 ({count}条)
+{reviews_text}
+
+# 任务
+提炼出 5-8 个核心评价维度。
+
+# 要求
+1. **结合官方定义与用户视角**: 维度名称应尽量使用官方术语（如来自卖点），但必须能覆盖用户的实际反馈。
+2. **维度名称**: 使用简练的中文（如：外观设计、结构做工、材料质感、功能表现、安全性、性价比）。
+3. **维度定义**: 用一句话描述该维度包含的具体内容，用于指导后续分类。
+4. **互斥性**: 维度之间不要重叠，各维度定义边界清晰。
+5. **覆盖率**: 
+   - 必须覆盖评论中出现的主要痛点和爽点
+   - 也要包含产品卖点中强调但用户可能"沉默满意"的维度（便于后续监控）
+6. **数量控制**: 提炼 5-8 个最核心的维度，不要过多。
+
+# 输出格式 (JSON Only)
+{{
+  "dimensions": [
+    {{ "name": "维度名称", "description": "该维度的具体定义，描述它包含哪些内容" }},
+    ...
+  ]
+}}
+
+请只输出 JSON，不要有其他解释文字。"""
+
+
+# [NEW] 动态维度提取 Prompt (用于执行)
+INSIGHT_EXTRACTION_PROMPT_DYNAMIC = """# Role
+亚马逊评论深度分析师
+
+# Task
+分析评论，提取关键洞察，并将其**严格归类**到指定的产品维度中。
+
+# Input
+原文: {original_text}
+译文: {translated_text}
+
+# 必须遵循的维度标准 (Schema)
+请只使用以下维度进行归类。如果内容完全不属于以下任何维度，请归类为 "其他"。
+{schema_str}
+
+# Requirements
+请仔细阅读评论，提取以下类型的洞察：
+- **weakness（痛点）**: 用户不满意的地方
+- **strength（爽点）**: 用户满意的地方  
+- **scenario（使用场景）**: 用户如何使用产品
+- **suggestion（用户建议）**: 用户的改进建议
+- **emotion（情感表达）**: 用户的整体情感态度
+
+# Output Format (JSON Array)
+[
+  {{
+    "type": "weakness", 
+    "dimension": "从上述维度中选择一个", 
+    "quote": "原文引用", 
+    "quote_translated": "引用翻译",
+    "analysis": "简要分析" 
+  }}
+]
+
+# 重要规则
+1. **每条评论必须至少提取1个洞察**，即使评论很短。
+2. **dimension 字段必须从维度标准中选择**，不能自己编造新维度。
+3. 对于简短的正面评论（如"Amazing!"），提取为 emotion 类型。
+4. 对于简短的负面评论（如"Terrible"），提取为 weakness 类型。
+5. 提取要"颗粒度细"，不要笼统地说"质量不好"，要说"塑料感强"或"按键松动"。
+6. 绝对不要返回空数组 []，至少要有1个洞察。
+"""
+
+
 # [UPDATED] Insight extraction prompt with Chain of Thought (CoT)
 INSIGHT_EXTRACTION_PROMPT = """# Role
 亚马逊评论深度分析师
@@ -149,8 +228,11 @@ class InsightType(str, Enum):
     EMOTION = "emotion"
 
 
-# Prompt for extracting theme content from reviews
-THEME_EXTRACTION_PROMPT = """你是一位专业的亚马逊评论分析专家。请分析以下商品评论，识别其中与8个主题相关的内容（关键词、短语或句子）。
+
+
+
+# [UPDATED] 5W Model Extraction Prompt (无标签库模式 - 开放提取)
+THEME_EXTRACTION_PROMPT = """你是一位专业的市场营销分析专家。请基于"5W分析法"分析以下商品评论，提取关键的市场要素。
 
 评论原文（英文）：
 {original_text}
@@ -158,46 +240,171 @@ THEME_EXTRACTION_PROMPT = """你是一位专业的亚马逊评论分析专家。
 评论翻译（中文）：
 {translated_text}
 
-请从评论中提取以下8个主题的内容：
+请从评论中提取以下 5 类核心要素（如果某类没有提及，则留空）：
 
-1. **who（使用者）**: 识别评论中提到的人群，如：孩子、老人、上班族、家人、妻子、丈夫、宝宝等
-2. **where（使用场景）**: 识别使用地点和场景，如：家里、办公室、卧室、户外、车上、健身房等
-3. **when（使用时机）**: 识别使用时间和时机，如：早上、晚上、睡前、运动时、上班时、周末等
-4. **unmet_needs（未被满足的需求）**: 识别用户期待和建议，如：希望、如果能、建议、要是、应该增加等
-5. **pain_points（痛点）**: 识别问题和不满，如：故障、坏了、不好用、太贵、质量差、失望等
-6. **benefits（收益/好处）**: 识别正面体验，如：方便、省时、舒适、好用、值得、推荐、满意等
-7. **features（功能特性）**: 识别产品功能描述，如：尺寸、材质、颜色、容量、电池、充电、音质等
-8. **comparison（对比）**: 识别对比内容，如：比之前、相比其他、更好、不如、类似、升级版等
+1. **who（使用者/人群）**: 
+   - 定义: 谁在使用产品？
+   - 示例: 老年人、学生、宠物主、妻子、工程师。
+2. **where（使用地点）**: 
+   - 定义: 在什么物理空间使用？
+   - 示例: 卧室、办公室、房车(RV)、车库、户外露营。
+3. **when（使用时刻）**: 
+   - 定义: 在什么时间或特定情境下使用？
+   - 示例: 睡前、紧急停电时、圣诞节早晨、运动后。
+4. **why（购买动机）**: 
+   - 定义: 促使用户下单的触发点是什么？(Purchase Driver)
+   - 示例: 旧的坏了(替代)、作为生日礼物、为了省钱、搬新家、被广告种草。
+5. **what（待办任务/用途）**: 
+   - 定义: 用户用它来解决什么具体问题？(Jobs to be Done)
+   - 注意: 不是列举功能，而是列举任务。
+   - 示例: 清理地毯上的猫毛(而不是"吸力大")、缓解背痛(而不是"人体工学")、哄孩子睡觉。
 
 注意事项：
-- 提取的内容可以是关键词、短语或完整句子
-- 每个主题提取0-5个最相关的内容项
-- 内容必须是评论中实际出现的，不能自己编造
-- 如果某个主题在评论中没有相关内容，返回空数组
-- 尽量提取完整有意义的内容，如"给孩子买的"而不只是"孩子"
-- 如果内容来自英文原文，请同时提供英文原文和中文翻译
+- 提取的内容必须简练、准确。
+- 尽量提取完整语义，如"清理猫毛"优于"猫毛"。
+- 必须基于评论事实，不可编造。
+- 如果内容来自英文原文，请同时提供英文原文和中文翻译。
 
-请以JSON格式返回，每个主题的内容项格式如下：
+请以JSON格式返回：
 {{
   "who": [
     {{
       "content": "孩子",
       "content_original": "for kids",
       "content_translated": "给孩子",
-      "explanation": "评论中提到使用人群是孩子"
+      "explanation": "用户买给孩子作为礼物"
     }}
   ],
-  "pain_points": [],
-  ...
+  "what": [],
+  "why": [],
+  "where": [],
+  "when": []
+}}
+"""
+
+
+# [UPDATED] 5W 标签发现 Prompt (学习阶段 - 结合产品官方信息 + 用户评论)
+CONTEXT_DISCOVERY_PROMPT = """你是一位资深的市场营销专家和用户研究员。请基于以下**产品官方信息**和**用户评论样本**，构建该产品的"5W 用户与市场模型"。
+
+# 产品官方信息（卖家定义）
+- **产品标题**: {product_title}
+- **核心卖点 (Bullet Points)**:
+{bullet_points}
+
+# 用户评论样本（{count}条买家反馈）
+{reviews_text}
+
+# 任务
+请综合官方定位与用户反馈，识别并归纳出以下 5 类核心要素，每类提取 **Top 5-8 个典型标签**：
+
+1. **Who (人群)**: 谁是主要用户？
+   - 优先参考官方定位（如: "Perfect for seniors"）
+   - 结合用户实际反馈（如: "bought for my mom"）
+   - 角色/身份，如: 老年人、新手妈妈、学生、宠物主
+   - 家庭关系，如: 给父母买的、送给妻子、孩子的礼物
+
+2. **Where (地点)**: 在哪里使用？
+   - 优先参考官方定位（如: "for Home Office, Garage"）
+   - 结合用户实际使用场景
+   - 物理空间，如: 卧室、办公室、厨房、车上、房车(RV)、户外露营
+
+3. **When (时刻)**: 什么时候使用？
+   - 时间点，如: 早上、睡前、深夜
+   - 触发时机，如: 停电时、旅行时、运动后、节假日
+
+4. **Why (动机)**: 购买的触发点是什么？(Purchase Driver)
+   - 替代需求，如: 旧的坏了、升级换代
+   - 送礼需求，如: 生日礼物、圣诞礼物、乔迁送礼
+   - 外部驱动，如: 被种草、看了评测、朋友推荐
+
+5. **What (任务)**: 用户试图用它完成什么具体任务？(Jobs to be Done)
+   - **重点关注官方宣传的核心用途**（如: "remove pet hair", "eliminate odors"）
+   - 注意: 是具体任务，不是产品功能
+   - 如: 清理地毯上的宠物毛、缓解背痛、哄孩子睡觉、去除异味
+
+# 要求
+1. **标签名称使用简练的中文**（2-6个字最佳）。
+2. **合并同义词**：如"妈妈"、"老妈"、"母亲"应统一为一个标签。
+3. **保持颗粒度一致**：不要太粗（如"家人"）也不要太细（如"62岁的独居母亲"）。
+4. **官方信息优先**：如果官方明确提到的人群/场景/用途，即使评论中没提及也应列入。
+5. **提供简短描述**：用一句话解释该标签的含义，便于后续归类判断。
+
+# 输出格式 (JSON Only)
+{{
+  "who": [
+    {{ "name": "老年人", "description": "官方定位的核心用户群体，适合需要照顾的老人" }},
+    {{ "name": "宠物主", "description": "养猫或养狗的用户" }}
+  ],
+  "where": [
+    {{ "name": "卧室", "description": "卧室/睡眠场景下使用" }},
+    {{ "name": "车库", "description": "官方推荐的使用场景之一" }}
+  ],
+  "when": [
+    {{ "name": "睡前", "description": "睡觉前使用" }}
+  ],
+  "why": [
+    {{ "name": "替代旧品", "description": "原有产品损坏需要更换" }},
+    {{ "name": "送礼", "description": "作为礼物送给他人" }}
+  ],
+  "what": [
+    {{ "name": "清理宠物毛", "description": "官方核心用途：清理家中的猫毛狗毛" }},
+    {{ "name": "去除异味", "description": "官方核心用途：消除宠物或其他异味" }}
+  ]
 }}
 
-说明：
-- content: 中文内容（必需），可以是关键词、短语或句子
-- content_original: 原始英文内容（可选）
-- content_translated: 翻译（可选）
-- explanation: 解释说明（可选）
+请只输出 JSON，不要有其他解释文字。"""
 
-如果评论太短或无实质内容，返回所有主题为空数组的JSON。"""
+
+# [UPDATED] 5W 定向提取 Prompt (执行阶段 - Execution，带证据的可解释强制归类)
+THEME_EXTRACTION_PROMPT_WITH_SCHEMA = """你是一位专业的市场营销分析专家。请分析以下商品评论，识别其中涉及的 5W 要素。
+
+评论原文（英文）：
+{original_text}
+
+评论翻译（中文）：
+{translated_text}
+
+# 标准标签库 (Schema - 只能从以下标签中选择)
+{schema_str}
+
+# 任务规则
+1. **强制归类**：你提取的 `tag` 字段必须严格等于上述标签库中的标签名。不要编造新标签。
+2. **证据留存**：必须引用原文 `quote`（英文）和 `quote_translated`（中文翻译）作为判断依据。
+3. **解释说明**：提供简短的 `explanation` 解释为什么这样归类。
+4. **多选**：如果评论涉及多个标签，请生成多个对象。
+5. **忽略无关**：如果评论内容不匹配某个类别的任何标签，该类别返回空数组。
+
+# 输出格式 (JSON Only)
+{{
+  "who": [
+    {{
+      "tag": "老年人", 
+      "quote": "bought this for my 80yo dad",
+      "quote_translated": "给我80岁的父亲买的",
+      "explanation": "评论明确提及买给80岁的父亲"
+    }}
+  ],
+  "where": [],
+  "when": [],
+  "why": [
+    {{
+      "tag": "送礼",
+      "quote": "as a gift for my mom",
+      "quote_translated": "作为礼物送给妈妈",
+      "explanation": "用户明确说是作为礼物送给母亲"
+    }}
+  ],
+  "what": [
+    {{
+      "tag": "缓解背痛",
+      "quote": "helps with my lower back pain",
+      "quote_translated": "帮助缓解我的腰痛",
+      "explanation": "用户使用该产品来解决背痛问题"
+    }}
+  ]
+}}
+
+请只输出 JSON，不要有其他解释文字。"""
 
 
 # [NEW] Helper function for robust JSON parsing
@@ -378,13 +585,231 @@ class TranslationService:
         retry=retry_if_exception_type((Exception,)),
         reraise=True
     )
+    def learn_dimensions(
+        self, 
+        reviews_text: List[str],
+        product_title: str = "",
+        bullet_points: str = ""
+    ) -> List[dict]:
+        """
+        让 AI 从产品信息和评论样本中学习并总结产品评价维度。
+        
+        Args:
+            reviews_text: 评论文本列表（建议30-50条）
+            product_title: 产品标题（可选，用于提供产品上下文）
+            bullet_points: 产品五点描述（可选，用于补充产品卖点）
+            
+        Returns:
+            维度列表，每个维度包含 name 和 description
+            
+        Example:
+            [
+                {"name": "电池续航", "description": "与充电速度和使用时长相关的问题"},
+                {"name": "外观设计", "description": "产品的外观、颜色、材质等视觉相关评价"}
+            ]
+        """
+        if not self._check_client():
+            logger.error("Translation service not configured for dimension learning")
+            return []
+        
+        if not reviews_text or len(reviews_text) < 5:
+            logger.warning("样本数量不足（至少需要5条评论），无法有效学习维度")
+            return []
+        
+        # 限制样本量防止超 token
+        sample_texts = reviews_text[:50]
+        combined_text = "\n---\n".join(sample_texts)
+        
+        # 处理产品信息
+        title_text = product_title.strip() if product_title else "（未提供）"
+        bullet_text = bullet_points.strip() if bullet_points else "（未提供）"
+        
+        try:
+            prompt = DIMENSION_DISCOVERY_PROMPT.format(
+                product_title=title_text,
+                bullet_points=bullet_text,
+                count=len(sample_texts),
+                reviews_text=combined_text
+            )
+            
+            response = self.client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0.3,  # 较低温度保证一致性
+                max_tokens=2000,
+                timeout=90.0,
+            )
+            
+            result = response.choices[0].message.content.strip()
+            
+            # 使用健壮的 JSON 解析器
+            parsed = parse_json_safely(result)
+            
+            if not isinstance(parsed, dict) or "dimensions" not in parsed:
+                logger.warning(f"维度发现返回格式不正确: {type(parsed)}")
+                return []
+            
+            dimensions = parsed.get("dimensions", [])
+            
+            # 验证维度格式
+            valid_dimensions = []
+            for dim in dimensions:
+                if isinstance(dim, dict) and dim.get("name"):
+                    valid_dimensions.append({
+                        "name": dim["name"].strip(),
+                        "description": (dim.get("description") or "").strip()
+                    })
+            
+            logger.info(f"AI 成功学习到 {len(valid_dimensions)} 个产品维度")
+            return valid_dimensions
+            
+        except Exception as e:
+            logger.error(f"维度学习失败: {e}")
+            return []
+
+    @retry(
+        stop=stop_after_attempt(2),
+        wait=wait_exponential(multiplier=1, min=2, max=10),
+        retry=retry_if_exception_type((Exception,)),
+        reraise=True
+    )
+    def learn_context_labels(
+        self, 
+        reviews_text: List[str],
+        product_title: str = "",
+        bullet_points: List[str] = None
+    ) -> dict:
+        """
+        让 AI 结合产品官方信息和评论样本学习 5W 标准标签库（Definition 阶段）。
+        
+        这是 AI-Native 架构的核心："先学习标准，后强制归类"。
+        AI 会分析产品标题、五点卖点和评论样本，为每个 5W 类型生成标准标签。
+        
+        **[UPDATED] 加入产品官方信息：**
+        - 标题和五点是商家的"卖家秀"，往往比用户评论更精准
+        - 特别对 Who（人群）、Where（场景）、What（任务）提升显著
+        
+        Args:
+            reviews_text: 评论文本列表（建议30-50条，混合好评差评）
+            product_title: 产品标题（英文原文）
+            bullet_points: 产品五点卖点列表（英文原文）
+            
+        Returns:
+            5W 标签字典，格式：
+            {
+                "who": [{"name": "老年人", "description": "..."}, ...],
+                "where": [...],
+                "when": [...],
+                "why": [...],
+                "what": [...]
+            }
+            
+        Example:
+            >>> labels = service.learn_context_labels(
+            ...     reviews[:50],
+            ...     product_title="LED Light for Seniors",
+            ...     bullet_points=["Perfect for elderly", "Home Office use"]
+            ... )
+        """
+        if not self._check_client():
+            logger.error("Translation service not configured for context learning")
+            return {}
+        
+        if not reviews_text or len(reviews_text) < 30:
+            logger.warning("样本数量不足（至少需要30条评论），无法有效学习 5W 标签")
+            return {}
+        
+        # 限制样本量防止超 token（50条评论约 4000-6000 tokens）
+        sample_texts = reviews_text[:50]
+        combined_reviews = "\n---\n".join([f"评论{i+1}: {text}" for i, text in enumerate(sample_texts)])
+        
+        # [NEW] 格式化产品官方信息
+        formatted_title = product_title.strip() if product_title else "（无）"
+        formatted_bullets = "（无）"
+        if bullet_points and len(bullet_points) > 0:
+            formatted_bullets = "\n".join([f"  - {bp}" for bp in bullet_points if bp and bp.strip()])
+        
+        logger.info(f"5W 标签学习：{len(sample_texts)} 条评论 + 产品信息（标题: {len(formatted_title)}字, 五点: {len(bullet_points or [])}条）")
+        
+        try:
+            prompt = CONTEXT_DISCOVERY_PROMPT.format(
+                product_title=formatted_title,
+                bullet_points=formatted_bullets,
+                count=len(sample_texts),
+                reviews_text=combined_reviews
+            )
+            
+            response = self.client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0.3,  # 较低温度保证一致性
+                max_tokens=3000,
+                timeout=120.0,  # 稍长的超时时间
+            )
+            
+            result = response.choices[0].message.content.strip()
+            
+            # 使用健壮的 JSON 解析器
+            parsed = parse_json_safely(result)
+            
+            if not isinstance(parsed, dict):
+                logger.warning(f"5W 标签发现返回格式不正确: {type(parsed)}")
+                return {}
+            
+            # 验证和清理每个 5W 类型的标签
+            valid_types = {"who", "where", "when", "why", "what"}
+            valid_result = {}
+            
+            for context_type in valid_types:
+                labels = parsed.get(context_type, [])
+                valid_labels = []
+                
+                for label in labels:
+                    if isinstance(label, dict) and label.get("name"):
+                        valid_labels.append({
+                            "name": label["name"].strip(),
+                            "description": (label.get("description") or "").strip()
+                        })
+                
+                if valid_labels:
+                    valid_result[context_type] = valid_labels
+                    logger.debug(f"  {context_type}: {len(valid_labels)} 个标签")
+            
+            total_labels = sum(len(v) for v in valid_result.values())
+            logger.info(f"AI 成功学习到 {total_labels} 个 5W 标签（{len(valid_result)} 个类型）")
+            return valid_result
+            
+        except Exception as e:
+            logger.error(f"5W 标签学习失败: {e}")
+            return {}
+
+    @retry(
+        stop=stop_after_attempt(2),
+        wait=wait_exponential(multiplier=1, min=2, max=10),
+        retry=retry_if_exception_type((Exception,)),
+        reraise=True
+    )
     def extract_insights(
         self,
         original_text: str,
-        translated_text: str
+        translated_text: str,
+        dimension_schema: List[dict] = None
     ) -> List[dict]:
         """
         Extract insights from a review.
+        
+        Args:
+            original_text: 原始评论文本
+            translated_text: 翻译后的文本
+            dimension_schema: 可选的维度模式列表，用于限定 AI 只使用这些维度进行归类
+                             格式: [{"name": "维度名", "description": "维度定义"}, ...]
+        
+        Returns:
+            洞察列表，每个洞察包含 type, dimension, quote, analysis 等字段
         """
         if not self._check_client():
             return []
@@ -394,13 +819,30 @@ class TranslationService:
             return []
         
         try:
+            # 根据是否有维度模式选择不同的 Prompt
+            if dimension_schema and len(dimension_schema) > 0:
+                # 使用动态维度 Prompt - 强制 AI 按指定维度归类
+                schema_str = "\n".join([
+                    f"- {d['name']}: {d.get('description', '无具体定义')}" 
+                    for d in dimension_schema
+                ])
+                prompt = INSIGHT_EXTRACTION_PROMPT_DYNAMIC.format(
+                    original_text=original_text,
+                    translated_text=translated_text or original_text,
+                    schema_str=schema_str
+                )
+                logger.debug(f"使用动态维度 Prompt，共 {len(dimension_schema)} 个维度")
+            else:
+                # 使用原有 Prompt - 兼容旧逻辑
+                prompt = INSIGHT_EXTRACTION_PROMPT.format(
+                    original_text=original_text,
+                    translated_text=translated_text or original_text
+                )
+            
             response = self.client.chat.completions.create(
                 model=self.model,
                 messages=[
-                    {"role": "user", "content": INSIGHT_EXTRACTION_PROMPT.format(
-                        original_text=original_text,
-                        translated_text=translated_text or original_text
-                    )}
+                    {"role": "user", "content": prompt}
                 ],
                 temperature=0.2, # Lower temperature for structural extraction
                 max_tokens=1500,
@@ -700,9 +1142,33 @@ class TranslationService:
         retry=retry_if_exception_type((Exception,)),
         reraise=True
     )
-    def extract_themes(self, original_text: str, translated_text: str) -> dict:
+    def extract_themes(
+        self, 
+        original_text: str, 
+        translated_text: str,
+        context_schema: dict = None
+    ) -> dict:
         """
-        Extract theme content from a review (both original and translated).
+        Extract 5W theme content from a review.
+        
+        支持两种模式：
+        1. 开放提取模式（无 context_schema）：AI 自由提取 5W 要素
+        2. 强制归类模式（有 context_schema）：AI 只能输出标签库中已有的标签
+        
+        Args:
+            original_text: 评论原文
+            translated_text: 评论翻译
+            context_schema: 可选的 5W 标签库，格式：
+                {
+                    "who": [{"name": "老年人", "description": "..."}, ...],
+                    "where": [...],
+                    ...
+                }
+                
+        Returns:
+            提取的主题内容，格式：
+            - 开放模式：{"who": [{"content": "...", ...}], ...}
+            - 归类模式：{"who": ["老年人", "宠物主"], "where": [], ...}
         """
         if not self._check_client():
             return {}
@@ -711,20 +1177,41 @@ class TranslationService:
         if not translated_text or len(translated_text.strip()) < 10:
             return {}
         
-        # Valid theme types
-        valid_themes = {
-            "who", "where", "when", "unmet_needs", 
-            "pain_points", "benefits", "features", "comparison"
-        }
+        # [UPDATED] Valid theme types for 5W model
+        valid_themes = {"who", "where", "when", "why", "what"}
         
         try:
+            # 根据是否有标签库选择不同的 Prompt
+            if context_schema and any(context_schema.get(t) for t in valid_themes):
+                # 强制归类模式 - 使用标签库
+                schema_lines = []
+                for theme_type in valid_themes:
+                    labels = context_schema.get(theme_type, [])
+                    if labels:
+                        label_names = [l["name"] for l in labels if isinstance(l, dict) and l.get("name")]
+                        if label_names:
+                            schema_lines.append(f"- **{theme_type}**: {', '.join(label_names)}")
+                
+                schema_str = "\n".join(schema_lines) if schema_lines else "（无标签库）"
+                
+                prompt = THEME_EXTRACTION_PROMPT_WITH_SCHEMA.format(
+                    original_text=original_text or "",
+                    translated_text=translated_text,
+                    schema_str=schema_str
+                )
+                logger.debug(f"使用强制归类模式，标签库包含 {len(schema_lines)} 个类型")
+            else:
+                # 开放提取模式 - 自由提取
+                prompt = THEME_EXTRACTION_PROMPT.format(
+                    original_text=original_text or "",
+                    translated_text=translated_text
+                )
+                logger.debug("使用开放提取模式")
+            
             response = self.client.chat.completions.create(
                 model=self.model,
                 messages=[
-                    {"role": "user", "content": THEME_EXTRACTION_PROMPT.format(
-                        original_text=original_text or "",
-                        translated_text=translated_text
-                    )}
+                    {"role": "user", "content": prompt}
                 ],
                 temperature=0.2,
                 max_tokens=2000,
@@ -740,41 +1227,84 @@ class TranslationService:
                 logger.warning(f"Parsed themes is not a dict: {type(themes)}")
                 return {}
             
-            # Validate and filter themes
+            # 根据模式处理返回结果
             valid_result = {}
-            for theme_type, items in themes.items():
-                if theme_type not in valid_themes:
-                    continue
-                if not isinstance(items, list):
-                    continue
-                
-                # Validate each item
-                valid_items = []
-                for item in items:
-                    if isinstance(item, dict) and "content" in item:
-                        # Ensure content is a non-empty string
-                        content = item.get("content", "").strip()
-                        if content:
-                            # Build valid item
-                            valid_item = {
-                                "content": content,
-                                "content_original": item.get("content_original") or None,
-                                "content_translated": item.get("content_translated") or None,
-                                "explanation": item.get("explanation") or None
-                            }
-                            valid_items.append(valid_item)
-                    elif isinstance(item, str):
-                        # Backward compatibility: if item is a string, convert to new format
-                        if item.strip():
-                            valid_items.append({
-                                "content": item.strip(),
-                                "content_original": None,
-                                "content_translated": None,
-                                "explanation": None
-                            })
-                
-                if valid_items:
-                    valid_result[theme_type] = valid_items
+            
+            if context_schema and any(context_schema.get(t) for t in valid_themes):
+                # [UPDATED] 强制归类模式 - 支持带证据的可解释归类
+                # 新格式: {"tag": "老年人", "quote": "...", "explanation": "..."}
+                for theme_type in valid_themes:
+                    items = themes.get(theme_type, [])
+                    if not isinstance(items, list):
+                        continue
+                    
+                    # 获取该类型允许的标签
+                    allowed_labels = {
+                        l["name"] for l in context_schema.get(theme_type, []) 
+                        if isinstance(l, dict) and l.get("name")
+                    }
+                    
+                    valid_items = []
+                    for item in items:
+                        if isinstance(item, dict):
+                            # 新格式: 带 tag/quote/quote_translated/explanation 的对象
+                            tag = item.get("tag") or item.get("content")
+                            if tag and tag.strip() in allowed_labels:
+                                valid_items.append({
+                                    "content": tag.strip(),  # 标准标签名
+                                    "content_original": item.get("quote") or item.get("content_original"),  # 原文证据
+                                    "quote_translated": item.get("quote_translated"),  # [NEW] 中文翻译证据
+                                    "content_translated": item.get("content_translated"),  # 翻译（可选，向后兼容）
+                                    "explanation": item.get("explanation")  # 归类理由
+                                })
+                        elif isinstance(item, str):
+                            # 兼容旧格式: 纯字符串
+                            if item.strip() in allowed_labels:
+                                valid_items.append({
+                                    "content": item.strip(),
+                                    "content_original": None,
+                                    "content_translated": None,
+                                    "explanation": f"命中标签库: {item.strip()}"
+                                })
+                    
+                    if valid_items:
+                        valid_result[theme_type] = valid_items
+                        logger.debug(f"  {theme_type}: {len(valid_items)} 个标签 (带证据)")
+            else:
+                # 开放提取模式 - 返回的是完整内容项
+                for theme_type, items in themes.items():
+                    if theme_type not in valid_themes:
+                        continue
+                    if not isinstance(items, list):
+                        continue
+                    
+                    # Validate each item
+                    valid_items = []
+                    for item in items:
+                        if isinstance(item, dict) and "content" in item:
+                            # Ensure content is a non-empty string
+                            content = item.get("content", "").strip()
+                            if content:
+                                # Build valid item
+                                valid_item = {
+                                    "content": content,
+                                    "content_original": item.get("content_original") or None,
+                                    "content_translated": item.get("content_translated") or None,
+                                    "explanation": item.get("explanation") or None
+                                }
+                                valid_items.append(valid_item)
+                        elif isinstance(item, str):
+                            # Backward compatibility: if item is a string, convert to new format
+                            if item.strip():
+                                valid_items.append({
+                                    "content": item.strip(),
+                                    "content_original": None,
+                                    "content_translated": None,
+                                    "explanation": None
+                                })
+                    
+                    if valid_items:
+                        valid_result[theme_type] = valid_items
             
             logger.debug(f"Extracted themes: {list(valid_result.keys())}")
             return valid_result

@@ -25,6 +25,17 @@ from app.api.schemas import (
     PinReviewRequest,
     ToggleVisibilityRequest,
     UpdateReviewRequest,
+    DimensionResponse,
+    DimensionListResponse,
+    DimensionCreateRequest,
+    DimensionUpdateRequest,
+    DimensionGenerateResponse,
+    # 5W Context Labels
+    ContextLabelResponse,
+    ContextLabelListResponse,
+    ContextLabelCreateRequest,
+    ContextLabelUpdateRequest,
+    ContextLabelGenerateResponse,
 )
 from app.services.review_service import ReviewService
 from app.models.task import TaskType
@@ -281,12 +292,60 @@ async def get_product_stats(
 ):
     """
     Get detailed statistics for a product.
+    
+    **[NEW] Auto-initializes 5W label learning on first visit:**
+    - If product has translated reviews (>=10) but no context labels, 
+      automatically triggers label learning in background (non-blocking).
+    - This ensures labels are ready when user triggers theme extraction.
     """
+    from sqlalchemy import select, func, and_
+    from app.models.product import Product
+    from app.models.review import Review, TranslationStatus
+    from app.models.product_context_label import ProductContextLabel
+    from app.services.context_service import ContextService
+    
     service = ReviewService(db)
     stats = await service.get_product_stats(asin)
     
     if not stats:
         raise HTTPException(status_code=404, detail="Product not found")
+    
+    # [NEW] Auto-initialize 5W label learning on first visit (non-blocking)
+    product_result = await db.execute(
+        select(Product).where(Product.asin == asin)
+    )
+    product = product_result.scalar_one_or_none()
+    
+    if product:
+        # Check if context labels exist
+        label_count_result = await db.execute(
+            select(func.count(ProductContextLabel.id))
+            .where(ProductContextLabel.product_id == product.id)
+        )
+        label_count = label_count_result.scalar() or 0
+        
+        # Check if there are enough translated reviews
+        translated_count_result = await db.execute(
+            select(func.count(Review.id))
+            .where(
+                and_(
+                    Review.product_id == product.id,
+                    Review.translation_status == TranslationStatus.COMPLETED.value,
+                    Review.body_translated.isnot(None),
+                    Review.is_deleted == False
+                )
+            )
+        )
+        translated_count = translated_count_result.scalar() or 0
+        
+        # Auto-trigger label learning if needed (non-blocking, runs in background)
+        # Only trigger if: no labels exist AND has enough translated reviews
+        # Note: This will trigger theme extraction which auto-generates labels on first run
+        if label_count == 0 and translated_count >= 30:
+            logger.info(f"产品 {asin} 首次访问，检测到 {translated_count} 条已翻译评论，将在主题提取时自动生成 5W 标签库")
+            # Note: Labels will be auto-generated when user triggers theme extraction
+            # We don't trigger it here to avoid unnecessary processing
+            # The worker.task_extract_themes will handle label generation automatically
     
     return stats
 
@@ -658,6 +717,444 @@ async def trigger_theme_extraction(
         "product_id": str(product.id),
         "asin": asin,
         "reviews_to_process": reviews_to_process
+    }
+
+
+# ============== Dimension API ==============
+
+@products_router.post("/{asin}/dimensions/generate", response_model=DimensionGenerateResponse)
+async def generate_dimensions(
+    asin: str,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    触发 AI 学习并生成产品评价维度。
+    
+    这个接口会：
+    1. 从该产品的评论中采样（最多50条）
+    2. 调用 AI 分析评论，提炼出5-8个核心评价维度
+    3. 将维度存入 product_dimensions 表
+    4. 返回生成的维度列表
+    
+    后续在分析评论洞察时，AI 会使用这些维度进行归类。
+    """
+    from sqlalchemy import select
+    from app.models.product import Product
+    from app.services.dimension_service import DimensionService
+    
+    # Get product
+    product_result = await db.execute(
+        select(Product).where(Product.asin == asin)
+    )
+    product = product_result.scalar_one_or_none()
+    
+    if not product:
+        raise HTTPException(status_code=404, detail="产品不存在")
+    
+    dimension_service = DimensionService(db)
+    
+    try:
+        # 自动生成维度
+        generated_dims = await dimension_service.auto_generate_dimensions(product.id)
+        
+        # 获取完整的维度列表（包含 ID 等信息）
+        dimensions = await dimension_service.get_dimensions(product.id)
+        
+        logger.info(f"为产品 {asin} 成功生成 {len(dimensions)} 个维度")
+        
+        return DimensionGenerateResponse(
+            success=True,
+            message=f"成功生成 {len(dimensions)} 个产品维度",
+            product_id=product.id,
+            dimensions=[DimensionResponse.model_validate(d) for d in dimensions]
+        )
+        
+    except ValueError as e:
+        logger.warning(f"维度生成失败: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+    except RuntimeError as e:
+        logger.error(f"维度生成失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    except Exception as e:
+        logger.error(f"维度生成发生未知错误: {e}")
+        raise HTTPException(status_code=500, detail=f"维度生成失败: {str(e)}")
+
+
+@products_router.get("/{asin}/dimensions", response_model=DimensionListResponse)
+async def get_dimensions(
+    asin: str,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    获取产品的所有评价维度。
+    
+    返回该产品已定义的维度列表，包括 AI 生成的和用户手动添加的。
+    """
+    from sqlalchemy import select
+    from app.models.product import Product
+    from app.services.dimension_service import DimensionService
+    
+    # Get product
+    product_result = await db.execute(
+        select(Product).where(Product.asin == asin)
+    )
+    product = product_result.scalar_one_or_none()
+    
+    if not product:
+        raise HTTPException(status_code=404, detail="产品不存在")
+    
+    dimension_service = DimensionService(db)
+    dimensions = await dimension_service.get_dimensions(product.id)
+    
+    return DimensionListResponse(
+        total=len(dimensions),
+        dimensions=[DimensionResponse.model_validate(d) for d in dimensions]
+    )
+
+
+@products_router.post("/{asin}/dimensions", response_model=DimensionResponse)
+async def add_dimension(
+    asin: str,
+    request: DimensionCreateRequest,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    手动添加一个产品维度。
+    
+    允许用户手动添加自定义维度来补充或微调 AI 生成的维度。
+    """
+    from sqlalchemy import select
+    from app.models.product import Product
+    from app.services.dimension_service import DimensionService
+    
+    # Get product
+    product_result = await db.execute(
+        select(Product).where(Product.asin == asin)
+    )
+    product = product_result.scalar_one_or_none()
+    
+    if not product:
+        raise HTTPException(status_code=404, detail="产品不存在")
+    
+    dimension_service = DimensionService(db)
+    dimension = await dimension_service.add_dimension(
+        product_id=product.id,
+        name=request.name,
+        description=request.description
+    )
+    
+    logger.info(f"为产品 {asin} 添加维度: {request.name}")
+    
+    return DimensionResponse.model_validate(dimension)
+
+
+@products_router.put("/dimensions/{dimension_id}", response_model=DimensionResponse)
+async def update_dimension(
+    dimension_id: str,
+    request: DimensionUpdateRequest,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    更新维度信息。
+    """
+    from app.services.dimension_service import DimensionService
+    
+    try:
+        dim_uuid = uuid.UUID(dimension_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="无效的维度 ID 格式")
+    
+    dimension_service = DimensionService(db)
+    dimension = await dimension_service.update_dimension(
+        dimension_id=dim_uuid,
+        name=request.name,
+        description=request.description
+    )
+    
+    if not dimension:
+        raise HTTPException(status_code=404, detail="维度不存在")
+    
+    return DimensionResponse.model_validate(dimension)
+
+
+@products_router.delete("/dimensions/{dimension_id}")
+async def delete_dimension(
+    dimension_id: str,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    删除维度。
+    """
+    from app.services.dimension_service import DimensionService
+    
+    try:
+        dim_uuid = uuid.UUID(dimension_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="无效的维度 ID 格式")
+    
+    dimension_service = DimensionService(db)
+    success = await dimension_service.delete_dimension(dim_uuid)
+    
+    if not success:
+        raise HTTPException(status_code=404, detail="维度不存在")
+    
+    return {
+        "code": 200,
+        "message": "维度删除成功",
+        "data": {
+            "dimension_id": dimension_id,
+            "deleted": True
+        }
+    }
+
+
+# ============== 5W Context Label API ==============
+
+@products_router.post("/{asin}/context-labels/generate", response_model=ContextLabelGenerateResponse)
+async def generate_context_labels(
+    asin: str,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    触发 AI 学习并生成 5W 标准标签库（Definition 阶段）。
+    
+    这是 AI-Native 架构的核心："先学习标准，后强制归类"。
+    
+    流程：
+    1. 从该产品的已翻译评论中采样（最多50条）
+    2. 调用 AI 分析评论，为每个 5W 类型生成标准标签
+    3. 将标签存入 product_context_labels 表
+    4. 返回生成的标签库
+    
+    后续在提取 5W 主题时，AI 会强制将内容归类到这些标签中，避免数据发散。
+    """
+    from sqlalchemy import select
+    from app.models.product import Product
+    from app.services.context_service import ContextService
+    
+    # Get product
+    product_result = await db.execute(
+        select(Product).where(Product.asin == asin)
+    )
+    product = product_result.scalar_one_or_none()
+    
+    if not product:
+        raise HTTPException(status_code=404, detail="产品不存在")
+    
+    context_service = ContextService(db)
+    
+    try:
+        # 自动生成 5W 标签
+        generated_labels = await context_service.auto_generate_context_labels(product.id)
+        
+        # 获取标签统计
+        summary = await context_service.get_labels_summary(product.id)
+        
+        total_count = sum(len(v) for v in generated_labels.values())
+        logger.info(f"为产品 {asin} 成功生成 {total_count} 个 5W 标签")
+        
+        return ContextLabelGenerateResponse(
+            success=True,
+            message=f"成功生成 {total_count} 个 5W 标签",
+            product_id=product.id,
+            labels=generated_labels,
+            summary=summary
+        )
+        
+    except ValueError as e:
+        logger.warning(f"5W 标签生成失败: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+    except RuntimeError as e:
+        logger.error(f"5W 标签生成失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    except Exception as e:
+        logger.error(f"5W 标签生成发生未知错误: {e}")
+        raise HTTPException(status_code=500, detail=f"5W 标签生成失败: {str(e)}")
+
+
+@products_router.get("/{asin}/context-labels", response_model=ContextLabelListResponse)
+async def get_context_labels(
+    asin: str,
+    context_type: str = None,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    获取产品的 5W 标准标签库。
+    
+    返回该产品已定义的标签列表，包括 AI 生成的和用户手动添加的。
+    可以通过 context_type 参数筛选特定类型的标签。
+    
+    Query Parameters:
+        context_type: 可选，筛选特定类型 (who/where/when/why/what)
+    """
+    from sqlalchemy import select
+    from app.models.product import Product
+    from app.services.context_service import ContextService
+    
+    # Get product
+    product_result = await db.execute(
+        select(Product).where(Product.asin == asin)
+    )
+    product = product_result.scalar_one_or_none()
+    
+    if not product:
+        raise HTTPException(status_code=404, detail="产品不存在")
+    
+    # Validate context_type if provided
+    valid_types = {"who", "where", "when", "why", "what"}
+    if context_type and context_type not in valid_types:
+        raise HTTPException(
+            status_code=400, 
+            detail=f"无效的标签类型: {context_type}，必须是 {valid_types}"
+        )
+    
+    context_service = ContextService(db)
+    labels = await context_service.get_context_labels(product.id, context_type)
+    summary = await context_service.get_labels_summary(product.id)
+    
+    return ContextLabelListResponse(
+        total=len(labels),
+        labels=[ContextLabelResponse.model_validate(l) for l in labels],
+        summary=summary
+    )
+
+
+@products_router.get("/{asin}/context-labels/schema")
+async def get_context_schema(
+    asin: str,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    获取用于强制归类的 5W Schema。
+    
+    返回格式化的标签库，供 AI 提取主题时使用。
+    这是内部 API，主要用于调试和查看当前的标签库配置。
+    """
+    from sqlalchemy import select
+    from app.models.product import Product
+    from app.services.context_service import ContextService
+    
+    # Get product
+    product_result = await db.execute(
+        select(Product).where(Product.asin == asin)
+    )
+    product = product_result.scalar_one_or_none()
+    
+    if not product:
+        raise HTTPException(status_code=404, detail="产品不存在")
+    
+    context_service = ContextService(db)
+    schema = await context_service.get_context_schema(product.id)
+    has_labels = await context_service.has_context_labels(product.id)
+    
+    return {
+        "success": True,
+        "product_id": str(product.id),
+        "asin": asin,
+        "has_labels": has_labels,
+        "schema": schema
+    }
+
+
+@products_router.post("/{asin}/context-labels", response_model=ContextLabelResponse)
+async def add_context_label(
+    asin: str,
+    request: ContextLabelCreateRequest,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    手动添加一个 5W 标签。
+    
+    允许用户手动添加自定义标签来补充或微调 AI 生成的标签库。
+    """
+    from sqlalchemy import select
+    from app.models.product import Product
+    from app.services.context_service import ContextService
+    
+    # Get product
+    product_result = await db.execute(
+        select(Product).where(Product.asin == asin)
+    )
+    product = product_result.scalar_one_or_none()
+    
+    if not product:
+        raise HTTPException(status_code=404, detail="产品不存在")
+    
+    context_service = ContextService(db)
+    
+    try:
+        label = await context_service.add_label(
+            product_id=product.id,
+            context_type=request.type.value,
+            name=request.name,
+            description=request.description
+        )
+        
+        logger.info(f"为产品 {asin} 添加标签: [{request.type.value}] {request.name}")
+        
+        return ContextLabelResponse.model_validate(label)
+        
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@products_router.put("/context-labels/{label_id}", response_model=ContextLabelResponse)
+async def update_context_label(
+    label_id: str,
+    request: ContextLabelUpdateRequest,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    更新标签信息。
+    """
+    from app.services.context_service import ContextService
+    
+    try:
+        label_uuid = uuid.UUID(label_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="无效的标签 ID 格式")
+    
+    context_service = ContextService(db)
+    label = await context_service.update_label(
+        label_id=label_uuid,
+        name=request.name,
+        description=request.description
+    )
+    
+    if not label:
+        raise HTTPException(status_code=404, detail="标签不存在")
+    
+    return ContextLabelResponse.model_validate(label)
+
+
+@products_router.delete("/context-labels/{label_id}")
+async def delete_context_label(
+    label_id: str,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    删除标签。
+    """
+    from app.services.context_service import ContextService
+    
+    try:
+        label_uuid = uuid.UUID(label_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="无效的标签 ID 格式")
+    
+    context_service = ContextService(db)
+    success = await context_service.delete_label(label_uuid)
+    
+    if not success:
+        raise HTTPException(status_code=404, detail="标签不存在")
+    
+    return {
+        "code": 200,
+        "message": "标签删除成功",
+        "data": {
+            "label_id": label_id,
+            "deleted": True
+        }
     }
 
 
