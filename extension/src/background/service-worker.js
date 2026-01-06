@@ -651,19 +651,22 @@ async function collectReviewsWithTab(asin, stars, pagesPerStar, mediaType, speed
       console.log(`[Collector] Starting star ${star} collection`);
       let consecutiveNoNew = 0;
       
+      // [NEW] 星级开始时发送初始进度更新
+      const starIndex = stars.indexOf(star);
+      const initialProgress = Math.min(Math.round((starIndex / stars.length) * 100), 99);
+      sendProgress({
+        star,
+        page: 0,
+        pagesPerStar,
+        totalReviews: allReviews.length, // 显示当前已采集的总数
+        progress: initialProgress,
+        message: `开始采集 ${star} 星评论...`
+      });
+      
       for (let page = 1; page <= pagesPerStar; page++) {
         if (!collectorTabId) {
           throw new Error('Collection cancelled');
         }
-
-        // Update progress
-        sendProgress({
-          star,
-          page,
-          pagesPerStar,
-          totalReviews: allReviews.length,
-          message: `正在采集 ${star} 星评论... 第 ${page}/${pagesPerStar} 页`
-        });
 
         let reviews = [];
         let pageNum = null;
@@ -756,6 +759,21 @@ async function collectReviewsWithTab(asin, stars, pagesPerStar, mediaType, speed
 
         console.log(`[Collector] Page ${page}: ${newCount} new, ${reviews.length - newCount} duplicates, total: ${allReviews.length}`);
 
+        // [FIXED] 在评论添加到 allReviews 后立即发送进度更新，确保 totalReviews 准确
+        // 计算总体进度百分比
+        const starIndex = stars.indexOf(star);
+        const starProgress = page / pagesPerStar;
+        const totalProgress = Math.min(Math.round(((starIndex + starProgress) / stars.length) * 100), 99);
+        
+        sendProgress({
+          star,
+          page,
+          pagesPerStar,
+          totalReviews: allReviews.length, // 🔥 使用最新的总数（已包含当前页面的评论）
+          progress: totalProgress, // 计算好的百分比
+          message: `正在采集 ${star} 星评论... 第 ${page}/${pagesPerStar} 页`
+        });
+
         // Check if we got new reviews
         if (newCount === 0 && reviews.length > 0) {
           consecutiveNoNew++;
@@ -777,6 +795,20 @@ async function collectReviewsWithTab(asin, stars, pagesPerStar, mediaType, speed
       }
 
       console.log(`[Collector] Star ${star} complete. Total reviews so far: ${allReviews.length}`);
+
+      // [FIXED] 星级完成时发送一次进度更新，确保总数准确
+      const starIndex = stars.indexOf(star);
+      const starProgress = 1.0; // 当前星级已完成
+      const totalProgress = Math.min(Math.round(((starIndex + starProgress) / stars.length) * 100), 99);
+      
+      sendProgress({
+        star,
+        page: pagesPerStar,
+        pagesPerStar,
+        totalReviews: allReviews.length, // 🔥 发送最新的总数
+        progress: totalProgress,
+        message: `${star} 星采集完成，共 ${allReviews.length} 条评论`
+      });
 
       // Delay between star ratings
       if (stars.indexOf(star) < stars.length - 1) {

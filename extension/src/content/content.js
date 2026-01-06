@@ -28,7 +28,7 @@ const STAR_FILTERS = {
 let isCollecting = false;
 let shouldStop = false;
 let overlay = null;
-let totalCollectedCount = 0; // [NEW] 累计采集数量，用于准确显示UI
+let g_displayCount = 0; // [FIXED] 全局显示计数器，只增不减，完全信任后台传来的数字
 
 /**
  * [NEW] Generate a stable hash from a string (djb2 algorithm)
@@ -505,7 +505,7 @@ async function startCollection(config) {
 
   isCollecting = true;
   shouldStop = false;
-  totalCollectedCount = 0; // [NEW] 重置累计计数器
+  g_displayCount = 0; // [FIXED] 重置显示计数器
 
   showOverlay({
     status: 'collecting',
@@ -550,9 +550,9 @@ function stopCollection() {
   updateOverlay({ 
     status: 'stopped', 
     message: '已停止采集',
-    reviewCount: totalCollectedCount // [NEW] 显示已采集的数量
+    reviewCount: g_displayCount // 显示已采集的数量
   });
-  // 注意：不重置 totalCollectedCount，保留显示已采集的数量
+  // 注意：不重置 g_displayCount，保留显示已采集的数量
 }
 
 // --- UI Overlay Logic (Keep simplified for brevity, full logic assumed) ---
@@ -795,39 +795,43 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
   // 3. 处理后台传来的采集进度
   else if (msg.type === 'COLLECTION_PROGRESS') {
-    // 计算总体进度: (当前页/总页数 * 权重) + (当前星级进度)
-    // 简化显示：只显示百分比文本
-    const percent = Math.min(Math.round((msg.page / msg.pagesPerStar) * 20 + (msg.star - 1) * 20), 99);
-    
-    // [UPDATED] 使用后台传来的 totalReviews，如果存在则更新累计值
-    // 如果后台没有传 totalReviews，则使用我们维护的累计值
-    if (msg.totalReviews !== undefined && msg.totalReviews !== null) {
-      // 如果后台传来的值大于当前累计值，更新累计值（避免倒退）
-      if (msg.totalReviews > totalCollectedCount) {
-        totalCollectedCount = msg.totalReviews;
+    // [FIXED] 如果后台传来了具体的 totalReviews，就用后台的
+    // 如果没传，就保持当前的 g_displayCount 不变（避免数字消失）
+    if (typeof msg.totalReviews === 'number') {
+      // 只增不减，确保数字不会倒退
+      if (msg.totalReviews > g_displayCount) {
+        g_displayCount = msg.totalReviews;
       }
     }
     
+    // 使用后台计算好的百分比（如果提供了），否则自己计算
+    const progress = msg.progress !== undefined ? msg.progress : 
+      Math.min(Math.round((msg.page / msg.pagesPerStar) * 20 + (msg.star - 1) * 20), 99);
+    
     updateOverlay({
       status: 'collecting',
-      message: msg.message,
-      progress: percent,
-      reviewCount: totalCollectedCount // [FIXED] 使用维护的累计值，确保显示准确
+      message: msg.message || `正在采集 ${msg.star} 星评论...`,
+      progress: progress,
+      reviewCount: g_displayCount // 🔥 始终使用最新的已知总数
     });
   } 
 
   // 4. 处理采集完成
   else if (msg.type === 'COLLECTION_COMPLETE') {
     const asin = detectASIN();
-    // [UPDATED] 使用最终的总数（优先使用消息中的值，否则使用累计值）
-    const finalCount = msg.reviewCount !== undefined ? msg.reviewCount : totalCollectedCount;
+    
+    // 🔥 强制更新为最终结果
+    if (msg.reviewCount && typeof msg.reviewCount === 'number') {
+      g_displayCount = msg.reviewCount;
+    }
+
     showOverlay({
       status: msg.success ? 'complete' : 'error',
-      message: msg.success ? `采集完成! 共 ${finalCount} 条` : `失败: ${msg.error}`,
-      reviewCount: finalCount, // [NEW] 确保完成时也显示正确的数量
+      message: msg.success ? `采集完成! 共 ${g_displayCount} 条` : `失败: ${msg.error}`,
+      reviewCount: g_displayCount, // 确保完成态也传这个数
       dashboardUrl: `${CONFIG.DASHBOARD_URL}/products/${asin}`
     });
-    // 重置累计计数器，为下次采集做准备
-    totalCollectedCount = 0;
+    
+    // 注意：不立即重置 g_displayCount，保留显示直到用户关闭面板或开始新的采集
   }
 });
