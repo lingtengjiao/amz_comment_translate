@@ -506,27 +506,42 @@ async function extractReviewsFromTab(tabId) {
 /**
  * Check if there's a next page button and click it
  * Returns true if clicked successfully, false otherwise
+ * 
+ * 修复：等待 DOM 内容真正更新，而不仅仅是页面加载状态
+ * @param {number} tabId - 标签页 ID
+ * @param {object} timing - 速度配置（可选）
  */
-async function clickNextPage(tabId) {
+async function clickNextPage(tabId, timing = {}) {
+  // 使用传入的配置或默认值
+  const pollInterval = timing.domPollInterval || 150;
+  const extraWait = timing.domUpdateExtraWait || 200;
+  const maxWaitTime = 8000; // 最多等待 8 秒（从 10 秒减少）
+  
   try {
     console.log('[ClickNext] Attempting to click next page button...');
     
-    const results = await chrome.scripting.executeScript({
+    // Step 1: 获取当前第一条评论的 ID（用于检测 DOM 变化）
+    const beforeResults = await chrome.scripting.executeScript({
       target: { tabId },
       func: () => {
-        // Find the "Next" button in pagination
+        const firstReview = document.querySelector('[data-hook="review"]');
+        return firstReview ? firstReview.id : null;
+      }
+    });
+    const firstReviewIdBefore = beforeResults[0]?.result;
+    console.log('[ClickNext] First review ID before click:', firstReviewIdBefore);
+    
+    // Step 2: 点击 Next 按钮
+    const clickResults = await chrome.scripting.executeScript({
+      target: { tabId },
+      func: () => {
         const nextLink = document.querySelector('.a-pagination .a-last:not(.a-disabled) a');
         
         if (nextLink) {
           console.log('[Page] Found next page link, clicking...');
-          // Scroll to pagination first
-          nextLink.scrollIntoView({ behavior: 'smooth', block: 'center' });
-          
-          // Wait a bit then click
-          setTimeout(() => {
-            nextLink.click();
-          }, 300);
-          
+          // 使用 instant 而不是 smooth 来加快速度
+          nextLink.scrollIntoView({ behavior: 'instant', block: 'center' });
+          nextLink.click();
           return { success: true, href: nextLink.href };
         } else {
           console.log('[Page] No next page link found');
@@ -535,19 +550,47 @@ async function clickNextPage(tabId) {
       }
     });
     
-    const result = results[0]?.result;
-    console.log('[ClickNext] Result:', result);
+    const clickResult = clickResults[0]?.result;
+    console.log('[ClickNext] Click result:', clickResult);
     
-    if (result?.success) {
-      // Wait for navigation to complete
-      console.log('[ClickNext] Waiting for page navigation...');
-      await new Promise(r => setTimeout(r, 500)); // Wait for click to register
-      await waitForTabLoad(tabId, 45000);
-      console.log('[ClickNext] Navigation complete');
-      return true;
+    if (!clickResult?.success) {
+      return false;
     }
     
-    return false;
+    // Step 3: 等待 DOM 内容变化（轮询检测第一条评论 ID 是否改变）
+    console.log(`[ClickNext] Waiting for DOM update (poll: ${pollInterval}ms)...`);
+    const startTime = Date.now();
+    
+    while (Date.now() - startTime < maxWaitTime) {
+      await new Promise(r => setTimeout(r, pollInterval));
+      
+      try {
+        const afterResults = await chrome.scripting.executeScript({
+          target: { tabId },
+          func: () => {
+            const firstReview = document.querySelector('[data-hook="review"]');
+            return firstReview ? firstReview.id : null;
+          }
+        });
+        const firstReviewIdAfter = afterResults[0]?.result;
+        
+        // 如果第一条评论 ID 变化了，说明内容已更新
+        if (firstReviewIdAfter && firstReviewIdAfter !== firstReviewIdBefore) {
+          const elapsed = Date.now() - startTime;
+          console.log(`[ClickNext] DOM updated in ${elapsed}ms! New ID: ${firstReviewIdAfter}`);
+          // 额外等待确保所有评论加载完成
+          await new Promise(r => setTimeout(r, extraWait));
+          return true;
+        }
+      } catch (e) {
+        // 页面可能正在加载，继续等待
+      }
+    }
+    
+    // 超时了，但点击确实成功了，可能页面内容本来就相同
+    console.log('[ClickNext] Timeout waiting for DOM change, proceeding anyway...');
+    return true;
+    
   } catch (error) {
     console.error('[ClickNext] Error:', error);
     return false;
@@ -582,24 +625,30 @@ async function collectReviewsWithTab(asin, stars, pagesPerStar, mediaType, speed
   let originalTabId = null;
   
   // 根据速度模式设置等待时间
+  // ⚡ 极速模式：激进但不踩红线，依赖 DOM 变化检测而非固定等待
+  // 🛡️ 稳定模式：保守策略，适合长时间大量采集
   const SPEED_CONFIG = {
     fast: {
-      firstPageWait: 2000,      // 首页加载后等待
-      scrollWait: 800,          // 滚动后等待
-      nextPageWait: 1500,       // 后续页面等待
-      pageBetweenMin: 800,      // 页面间最小延迟
-      pageBetweenRandom: 700,   // 页面间随机延迟
-      starBetweenMin: 1000,     // 星级间最小延迟
-      starBetweenRandom: 1000   // 星级间随机延迟
+      firstPageWait: 1500,      // 首页加载后等待（减少500ms）
+      scrollWait: 400,          // 滚动后等待（减少400ms，DOM检测会补充）
+      nextPageWait: 300,        // 后续页面等待（大幅减少，依赖DOM变化检测）
+      pageBetweenMin: 400,      // 页面间最小延迟（减少400ms）
+      pageBetweenRandom: 400,   // 页面间随机延迟（0-400ms随机）
+      starBetweenMin: 600,      // 星级间最小延迟（减少400ms）
+      starBetweenRandom: 600,   // 星级间随机延迟
+      domPollInterval: 150,     // DOM轮询间隔（更快检测）
+      domUpdateExtraWait: 200   // DOM更新后额外等待（减少300ms）
     },
     stable: {
-      firstPageWait: 5000,      // 首页加载后等待
-      scrollWait: 2000,         // 滚动后等待
-      nextPageWait: 3000,       // 后续页面等待
-      pageBetweenMin: 2500,     // 页面间最小延迟
-      pageBetweenRandom: 2000,  // 页面间随机延迟
-      starBetweenMin: 3000,     // 星级间最小延迟
-      starBetweenRandom: 2000   // 星级间随机延迟
+      firstPageWait: 4000,      // 首页加载后等待
+      scrollWait: 1500,         // 滚动后等待
+      nextPageWait: 2500,       // 后续页面等待
+      pageBetweenMin: 2000,     // 页面间最小延迟
+      pageBetweenRandom: 1500,  // 页面间随机延迟
+      starBetweenMin: 2500,     // 星级间最小延迟
+      starBetweenRandom: 1500,  // 星级间随机延迟
+      domPollInterval: 300,     // DOM轮询间隔
+      domUpdateExtraWait: 500   // DOM更新后额外等待
     }
   };
   
@@ -650,6 +699,7 @@ async function collectReviewsWithTab(asin, stars, pagesPerStar, mediaType, speed
       console.log(`[Collector] ----------------------------------------`);
       console.log(`[Collector] Starting star ${star} collection`);
       let consecutiveNoNew = 0;
+      let lastPage = 0; // 跟踪实际扫描的页数
       
       // [NEW] 星级开始时发送初始进度更新
       const starIndex = stars.indexOf(star);
@@ -664,6 +714,7 @@ async function collectReviewsWithTab(asin, stars, pagesPerStar, mediaType, speed
       });
       
       for (let page = 1; page <= pagesPerStar; page++) {
+        lastPage = page; // 更新最后扫描的页数
         if (!collectorTabId) {
           throw new Error('Collection cancelled');
         }
@@ -703,7 +754,7 @@ async function collectReviewsWithTab(asin, stars, pagesPerStar, mediaType, speed
             // Click "Next" button to go to next page (bypass Amazon's anti-bot detection)
             console.log(`[Collector] Page ${page} - Clicking "Next" button...`);
             
-            const clicked = await clickNextPage(collectorTabId);
+            const clicked = await clickNextPage(collectorTabId, timing);
             
             if (!clicked) {
               console.log(`[Collector] Page ${page} - No "Next" button found, star ${star} complete`);
@@ -778,13 +829,15 @@ async function collectReviewsWithTab(asin, stars, pagesPerStar, mediaType, speed
         if (newCount === 0 && reviews.length > 0) {
           consecutiveNoNew++;
           console.log(`[Collector] Page ${page}: All duplicates (${consecutiveNoNew} consecutive)`);
-          if (consecutiveNoNew >= 2) {
-            console.log(`[Collector] Star ${star}: No new reviews for 2 pages, moving to next star`);
+          // 放宽早停条件：连续3页无新评论才停止（之前是2页）
+          if (consecutiveNoNew >= 3) {
+            console.log(`[Collector] Star ${star}: No new reviews for 3 pages, moving to next star`);
             break;
           }
-        } else {
-          consecutiveNoNew = 0;
+        } else if (newCount > 0) {
+          consecutiveNoNew = 0; // 只有真正有新评论时才重置计数器
         }
+        // 如果 reviews.length === 0（页面没有评论），不计入早停计数
 
         // Random delay between pages
         if (page < pagesPerStar) {
@@ -794,19 +847,25 @@ async function collectReviewsWithTab(asin, stars, pagesPerStar, mediaType, speed
         }
       }
 
-      console.log(`[Collector] Star ${star} complete. Total reviews so far: ${allReviews.length}`);
+      // 统计当前星级采集的数量
+      const starReviewCount = allReviews.filter(r => r.rating === star).length;
+      console.log(`[Collector] ========================================`);
+      console.log(`[Collector] Star ${star} complete:`);
+      console.log(`[Collector]   - This star: ${starReviewCount} reviews`);
+      console.log(`[Collector]   - Total so far: ${allReviews.length} reviews`);
+      console.log(`[Collector]   - Pages scanned: ${lastPage}`);
+      console.log(`[Collector] ========================================`);
 
       // [FIXED] 星级完成时发送一次进度更新，确保总数准确
-      const starIndex = stars.indexOf(star);
-      const starProgress = 1.0; // 当前星级已完成
-      const totalProgress = Math.min(Math.round(((starIndex + starProgress) / stars.length) * 100), 99);
+      // starIndex 已在循环开始处声明，直接复用
+      const finalProgress = Math.min(Math.round(((starIndex + 1) / stars.length) * 100), 99);
       
       sendProgress({
         star,
         page: pagesPerStar,
         pagesPerStar,
         totalReviews: allReviews.length, // 🔥 发送最新的总数
-        progress: totalProgress,
+        progress: finalProgress,
         message: `${star} 星采集完成，共 ${allReviews.length} 条评论`
       });
 

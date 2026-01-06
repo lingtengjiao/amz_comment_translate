@@ -1,13 +1,27 @@
 /**
- * VOC-Master Content Script (Optimized Version)
- * * Improvements:
+ * VOC-Master Content Script (Final Fixed Version)
+ * Fixes: "Identifier 'CONFIG' has already been declared" error
+ * 
+ * Improvements:
  * 1. Intelligent CAPTCHA detection
  * 2. Stable Review ID generation (fingerprinting)
  * 3. Human-like random delays
+ * 4. IIFE wrapper to prevent duplicate injection
  */
 
-// Configuration
-const CONFIG = {
+// 立即执行函数 (IIFE) 配合全局锁，防止重复注入崩溃
+(function() {
+  // 1. 防重锁：如果已经初始化过，直接退出，防止 const 重复声明报错
+  if (window.vocMasterInitialized) {
+    console.log('[VOC-Master] Content script already loaded, skipping re-initialization.');
+    return;
+  }
+  window.vocMasterInitialized = true;
+
+  // ================= 核心代码开始 =================
+
+  // Configuration
+  const CONFIG = {
   API_BASE_URL: 'http://localhost:8000/api/v1',
   DASHBOARD_URL: 'http://localhost:3000',
   DELAY_BETWEEN_PAGES: { min: 2000, max: 5000 }, // Increased for safety
@@ -835,3 +849,5 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     // 注意：不立即重置 g_displayCount，保留显示直到用户关闭面板或开始新的采集
   }
 });
+
+})(); // IIFE 结束
