@@ -28,6 +28,7 @@ const STAR_FILTERS = {
 let isCollecting = false;
 let shouldStop = false;
 let overlay = null;
+let totalCollectedCount = 0; // [NEW] 累计采集数量，用于准确显示UI
 
 /**
  * [NEW] Generate a stable hash from a string (djb2 algorithm)
@@ -382,8 +383,9 @@ async function fetchReviewsPage(url) {
 /**
  * [OPTIMIZED] Collect reviews with Concurrency Support
  * Supports 'fast' mode (parallel requests) and 'stable' mode (serial)
+ * [UPDATED] Added onBatchComplete callback to track real-time collection count
  */
-async function collectReviewsByStar(asin, star, maxPages, onProgress, speedMode = 'stable') {
+async function collectReviewsByStar(asin, star, maxPages, onProgress, speedMode = 'stable', onBatchComplete = null) {
   const allReviews = [];
   const seenReviewIds = new Set();
   
@@ -451,6 +453,11 @@ async function collectReviewsByStar(asin, star, maxPages, onProgress, speedMode 
 
       console.log(`[Star ${star}] Batch ${startPage}-${endPage}: Got ${batchNewReviews} new reviews`);
 
+      // [NEW] 通知外层这一批新增了多少条评论
+      if (onBatchComplete && batchNewReviews > 0) {
+        onBatchComplete(batchNewReviews);
+      }
+
       // 4. 熔断机制：如果遇到验证码，立即停止
       if (hasCaptcha) {
         onProgress({ error: '检测到验证码，为了安全已暂停采集。' });
@@ -498,6 +505,7 @@ async function startCollection(config) {
 
   isCollecting = true;
   shouldStop = false;
+  totalCollectedCount = 0; // [NEW] 重置累计计数器
 
   showOverlay({
     status: 'collecting',
@@ -539,7 +547,12 @@ function stopCollection() {
   shouldStop = true;
   isCollecting = false;
   chrome.runtime.sendMessage({ type: 'STOP_COLLECTION' });
-  updateOverlay({ status: 'stopped', message: '已停止采集' });
+  updateOverlay({ 
+    status: 'stopped', 
+    message: '已停止采集',
+    reviewCount: totalCollectedCount // [NEW] 显示已采集的数量
+  });
+  // 注意：不重置 totalCollectedCount，保留显示已采集的数量
 }
 
 // --- UI Overlay Logic (Keep simplified for brevity, full logic assumed) ---
@@ -786,21 +799,35 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     // 简化显示：只显示百分比文本
     const percent = Math.min(Math.round((msg.page / msg.pagesPerStar) * 20 + (msg.star - 1) * 20), 99);
     
+    // [UPDATED] 使用后台传来的 totalReviews，如果存在则更新累计值
+    // 如果后台没有传 totalReviews，则使用我们维护的累计值
+    if (msg.totalReviews !== undefined && msg.totalReviews !== null) {
+      // 如果后台传来的值大于当前累计值，更新累计值（避免倒退）
+      if (msg.totalReviews > totalCollectedCount) {
+        totalCollectedCount = msg.totalReviews;
+      }
+    }
+    
     updateOverlay({
       status: 'collecting',
       message: msg.message,
       progress: percent,
-      reviewCount: msg.totalReviews
+      reviewCount: totalCollectedCount // [FIXED] 使用维护的累计值，确保显示准确
     });
   } 
 
   // 4. 处理采集完成
   else if (msg.type === 'COLLECTION_COMPLETE') {
     const asin = detectASIN();
+    // [UPDATED] 使用最终的总数（优先使用消息中的值，否则使用累计值）
+    const finalCount = msg.reviewCount !== undefined ? msg.reviewCount : totalCollectedCount;
     showOverlay({
       status: msg.success ? 'complete' : 'error',
-      message: msg.success ? `采集完成! 共 ${msg.reviewCount} 条` : `失败: ${msg.error}`,
+      message: msg.success ? `采集完成! 共 ${finalCount} 条` : `失败: ${msg.error}`,
+      reviewCount: finalCount, // [NEW] 确保完成时也显示正确的数量
       dashboardUrl: `${CONFIG.DASHBOARD_URL}/products/${asin}`
     });
+    // 重置累计计数器，为下次采集做准备
+    totalCollectedCount = 0;
   }
 });
