@@ -323,6 +323,7 @@ class SummaryService:
                     "success": False,
                     "report": None,
                     "stats": {
+                        "total_reviews": total_reviews,
                         "context": context_stats,
                         "insight": insight_stats
                     },
@@ -361,10 +362,11 @@ class SummaryService:
                 
                 # 7. 构建 analysis_data (原始统计数据，给前端画图)
                 analysis_data = {
+                    "total_reviews": total_reviews,  # 顶层，符合 ReportStats 接口
                     "context": context_stats,
                     "insight": insight_stats,
                     "meta": {
-                        "total_reviews": total_reviews,
+                        "total_reviews": total_reviews,  # 保留在 meta 中用于兼容
                         "generated_at": datetime.now().isoformat(),
                         "report_type": report_type,
                         "product_asin": product.asin
@@ -414,6 +416,7 @@ class SummaryService:
                     "success": False,
                     "report": None,
                     "stats": {
+                        "total_reviews": total_reviews,
                         "context": context_stats,
                         "insight": insight_stats
                     },
@@ -431,8 +434,8 @@ class SummaryService:
     
     def _format_stats_for_llm(
         self, 
-        context: Dict[str, List[Dict[str, Any]]], 
-        insight: Dict[str, List[Dict[str, Any]]],
+        context: Dict[str, Any], 
+        insight: Dict[str, Any],
         total_reviews: int
     ) -> str:
         """
@@ -447,11 +450,20 @@ class SummaryService:
         - emotion: 情绪预警 -> 客服和公关关注
         """
         
-        # 提取 Top 数据，减少 Token 消耗，同时带上频次
-        def get_fmt(items: List[Dict[str, Any]], max_items: int = 8) -> str:
+        # 提取 Top 数据，减少 Token 消耗，同时带上频次和占比
+        def get_fmt(data: Any, max_items: int = 8) -> str:
+            # 兼容新格式（带 items）和旧格式（直接是列表）
+            if isinstance(data, dict) and 'items' in data:
+                items = data.get('items', [])
+            elif isinstance(data, list):
+                items = data
+            else:
+                return "[]"
+            
             if not items:
                 return "[]"
-            formatted = [f"{x['name']}({x['value']}次)" for x in items[:max_items]]
+            # 格式化为: "老人(45次, 30%)"
+            formatted = [f"{x['name']}({x['value']}次, {x.get('percent', 0)}%)" for x in items[:max_items]]
             return json.dumps(formatted, ensure_ascii=False)
 
         return f"""
@@ -460,28 +472,28 @@ class SummaryService:
 
 === 📊 PART 1: 5W Context (宏观画像) ===
 这里描述了产品的实际使用环境和人群（简单标签）：
-- Who (核心人群): {get_fmt(context.get('who', []))}
-- Where (使用地点): {get_fmt(context.get('where', []))}
-- When (使用时机): {get_fmt(context.get('when', []))}
-- Why (购买动机): {get_fmt(context.get('why', []))}
-- What (用户任务/JTBD): {get_fmt(context.get('what', []))}
+- Who (核心人群): {get_fmt(context.get('who', {}))}
+- Where (使用地点): {get_fmt(context.get('where', {}))}
+- When (使用时机): {get_fmt(context.get('when', {}))}
+- Why (购买动机): {get_fmt(context.get('why', {}))}
+- What (用户任务/JTBD): {get_fmt(context.get('what', {}))}
 
 === 📉 PART 2: Deep Insights (微观洞察 - 5类) ===
 这里是基于 5 类 Insight 的详细分析数据：
 
-1. [Strength - 卖点库]: {get_fmt(insight.get('strength', []))}
+1. [Strength - 卖点库]: {get_fmt(insight.get('strength', {}))}
    *用途：用于撰写 Listing 五点描述和广告文案。*
 
-2. [Weakness - 痛点库]: {get_fmt(insight.get('weakness', []))}
+2. [Weakness - 痛点库]: {get_fmt(insight.get('weakness', {}))}
    *用途：用于产品改进和客服 QA。*
 
-3. [Suggestion - 用户心声]: {get_fmt(insight.get('suggestion', []))}
+3. [Suggestion - 用户心声]: {get_fmt(insight.get('suggestion', {}))}
    *用途：**产品经理请重点关注**，这是用户的直接需求/Feature Request。*
 
-4. [Scenario - 行为故事]: {get_fmt(insight.get('scenario', []))}
+4. [Scenario - 行为故事]: {get_fmt(insight.get('scenario', {}))}
    *用途：用于发现边缘场景（Edge Cases）或营销故事素材。*
 
-5. [Emotion - 情绪预警]: {get_fmt(insight.get('emotion', []))}
+5. [Emotion - 情绪预警]: {get_fmt(insight.get('emotion', {}))}
    *用途：**客服和公关请关注**，识别愤怒或极度满意的用户。*
 
 === 指令 ===
@@ -494,22 +506,49 @@ class SummaryService:
     
     # --- 数据聚合方法 (返回 ECharts 格式) ---
     
-    async def _aggregate_5w_stats(self, product_id: UUID) -> Dict[str, List[Dict[str, Any]]]:
+    def _add_stats_metadata(self, items: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """
+        辅助方法：
+        1. 计算总数 (total_count)
+        2. 计算每项占比 (percent)
+        3. 封装成前端友好的结构
+        
+        Return: {
+            "total_count": 150,
+            "items": [{"name": "老人", "value": 45, "percent": 30.0, "evidence": [...]}]
+        }
+        """
+        total_count = sum(item['value'] for item in items)
+        
+        for item in items:
+            # 计算占比，保留1位小数
+            item['percent'] = round((item['value'] / total_count * 100), 1) if total_count > 0 else 0.0
+        
+        return {
+            "total_count": total_count,  # 该维度的总样本数
+            "items": items               # 已排序的列表 (带 percent)
+        }
+    
+    async def _aggregate_5w_stats(self, product_id: UUID) -> Dict[str, Any]:
         """
         [Traceable] 聚合 5W 数据，包含原文证据锚点
         
         Return: {
-            "who": [
-                {
-                    "name": "老人", 
-                    "value": 45,
-                    "evidence": [
-                        {"review_id": "uuid-1", "quote": "作为老年人...", "rating": 3, "date": "2024-01-15"},
-                        ...
-                    ]
-                }, 
-                ...
-            ], 
+            "who": {
+                "total_count": 150,
+                "items": [
+                    {
+                        "name": "老人", 
+                        "value": 45,
+                        "percent": 30.0,
+                        "evidence": [
+                            {"review_id": "uuid-1", "quote": "作为老年人...", "rating": 3, "date": "2024-01-15"},
+                            ...
+                        ]
+                    }, 
+                    ...
+                ]
+            },
             ...
         }
         """
@@ -539,21 +578,24 @@ class SummaryService:
             name = ""
             quote = ""
             
-            # 新版数据结构：使用 label_name 字段
+                # 新版数据结构：使用 label_name 字段
             if h.label_name:
                 name = h.label_name
-                # 优先使用 quote，否则使用评论原文
-                quote = h.quote or (r.body_original[:80] if r.body_original else "")
+                # 优先使用翻译后的 quote，否则使用原文
+                quote = h.quote_translated or h.quote or (r.body_translated[:80] if r.body_translated else (r.body_original[:80] if r.body_original else ""))
+                quote_original = h.quote or (r.body_original[:80] if r.body_original else "")
             # 兼容旧版数据结构：使用 items 字段
             elif h.items:
                 items_list = h.items if isinstance(h.items, list) else []
                 for item in items_list:
                     if isinstance(item, dict):
                         name = item.get('content') or item.get('tag') or ""
-                        quote = item.get('content_original') or item.get('quote') or (r.body_original[:80] if r.body_original else "")
+                        quote = item.get('content_translated') or item.get('content_original') or item.get('quote') or (r.body_translated[:80] if r.body_translated else (r.body_original[:80] if r.body_original else ""))
+                        quote_original = item.get('content_original') or item.get('quote') or (r.body_original[:80] if r.body_original else "")
                     elif isinstance(item, str):
                         name = item
-                        quote = r.body_original[:80] if r.body_original else ""
+                        quote = r.body_translated[:80] if r.body_translated else (r.body_original[:80] if r.body_original else "")
+                        quote_original = r.body_original[:80] if r.body_original else ""
                     
                     if name:
                         entry = stats[h.theme_type][name]
@@ -562,7 +604,8 @@ class SummaryService:
                         if len(entry["samples"]) < 5:
                             entry["samples"].append({
                                 "review_id": str(r.id),
-                                "quote": quote[:150],  # 限制长度
+                                "quote": quote[:150],  # 限制长度，优先使用翻译
+                                "quote_original": quote_original[:150] if quote_original != quote else None,  # 如果翻译和原文不同，保存原文
                                 "rating": r.rating,
                                 "date": r.review_date.strftime('%Y-%m-%d') if r.review_date else None
                             })
@@ -573,16 +616,19 @@ class SummaryService:
                 entry = stats[h.theme_type][name]
                 entry["count"] += 1
                 if len(entry["samples"]) < 5:
+                    quote_original = h.quote or (r.body_original[:80] if r.body_original else "")
                     entry["samples"].append({
                         "review_id": str(r.id),
-                        "quote": quote[:150],
+                        "quote": quote[:150],  # 优先使用翻译
+                        "quote_original": quote_original[:150] if quote_original != quote else None,  # 如果翻译和原文不同，保存原文
                         "rating": r.rating,
                         "date": r.review_date.strftime('%Y-%m-%d') if r.review_date else None
                     })
         
-        def get_top(theme_key: str, top_n: int = 15) -> List[Dict[str, Any]]:
-            """获取 Top N，包含证据"""
+        def get_top(theme_key: str, top_n: int = 10) -> List[Dict[str, Any]]:
+            """获取 Top N，包含证据 (默认 Top 10，适配小样本)"""
             data = stats.get(theme_key, {})
+            # [关键] 严格倒序 + Top 10
             sorted_items = sorted(data.items(), key=lambda x: x[1]['count'], reverse=True)[:top_n]
             
             return [{
@@ -591,15 +637,16 @@ class SummaryService:
                 "evidence": v["samples"]  # <--- 注入证据
             } for k, v in sorted_items]
         
+        # 返回带 total_count 和 percent 的结构
         return {
-            "who": get_top(ThemeType.WHO.value if hasattr(ThemeType, 'WHO') else "who"),
-            "where": get_top(ThemeType.WHERE.value if hasattr(ThemeType, 'WHERE') else "where"),
-            "when": get_top(ThemeType.WHEN.value if hasattr(ThemeType, 'WHEN') else "when"),
-            "why": get_top(ThemeType.WHY.value if hasattr(ThemeType, 'WHY') else "why"),
-            "what": get_top(ThemeType.WHAT.value if hasattr(ThemeType, 'WHAT') else "what")
+            "who": self._add_stats_metadata(get_top(ThemeType.WHO.value if hasattr(ThemeType, 'WHO') else "who")),
+            "where": self._add_stats_metadata(get_top(ThemeType.WHERE.value if hasattr(ThemeType, 'WHERE') else "where")),
+            "when": self._add_stats_metadata(get_top(ThemeType.WHEN.value if hasattr(ThemeType, 'WHEN') else "when")),
+            "why": self._add_stats_metadata(get_top(ThemeType.WHY.value if hasattr(ThemeType, 'WHY') else "why")),
+            "what": self._add_stats_metadata(get_top(ThemeType.WHAT.value if hasattr(ThemeType, 'WHAT') else "what"))
         }
     
-    async def _aggregate_insight_stats(self, product_id: UUID) -> Dict[str, List[Dict[str, Any]]]:
+    async def _aggregate_insight_stats(self, product_id: UUID) -> Dict[str, Any]:
         """
         [Traceable] 聚合 5 类 Insight 数据，包含原文证据锚点
         
@@ -611,17 +658,21 @@ class SummaryService:
         - emotion: 强烈情感洞察
         
         Return: {
-            "strength": [
-                {
-                    "name": "电池续航", 
-                    "value": 30,
-                    "evidence": [
-                        {"review_id": "uuid-1", "quote": "电池能用很久...", "analysis": "用户称赞续航", "rating": 5},
-                        ...
-                    ]
-                }, 
-                ...
-            ],
+            "strength": {
+                "total_count": 80,
+                "items": [
+                    {
+                        "name": "电池续航", 
+                        "value": 30,
+                        "percent": 37.5,
+                        "evidence": [
+                            {"review_id": "uuid-1", "quote": "电池能用很久...", "analysis": "用户称赞续航", "rating": 5},
+                            ...
+                        ]
+                    }, 
+                    ...
+                ]
+            },
             ...
         }
         """
@@ -663,19 +714,22 @@ class SummaryService:
             # 只保留前 5 条作为直接证据
             if len(entry["samples"]) < 5:
                 # 优先使用翻译后的引用
-                quote = i.quote_translated or i.quote or (r.body_original[:100] if r.body_original else "")
+                quote = i.quote_translated or i.quote or (r.body_translated[:100] if r.body_translated else (r.body_original[:100] if r.body_original else ""))
+                quote_original = i.quote or (r.body_original[:100] if r.body_original else "")
                 
                 entry["samples"].append({
                     "review_id": str(r.id),
-                    "quote": quote[:150],  # 限制长度
+                    "quote": quote[:150],  # 限制长度，优先使用翻译
+                    "quote_original": quote_original[:150] if quote_original != quote else None,  # 如果翻译和原文不同，保存原文
                     "analysis": i.analysis[:100] if i.analysis else None,  # AI 对单条的分析
                     "rating": r.rating,
                     "sentiment": r.sentiment if hasattr(r, 'sentiment') else None
                 })
         
-        def get_top(itype: str, top_n: int = 15) -> List[Dict[str, Any]]:
-            """获取 Top N，包含证据"""
+        def get_top(itype: str, top_n: int = 10) -> List[Dict[str, Any]]:
+            """获取 Top N，包含证据 (默认 Top 10，适配小样本)"""
             data = stats.get(itype, {})
+            # [关键] 严格倒序 + Top 10
             sorted_items = sorted(data.items(), key=lambda x: x[1]['count'], reverse=True)[:top_n]
             
             return [{
@@ -684,13 +738,13 @@ class SummaryService:
                 "evidence": v["samples"]  # <--- 注入证据
             } for k, v in sorted_items]
         
-        # 返回所有 5 个类型的数据
+        # 返回所有 5 个类型的数据，带 total_count 和 percent
         return {
-            "strength": get_top("strength"),
-            "weakness": get_top("weakness"),
-            "suggestion": get_top("suggestion"),
-            "scenario": get_top("scenario"),
-            "emotion": get_top("emotion")
+            "strength": self._add_stats_metadata(get_top("strength")),
+            "weakness": self._add_stats_metadata(get_top("weakness")),
+            "suggestion": self._add_stats_metadata(get_top("suggestion")),
+            "scenario": self._add_stats_metadata(get_top("scenario")),
+            "emotion": self._add_stats_metadata(get_top("emotion"))
         }
     
     # --- 报告查询方法 ---
@@ -797,31 +851,42 @@ class SummaryService:
         """
         stats = await self._aggregate_5w_stats(product_id)
         
-        def fmt_top(items: List[Dict[str, Any]], top_n: int = 5) -> str:
+        # 辅助函数：从新格式中提取 items 列表
+        def get_items(data: Any) -> List[Dict[str, Any]]:
+            if isinstance(data, dict) and 'items' in data:
+                return data.get('items', [])
+            elif isinstance(data, list):
+                return data
+            else:
+                return []
+        
+        def fmt_top(data: Any, top_n: int = 5) -> str:
+            items = get_items(data)
             if not items:
                 return "无"
             return ", ".join([f"{x['name']}({x['value']})" for x in items[:top_n]])
         
-        def get_list(items: List[Dict[str, Any]], top_n: int = 10) -> List[Dict[str, Any]]:
+        def get_list(data: Any, top_n: int = 10) -> List[Dict[str, Any]]:
+            items = get_items(data)
             return [{"name": x['name'], "count": x['value']} for x in items[:top_n]]
         
         # 合并 Where 和 When 为 Scene
-        where_str = fmt_top(stats.get('where', []))
-        when_str = fmt_top(stats.get('when', []))
+        where_str = fmt_top(stats.get('where', {}))
+        when_str = fmt_top(stats.get('when', {}))
         
         formatted_stats = {
-            "who": fmt_top(stats.get('who', [])),
+            "who": fmt_top(stats.get('who', {})),
             "scene": f"{where_str} / {when_str}",
-            "why": fmt_top(stats.get('why', [])),
-            "what": fmt_top(stats.get('what', []))
+            "why": fmt_top(stats.get('why', {})),
+            "what": fmt_top(stats.get('what', {}))
         }
         
         lists = {
-            "who": get_list(stats.get('who', [])),
-            "where": get_list(stats.get('where', [])),
-            "when": get_list(stats.get('when', [])),
-            "why": get_list(stats.get('why', [])),
-            "what": get_list(stats.get('what', []))
+            "who": get_list(stats.get('who', {})),
+            "where": get_list(stats.get('where', {})),
+            "when": get_list(stats.get('when', {})),
+            "why": get_list(stats.get('why', {})),
+            "what": get_list(stats.get('what', {}))
         }
         
         return formatted_stats, lists

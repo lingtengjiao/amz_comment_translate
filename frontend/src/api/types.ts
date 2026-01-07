@@ -468,7 +468,8 @@ export const REPORT_TYPE_CONFIG: Record<ReportType, { label: string; description
 /** 证据样本 (用于溯源) */
 export interface EvidenceSample {
   review_id: string;
-  quote: string;
+  quote: string;  // 优先显示翻译后的内容
+  quote_original?: string;  // 原文（如果与翻译不同）
   rating?: number;
   date?: string;
   analysis?: string;
@@ -479,25 +480,51 @@ export interface EvidenceSample {
 export interface ChartDataItem {
   name: string;
   value: number;
+  percent?: number;  // 占比百分比 (Top 10 扩容新增)
   evidence?: EvidenceSample[];  // 证据锚点
 }
 
-/** 5类洞察数据 (ECharts 格式) */
-export interface InsightChartData {
-  strength: ChartDataItem[];
-  weakness: ChartDataItem[];
-  suggestion: ChartDataItem[];
-  scenario: ChartDataItem[];
-  emotion: ChartDataItem[];
+/** 统计分类数据 (带 total_count 和 items) - Top 10 新格式 */
+export interface StatsCategoryData {
+  total_count: number;  // 该维度的总样本数
+  items: ChartDataItem[];  // Top 10 列表（带 percent）
 }
 
-/** 5W Context 数据 (ECharts 格式) */
+/** 5类洞察数据 (ECharts 格式) - 支持新旧两种格式 */
+export interface InsightChartData {
+  strength: ChartDataItem[] | StatsCategoryData;
+  weakness: ChartDataItem[] | StatsCategoryData;
+  suggestion: ChartDataItem[] | StatsCategoryData;
+  scenario: ChartDataItem[] | StatsCategoryData;
+  emotion: ChartDataItem[] | StatsCategoryData;
+}
+
+/** 5W Context 数据 (ECharts 格式) - 支持新旧两种格式 */
 export interface ContextChartData {
-  who: ChartDataItem[];
-  where: ChartDataItem[];
-  when: ChartDataItem[];
-  why: ChartDataItem[];
-  what: ChartDataItem[];
+  who: ChartDataItem[] | StatsCategoryData;
+  where: ChartDataItem[] | StatsCategoryData;
+  when: ChartDataItem[] | StatsCategoryData;
+  why: ChartDataItem[] | StatsCategoryData;
+  what: ChartDataItem[] | StatsCategoryData;
+}
+
+/** 辅助函数：判断是否为新格式 */
+export function isStatsCategoryData(data: ChartDataItem[] | StatsCategoryData): data is StatsCategoryData {
+  return data && typeof data === 'object' && 'items' in data && 'total_count' in data;
+}
+
+/** 辅助函数：获取 items 列表（兼容新旧格式） */
+export function getStatsItems(data: ChartDataItem[] | StatsCategoryData | undefined): ChartDataItem[] {
+  if (!data) return [];
+  if (isStatsCategoryData(data)) return data.items;
+  return data;
+}
+
+/** 辅助函数：获取 total_count（兼容新旧格式） */
+export function getStatsTotalCount(data: ChartDataItem[] | StatsCategoryData | undefined): number {
+  if (!data) return 0;
+  if (isStatsCategoryData(data)) return data.total_count;
+  return data.reduce((sum, item) => sum + item.value, 0);
 }
 
 /** 报告统计数据 */

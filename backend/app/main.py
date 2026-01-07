@@ -17,6 +17,7 @@ from app.core.config import settings
 from app.db.session import init_db
 from app.api.reviews import router as reviews_router
 from app.api.reviews import products_router, tasks_router
+from app.api.analysis import router as analysis_router
 
 # Configure logging
 logging.basicConfig(
@@ -103,6 +104,7 @@ async def health_check():
 app.include_router(reviews_router, prefix="/api/v1")
 app.include_router(products_router, prefix="/api/v1")
 app.include_router(tasks_router, prefix="/api/v1")
+app.include_router(analysis_router, prefix="/api/v1")
 
 
 # Error handlers

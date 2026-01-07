@@ -10,7 +10,7 @@
  * 支持证据溯源 (Traceability):
  * - 点击带 source_tag 的观点，可查看原始评论证据
  */
-import { memo, useMemo, useState, useCallback, createContext, useContext } from 'react';
+import { memo, useMemo, useState, useCallback, useRef, useEffect, createContext, useContext } from 'react';
 import {
   Target,
   TrendingUp,
@@ -32,7 +32,9 @@ import {
   Shield,
   Clock,
   FileText,
-  Search
+  Search,
+  Copy,
+  Check
 } from 'lucide-react';
 import type { 
   ReportType,
@@ -44,8 +46,9 @@ import type {
   ChartDataItem,
   EvidenceSample
 } from '@/api/types';
-import { REPORT_TYPE_CONFIG } from '@/api/types';
+import { REPORT_TYPE_CONFIG, getStatsItems } from '@/api/types';
 import { EvidenceDrawer } from './EvidenceDrawer';
+import { StatsDashboard } from './StatsDashboard';
 
 // 证据上下文 - 用于在子组件中访问 analysisData
 interface EvidenceContextType {
@@ -59,11 +62,22 @@ const EvidenceContext = createContext<EvidenceContextType>({
   openEvidence: () => {}
 });
 
+// 大纲上下文 - 用于收集所有板块标题
+interface TocContextType {
+  registerSection: (id: string, title: string, level?: number) => void;
+}
+
+export const TocContext = createContext<TocContextType>({
+  registerSection: () => {}
+});
+
 interface JsonReportRendererProps {
   content: string;
   reportType: ReportType;
   analysisData?: ReportStats | null;  // 原始统计数据，用于溯源
   asin?: string;  // 产品 ASIN，用于跳转
+  onSectionsChange?: (sections: Array<{ id: string; title: string; level?: number }>) => void;  // 大纲变化回调
+  onDrawerStateChange?: (isOpen: boolean) => void;  // 证据抽屉状态变化回调
 }
 
 // 安全解析 JSON
@@ -150,14 +164,22 @@ const Card = memo(function Card({
   icon: Icon, 
   children, 
   className = '',
-  variant = 'default'
+  variant = 'default',
+  id,
+  level = 0
 }: { 
   title: string; 
   icon?: typeof Target; 
   children: React.ReactNode;
   className?: string;
   variant?: 'default' | 'success' | 'danger' | 'warning' | 'info';
+  id?: string;
+  level?: number;
 }) {
+  const [copied, setCopied] = useState(false);
+  const cardRef = useRef<HTMLDivElement>(null);
+  const { registerSection } = useContext(TocContext);
+
   const variantStyles = {
     default: 'bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700',
     success: 'bg-emerald-50 dark:bg-emerald-900/20 border-emerald-200 dark:border-emerald-800',
@@ -166,11 +188,65 @@ const Card = memo(function Card({
     info: 'bg-blue-50 dark:bg-blue-900/20 border-blue-200 dark:border-blue-800'
   };
 
+  // 移除 title 中的 emoji，只保留文字
+  const cleanTitle = title.replace(/^[\u{1F300}-\u{1F9FF}]+\s*/u, '').trim() || title;
+  
+  // 生成 ID（如果没有提供）
+  const cardId = useMemo(() => {
+    if (id) return id;
+    const baseId = cleanTitle.toLowerCase().replace(/\s+/g, '-').replace(/[^\w-]/g, '');
+    // 确保 ID 不为空且有效
+    return baseId ? `section-${baseId}` : `section-${Math.random().toString(36).substr(2, 9)}`;
+  }, [id, cleanTitle]);
+  
+  // 注册到大纲（延迟注册，确保 DOM 已渲染）
+  useEffect(() => {
+    if (registerSection && cardRef.current) {
+      // 使用 requestAnimationFrame 确保 DOM 已渲染
+      const timer = requestAnimationFrame(() => {
+        registerSection(cardId, cleanTitle, level);
+      });
+      return () => cancelAnimationFrame(timer);
+    }
+  }, [cardId, cleanTitle, level, registerSection]);
+
+  const handleCopy = useCallback(async () => {
+    if (!cardRef.current) return;
+    
+    // 获取卡片的文本内容
+    const textContent = cardRef.current.innerText || '';
+    
+    try {
+      await navigator.clipboard.writeText(textContent);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch (err) {
+      console.error('Failed to copy:', err);
+    }
+  }, []);
+
   return (
-    <div className={`rounded-lg border p-4 ${variantStyles[variant]} ${className}`}>
-      <div className="flex items-center gap-2 mb-3">
-        {Icon && <Icon className="size-5 text-gray-600 dark:text-gray-400" />}
-        <h3 className="font-semibold text-gray-900 dark:text-white">{title}</h3>
+    <div 
+      id={cardId}
+      ref={cardRef} 
+      className={`rounded-lg border p-4 ${variantStyles[variant]} ${className} relative scroll-mt-24`}
+    >
+      <div className="flex items-center justify-between mb-3">
+        <div className="flex items-center gap-2">
+          {Icon && <Icon className="size-5 text-gray-600 dark:text-gray-400" />}
+          <h3 className="font-semibold text-gray-900 dark:text-white">{cleanTitle}</h3>
+        </div>
+        <button
+          onClick={handleCopy}
+          className="flex items-center justify-center w-7 h-7 rounded-md hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"
+          title="复制内容"
+        >
+          {copied ? (
+            <Check className="size-4 text-emerald-600 dark:text-emerald-400" />
+          ) : (
+            <Copy className="size-4" />
+          )}
+        </button>
       </div>
       {children}
     </div>
@@ -258,7 +334,7 @@ const UserProfileCard = memo(function UserProfileCard({
   const summary = profile.persona_insight || profile.unmet_expectations || profile.environmental_requirements;
   
   return (
-    <Card title="👤 用户画像分析 (5W)" icon={Users} variant="info">
+    <Card title="👤 用户画像5w概况" icon={Users} variant="info">
       <div className="space-y-4">
         {/* 核心用户 */}
         {coreUsers && (
@@ -1081,10 +1157,65 @@ export const JsonReportRenderer = memo(function JsonReportRenderer({
   content,
   reportType,
   analysisData,
-  asin
+  asin,
+  onSectionsChange,
+  onDrawerStateChange
 }: JsonReportRendererProps) {
   const parsedContent = useMemo(() => safeParseJson(content), [content]);
   const config = REPORT_TYPE_CONFIG[reportType];
+  
+  // 收集所有板块标题
+  const [sections, setSections] = useState<Array<{ id: string; title: string; level: number }>>([]);
+  
+  // 注册板块的函数（使用 ref 避免重复注册）
+  const sectionsRef = useRef<Map<string, { id: string; title: string; level: number }>>(new Map());
+  const updateTimerRef = useRef<number | null>(null);
+  
+  const registerSection = useCallback((id: string, title: string, level: number = 0) => {
+    const existing = sectionsRef.current.get(id);
+    // 如果内容相同，不更新
+    if (existing && existing.title === title && existing.level === level) {
+      return;
+    }
+    
+    sectionsRef.current.set(id, { id, title, level });
+    
+    // 防抖更新，避免频繁渲染
+    if (updateTimerRef.current) {
+      clearTimeout(updateTimerRef.current);
+    }
+    
+    updateTimerRef.current = window.setTimeout(() => {
+      setSections(Array.from(sectionsRef.current.values()));
+      updateTimerRef.current = null;
+    }, 100);
+  }, []);
+  
+  // 当内容变化时，清空 sections
+  useEffect(() => {
+    sectionsRef.current.clear();
+    setSections([]);
+    if (updateTimerRef.current) {
+      clearTimeout(updateTimerRef.current);
+      updateTimerRef.current = null;
+    }
+  }, [content]);
+  
+  // 当 sections 变化时，通知父组件
+  useEffect(() => {
+    if (onSectionsChange && sections.length > 0) {
+      onSectionsChange(sections);
+    }
+  }, [sections, onSectionsChange]);
+  
+  // 清理定时器
+  useEffect(() => {
+    return () => {
+      if (updateTimerRef.current) {
+        clearTimeout(updateTimerRef.current);
+      }
+    };
+  }, []);
   
   // 证据抽屉状态
   const [evidenceDrawer, setEvidenceDrawer] = useState<{
@@ -1135,6 +1266,13 @@ export const JsonReportRenderer = memo(function JsonReportRenderer({
   const closeEvidence = useCallback(() => {
     setEvidenceDrawer(prev => ({ ...prev, isOpen: false }));
   }, []);
+  
+  // 当抽屉状态变化时，通知父组件
+  useEffect(() => {
+    if (onDrawerStateChange) {
+      onDrawerStateChange(evidenceDrawer.isOpen);
+    }
+  }, [evidenceDrawer.isOpen, onDrawerStateChange]);
 
   if (!parsedContent) {
     return (
@@ -1153,9 +1291,30 @@ export const JsonReportRenderer = memo(function JsonReportRenderer({
     );
   }
 
+  // 处理从 StatsDashboard 查看证据
+  const handleViewEvidenceFromDashboard = useCallback((title: string, evidence: EvidenceSample[], totalCount: number) => {
+    setEvidenceDrawer({
+      isOpen: true,
+      title,
+      evidence,
+      totalCount,
+      sourceType: 'insight',
+      category: ''
+    });
+  }, []);
+
   return (
-    <EvidenceContext.Provider value={{ analysisData: analysisData || null, asin, openEvidence }}>
-      <div>
+    <TocContext.Provider value={{ registerSection }}>
+      <EvidenceContext.Provider value={{ analysisData: analysisData || null, asin, openEvidence }}>
+        <div>
+        {/* 基础统计看板（硬数据）- 在 AI 分析之前展示 */}
+        {analysisData && (
+          <StatsDashboard 
+            analysisData={analysisData}
+            onViewEvidence={handleViewEvidenceFromDashboard}
+          />
+        )}
+        
         {/* 报告类型标题 */}
         <div className="mb-6 p-4 bg-gradient-to-r from-emerald-50 to-blue-50 dark:from-emerald-900/20 dark:to-blue-900/20 rounded-lg border border-emerald-200 dark:border-emerald-800">
           <div className="flex items-center gap-3">
@@ -1199,7 +1358,8 @@ export const JsonReportRenderer = memo(function JsonReportRenderer({
         sourceCategory={evidenceDrawer.category}
         asin={asin}
       />
-    </EvidenceContext.Provider>
+      </EvidenceContext.Provider>
+    </TocContext.Provider>
   );
 });
 

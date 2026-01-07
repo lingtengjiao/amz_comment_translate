@@ -1,10 +1,10 @@
 import { useNavigate } from 'react-router-dom';
 import { useState, useCallback, useEffect } from 'react';
-import { TaskCard } from './TaskCard';
+import { UnifiedProductCard } from './UnifiedProductCard';
 import { TaskListHeader } from './TaskListHeader';
 import { DimensionSetupDialog } from './DimensionSetupDialog';
-import { apiService, transformProductsToTasks } from '@/api';
-import type { Task } from '@/api/types';
+import { apiService } from '@/api';
+import type { ApiProduct } from '@/api/types';
 import { toast } from 'sonner';
 
 function EmptyState() {
@@ -45,13 +45,13 @@ function ErrorState({ error, onRetry }: { error: string; onRetry: () => void }) 
 
 export function TaskList() {
   const navigate = useNavigate();
-  const [tasks, setTasks] = useState<Task[]>([]);
+  const [products, setProducts] = useState<ApiProduct[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   
   // 维度设置对话框状态
   const [dimensionDialogOpen, setDimensionDialogOpen] = useState(false);
-  const [selectedTask, setSelectedTask] = useState<Task | null>(null);
+  const [selectedProduct, setSelectedProduct] = useState<ApiProduct | null>(null);
   const [checkingDimensions, setCheckingDimensions] = useState(false);
 
   const fetchTasks = useCallback(async () => {
@@ -59,8 +59,7 @@ export function TaskList() {
     setError(null);
     try {
       const response = await apiService.getProducts();
-      const transformedTasks = transformProductsToTasks(response.products);
-      setTasks(transformedTasks);
+      setProducts(response.products || []);
     } catch (err) {
       console.error('Failed to fetch tasks:', err);
       setError(err instanceof Error ? err.message : '获取任务列表失败');
@@ -74,13 +73,13 @@ export function TaskList() {
   }, [fetchTasks]);
 
   // 检查是否有维度，如果没有则显示对话框
-  const handleViewReviews = useCallback(async (taskId: string) => {
-    const task = tasks.find(t => t.id === taskId);
-    if (!task) return;
+  const handleViewReviews = useCallback(async (productId: string) => {
+    const product = products.find(p => p.id === productId);
+    if (!product) return;
     
     // 如果没有评论，直接进入
-    if (task.reviewCount === 0) {
-      navigate(`/reader/${task.asin}`);
+    if (product.total_reviews === 0) {
+      navigate(`/reader/${product.asin}`);
       return;
     }
     
@@ -88,32 +87,32 @@ export function TaskList() {
     
     try {
       // 检查是否已有维度
-      const dimensionsResponse = await apiService.getDimensions(task.asin);
+      const dimensionsResponse = await apiService.getDimensions(product.asin);
       
       if (dimensionsResponse.total > 0) {
         // 已有维度，直接进入
-        navigate(`/reader/${task.asin}`);
+        navigate(`/reader/${product.asin}`);
       } else {
         // 没有维度，显示设置对话框
-        setSelectedTask(task);
+        setSelectedProduct(product);
         setDimensionDialogOpen(true);
       }
     } catch (err) {
       console.error('Failed to check dimensions:', err);
       // 检查失败时，仍然允许进入（兼容旧数据）
       toast.warning('无法检查分析框架状态，将直接进入');
-      navigate(`/reader/${task.asin}`);
+      navigate(`/reader/${product.asin}`);
     } finally {
       setCheckingDimensions(false);
     }
-  }, [navigate, tasks]);
+  }, [navigate, products]);
   
   // 维度生成完成后进入产品详情
   const handleDimensionComplete = useCallback(() => {
-    if (selectedTask) {
-      navigate(`/reader/${selectedTask.asin}`);
+    if (selectedProduct) {
+      navigate(`/reader/${selectedProduct.asin}`);
     }
-  }, [navigate, selectedTask]);
+  }, [navigate, selectedProduct]);
 
   return (
     <div className="min-h-screen bg-white transition-colors">
@@ -127,16 +126,17 @@ export function TaskList() {
           <LoadingState />
         ) : error ? (
           <ErrorState error={error} onRetry={fetchTasks} />
-        ) : tasks.length === 0 ? (
+        ) : products.length === 0 ? (
           <EmptyState />
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {tasks.map(task => (
-              <TaskCard
-                key={task.id}
-                task={task}
-                onClick={() => handleViewReviews(task.id)}
-                isLoading={checkingDimensions && selectedTask?.id === task.id}
+            {products.map(product => (
+              <UnifiedProductCard
+                key={product.id}
+                product={product}
+                mode="view"
+                onClick={() => handleViewReviews(product.id)}
+                isLoading={checkingDimensions && selectedProduct?.id === product.id}
               />
             ))}
           </div>
@@ -144,13 +144,13 @@ export function TaskList() {
       </main>
       
       {/* 维度设置对话框 */}
-      {selectedTask && (
+      {selectedProduct && (
         <DimensionSetupDialog
           open={dimensionDialogOpen}
           onOpenChange={setDimensionDialogOpen}
-          asin={selectedTask.asin}
-          productTitle={selectedTask.title}
-          reviewCount={selectedTask.reviewCount}
+          asin={selectedProduct.asin}
+          productTitle={selectedProduct.title_translated || selectedProduct.title || selectedProduct.asin}
+          reviewCount={selectedProduct.total_reviews}
           onComplete={handleDimensionComplete}
         />
       )}

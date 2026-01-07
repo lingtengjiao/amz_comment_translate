@@ -5,7 +5,7 @@
  * - /report/B0CYT6D2ZS - 显示该产品的最新报告
  * - /report/B0CYT6D2ZS/xxx-xxx-xxx - 显示指定 ID 的报告
  */
-import { useState, useEffect, memo, useMemo } from 'react';
+import { useState, useEffect, memo, useMemo, Component, ErrorInfo, ReactNode } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import { 
   FileText, 
@@ -27,11 +27,13 @@ import {
   getLatestReport, 
   getReportById, 
   getReportHistory,
-  generateReport 
+  generateReport,
+  getProductStats
 } from '@/api/service';
-import type { ProductReport, ReportType } from '@/api/types';
+import type { ProductReport, ReportType, ApiProduct } from '@/api/types';
 import { REPORT_TYPE_CONFIG } from '@/api/types';
 import { JsonReportRenderer } from './JsonReportRenderer';
+import { TableOfContents } from './TableOfContents';
 
 // Markdown 渲染组件
 const MarkdownRenderer = memo(function MarkdownRenderer({ content }: { content: string }) {
@@ -151,12 +153,55 @@ function isJsonContent(content: string): boolean {
   }
 }
 
+// 简单的错误边界组件
+class ErrorBoundary extends Component<{ children: ReactNode }, { hasError: boolean; error?: Error }> {
+  constructor(props: { children: ReactNode }) {
+    super(props);
+    this.state = { hasError: false };
+  }
+
+  static getDerivedStateFromError(error: Error) {
+    return { hasError: true, error };
+  }
+
+  componentDidCatch(error: Error, errorInfo: ErrorInfo) {
+    console.error('Report render error:', error, errorInfo);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="p-6 bg-red-50 dark:bg-red-900/20 rounded-lg border border-red-200 dark:border-red-800">
+          <div className="flex items-center gap-2 text-red-700 dark:text-red-400 mb-2">
+            <AlertCircle className="size-5" />
+            <span className="font-medium">报告渲染出错</span>
+          </div>
+          <p className="text-sm text-gray-700 dark:text-gray-300 mb-2">
+            {this.state.error?.message || '未知错误'}
+          </p>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => this.setState({ hasError: false, error: undefined })}
+          >
+            重试
+          </Button>
+        </div>
+      );
+    }
+
+    return this.props.children;
+  }
+}
+
 export function ReportPage() {
   const { asin, reportId } = useParams<{ asin: string; reportId?: string }>();
   const navigate = useNavigate();
   
   const [report, setReport] = useState<ProductReport | null>(null);
   const [reportHistory, setReportHistory] = useState<ProductReport[]>([]);
+  const [product, setProduct] = useState<ApiProduct | null>(null);
+  const [reportSections, setReportSections] = useState<Array<{ id: string; title: string; level?: number }>>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isGenerating, setIsGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -164,6 +209,7 @@ export function ReportPage() {
   const [showHistory, setShowHistory] = useState(false);
   const [generatingReportType, setGeneratingReportType] = useState<ReportType>('comprehensive');
   const [showTypeSelector, setShowTypeSelector] = useState(false);
+  const [isDrawerOpen, setIsDrawerOpen] = useState(false); // 证据抽屉是否打开
   
   // 判断当前报告是否为 JSON 格式
   const isJsonReport = useMemo(() => {
@@ -184,17 +230,16 @@ export function ReportPage() {
     setError(null);
     
     try {
-      let loadedReport: ProductReport;
-      
-      if (reportId) {
-        // 加载指定 ID 的报告
-        loadedReport = await getReportById(asin, reportId);
-      } else {
-        // 加载最新报告
-        loadedReport = await getLatestReport(asin);
-      }
+      // 并行加载报告和产品信息
+      const [loadedReport, productStats] = await Promise.all([
+        reportId ? getReportById(asin, reportId) : getLatestReport(asin),
+        getProductStats(asin).catch(() => null) // 忽略产品信息加载错误
+      ]);
       
       setReport(loadedReport);
+      if (productStats) {
+        setProduct(productStats.product);
+      }
       
       // 同时加载历史报告列表
       try {
@@ -369,10 +414,71 @@ export function ReportPage() {
   
   // 报告展示
   return (
-    <div className="min-h-screen bg-white dark:bg-gray-900 print:bg-white">
+    <>
+      {/* 打印样式 */}
+      <style>{`
+        @media print {
+          @page {
+            margin: 2cm;
+            size: A4;
+          }
+          
+          body {
+            background: white !important;
+            color: black !important;
+          }
+          
+          /* 隐藏所有交互元素 */
+          button, a, .print\\:hidden {
+            display: none !important;
+          }
+          
+          /* 优化打印字体和间距 */
+          * {
+            color: black !important;
+            background: white !important;
+          }
+          
+          /* 确保图表和卡片在打印时正常显示 */
+          .bg-gray-50, .bg-gray-100, .bg-white {
+            background: white !important;
+          }
+          
+          /* 优化进度条在打印时的显示 */
+          .bg-blue-500, .bg-purple-500, .bg-orange-500, 
+          .bg-pink-500, .bg-cyan-500, .bg-emerald-500,
+          .bg-red-500, .bg-amber-500, .bg-indigo-500, .bg-rose-500 {
+            background: #e5e7eb !important;
+            -webkit-print-color-adjust: exact;
+            print-color-adjust: exact;
+          }
+          
+          /* 确保边框在打印时可见 */
+          .border-gray-200, .border-gray-300 {
+            border-color: #d1d5db !important;
+          }
+          
+          /* 优化间距 */
+          .mb-8, .mb-10, .mb-12 {
+            margin-bottom: 1.5rem !important;
+          }
+          
+          .p-8, .p-10 {
+            padding: 1rem !important;
+          }
+          
+          /* 避免分页时断开重要内容 */
+          .stats-dashboard, .card {
+            page-break-inside: avoid;
+            break-inside: avoid;
+          }
+        }
+      `}</style>
+      
+      <div className="min-h-screen bg-white dark:bg-gray-900 print:bg-white">
       {/* 顶部导航栏 - 打印时隐藏 */}
       <header className="sticky top-0 z-50 bg-white/95 dark:bg-gray-900/95 backdrop-blur border-b border-gray-200 dark:border-gray-800 print:hidden">
-        <div className="max-w-5xl mx-auto px-4 py-3 flex items-center justify-between">
+        <div className="max-w-[1700px] mx-auto px-8 py-4 flex items-center justify-between">
           <div className="flex items-center gap-4">
             <Link to={`/reader/${asin}`} className="text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200">
               <ArrowLeft className="size-5" />
@@ -468,7 +574,7 @@ export function ReportPage() {
         {/* 历史报告下拉 */}
         {showHistory && reportHistory.length > 0 && (
           <div className="absolute top-full left-0 right-0 bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 shadow-lg">
-            <div className="max-w-5xl mx-auto px-4 py-3">
+            <div className="max-w-[1700px] mx-auto px-8 py-4">
               <h3 className="text-sm font-medium text-gray-500 dark:text-gray-400 mb-2">历史报告</h3>
               <div className="space-y-1 max-h-64 overflow-y-auto">
                 {reportHistory.map((r) => {
@@ -492,7 +598,9 @@ export function ReportPage() {
                               {typeConfig.label}
                             </span>
                             <span>{formatDate(r.created_at)}</span>
-                            {r.analysis_data?.total_reviews && <span>{r.analysis_data.total_reviews} 条评论</span>}
+                            {(r.analysis_data?.total_reviews || (r.analysis_data as any)?.meta?.total_reviews) && (
+                              <span>{(r.analysis_data?.total_reviews || (r.analysis_data as any)?.meta?.total_reviews)} 条评论</span>
+                            )}
                           </div>
                         </div>
                       </div>
@@ -506,76 +614,134 @@ export function ReportPage() {
       </header>
       
       {/* 报告内容 */}
-      <main className="max-w-4xl mx-auto px-4 py-8 print:py-0 print:max-w-none">
-        {/* 报告元信息 */}
-        {report && (
-          <>
-            <div className="mb-8 print:mb-4">
-              <div className="flex items-start gap-4 mb-3">
-                {/* 报告类型图标 */}
-                {report.report_type && REPORT_TYPE_CONFIG[report.report_type as ReportType] && (
-                  <span className="text-4xl">
-                    {REPORT_TYPE_CONFIG[report.report_type as ReportType].icon}
-                  </span>
-                )}
-                <div className="flex-1">
-                  <h1 className="text-3xl font-bold text-gray-900 dark:text-white print:text-2xl">
-                    {report.title || '产品深度洞察报告'}
-                  </h1>
-                  {report.report_type && REPORT_TYPE_CONFIG[report.report_type as ReportType] && (
-                    <p className="text-gray-500 dark:text-gray-400 mt-1">
-                      {REPORT_TYPE_CONFIG[report.report_type as ReportType].description}
-                    </p>
+      <main className="max-w-[1700px] mx-auto px-8 py-12 print:max-w-none print:px-12 print:py-8">
+        <div className="xl:grid xl:grid-cols-[260px_minmax(0,1fr)_260px] xl:gap-10">
+          {/* 左侧大纲（大屏） */}
+          <aside className="hidden xl:block print:hidden">
+            {/* 留白：大纲使用 fixed 固定在视口，不放在流内，避免随页面滚动 */} 
+          </aside>
+
+          {/* 中间报告主体 */}
+          <div className="min-w-0">
+            {/* 产品信息卡片 */}
+            {product && (
+              <div className="mb-8 print:mb-6 bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-6 print:border-gray-300 print:p-4">
+                <div className="flex items-start gap-6 print:gap-4">
+                  {/* 产品图片 */}
+                  {product.image_url && (
+                    <img
+                      src={product.image_url}
+                      alt={product.title_translated || product.title || '产品图片'}
+                      className="w-32 h-32 object-contain rounded-lg border border-gray-200 dark:border-gray-700 flex-shrink-0 print:w-24 print:h-24"
+                    />
                   )}
+                  {/* 产品信息 */}
+                  <div className="flex-1 min-w-0">
+                    <h2 className="text-2xl font-bold text-gray-900 dark:text-white mb-2 print:text-xl print:mb-1">
+                      {product.title_translated || product.title || '产品标题'}
+                    </h2>
+                    <div className="flex flex-wrap items-center gap-4 text-sm text-gray-500 dark:text-gray-400 print:gap-3 print:text-xs">
+                      <span className="px-3 py-1 bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-400 rounded-md text-xs font-medium print:px-2 print:py-0.5">
+                        ASIN: {product.asin}
+                      </span>
+                      {product.average_rating > 0 && (
+                        <span className="flex items-center gap-1.5">
+                          <span className="text-yellow-500">★</span>
+                          {product.average_rating.toFixed(1)} 分
+                        </span>
+                      )}
+                      {product.total_reviews > 0 && (
+                        <span>{product.total_reviews.toLocaleString()} 条评论</span>
+                      )}
+                      {product.price && (
+                        <span className="font-medium text-gray-700 dark:text-gray-300">{product.price}</span>
+                      )}
+                    </div>
+                  </div>
                 </div>
               </div>
-              <div className="flex flex-wrap items-center gap-4 text-sm text-gray-500 dark:text-gray-400">
-                {report.report_type && REPORT_TYPE_CONFIG[report.report_type as ReportType] && (
-                  <span className="px-2 py-0.5 bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400 rounded text-xs font-medium">
-                    {REPORT_TYPE_CONFIG[report.report_type as ReportType].label}
-                  </span>
-                )}
-                <span className="flex items-center gap-1.5">
-                  <Calendar className="size-4" />
-                  {formatDate(report.created_at)}
-                </span>
-                {report.analysis_data?.total_reviews && (
-                  <span className="flex items-center gap-1.5">
-                    <BarChart3 className="size-4" />
-                    基于 {report.analysis_data.total_reviews} 条评论分析
-                  </span>
-                )}
-                <span className="px-2 py-0.5 bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-400 rounded text-xs">
-                  ASIN: {asin}
-                </span>
-              </div>
-            </div>
-            
-            {/* 报告内容 - 根据格式选择渲染器 */}
-            <div className="bg-gray-50 dark:bg-gray-800/50 rounded-xl p-8 print:bg-white print:p-0 print:rounded-none">
-              {isJsonReport ? (
-                <JsonReportRenderer 
-                  content={report.content} 
-                  reportType={(report.report_type as ReportType) || 'comprehensive'}
-                  analysisData={report.analysis_data}
-                  asin={asin}
-                />
-              ) : (
-                <MarkdownRenderer content={report.content} />
-              )}
-            </div>
-            
-            {/* 底部信息 */}
-            <div className="mt-8 pt-6 border-t border-gray-200 dark:border-gray-700 text-center text-sm text-gray-500 dark:text-gray-400 print:hidden">
-              <p>报告 ID: {report.id}</p>
-              <p className="mt-1">
-                此报告由 AI 自动生成，基于用户评论数据分析
-              </p>
-            </div>
-          </>
+            )}
+
+            {/* 报告元信息 */}
+            {report && (
+              <>
+                <div className="mb-10 print:mb-6">
+                  <div className="flex items-start gap-6 mb-4 print:gap-4 print:mb-3">
+                    {/* 报告类型图标 */}
+                    {report.report_type && REPORT_TYPE_CONFIG[report.report_type as ReportType] && (
+                      <span className="text-5xl print:text-3xl">
+                        {REPORT_TYPE_CONFIG[report.report_type as ReportType].icon}
+                      </span>
+                    )}
+                    <div className="flex-1">
+                      <h1 className="text-4xl font-bold text-gray-900 dark:text-white mb-2 print:text-2xl print:mb-1">
+                        {report.title || '产品深度洞察报告'}
+                      </h1>
+                      {report.report_type && REPORT_TYPE_CONFIG[report.report_type as ReportType] && (
+                        <p className="text-lg text-gray-500 dark:text-gray-400 print:text-sm">
+                          {REPORT_TYPE_CONFIG[report.report_type as ReportType].description}
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-6 text-sm text-gray-500 dark:text-gray-400 print:gap-4 print:text-xs">
+                    {report.report_type && REPORT_TYPE_CONFIG[report.report_type as ReportType] && (
+                      <span className="px-3 py-1 bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400 rounded-md text-xs font-medium print:px-2 print:py-0.5">
+                        {REPORT_TYPE_CONFIG[report.report_type as ReportType].label}
+                      </span>
+                    )}
+                    <span className="flex items-center gap-2 print:gap-1.5">
+                      <Calendar className="size-4 print:size-3" />
+                      {formatDate(report.created_at)}
+                    </span>
+                    {(report.analysis_data?.total_reviews || (report.analysis_data as any)?.meta?.total_reviews) && (
+                      <span className="flex items-center gap-2 print:gap-1.5">
+                        <BarChart3 className="size-4 print:size-3" />
+                        基于 {report.analysis_data?.total_reviews || (report.analysis_data as any)?.meta?.total_reviews} 条评论分析
+                      </span>
+                    )}
+                    <span className="px-3 py-1 bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-400 rounded-md text-xs font-medium print:px-2 print:py-0.5">
+                      ASIN: {asin}
+                    </span>
+                  </div>
+                </div>
+
+                {/* 报告内容 - 根据格式选择渲染器 */}
+                <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-sm border border-gray-200 dark:border-gray-700 p-10 print:bg-white print:p-0 print:rounded-none print:shadow-none print:border-0">
+                  {isJsonReport ? (
+                    <ErrorBoundary>
+                      <JsonReportRenderer 
+                        content={report.content} 
+                        reportType={(report.report_type as ReportType) || 'comprehensive'}
+                        analysisData={report.analysis_data}
+                        asin={asin}
+                        onSectionsChange={setReportSections}
+                        onDrawerStateChange={setIsDrawerOpen}
+                      />
+                    </ErrorBoundary>
+                  ) : (
+                    <MarkdownRenderer content={report.content} />
+                  )}
+                </div>
+              </>
+            )}
+          </div>
+
+          {/* 右侧对称留白列 */}
+          <aside className="hidden xl:block print:hidden" />
+        </div>
+
+        {/* 左侧固定大纲（仅 JSON 报告，且大屏显示；打印隐藏） */}
+        {isJsonReport && reportSections.length > 0 && (
+          <TableOfContents 
+            sections={reportSections} 
+            className="print:hidden"
+            isDrawerOpen={isDrawerOpen}
+          />
         )}
       </main>
     </div>
+    </>
   );
 }
 

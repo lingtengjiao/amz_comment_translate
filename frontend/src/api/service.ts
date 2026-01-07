@@ -771,6 +771,187 @@ export async function checkTasksHealth(
   return response.json();
 }
 
+// ============== 对比分析相关 ==============
+
+/**
+ * 创建对比分析项目
+ */
+export async function createAnalysisProject(params: {
+  title: string;
+  description?: string;
+  products: Array<{ product_id: string; role_label?: string }>;
+  auto_run?: boolean;
+}): Promise<{
+  success: boolean;
+  message: string;
+  project?: {
+    id: string;
+    title: string;
+    status: string;
+    created_at: string;
+  };
+  error?: string;
+}> {
+  const { auto_run = true, ...body } = params;
+  const url = `${API_BASE}/analysis/projects${auto_run ? '?auto_run=true' : '?auto_run=false'}`;
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!response.ok) {
+    const errorText = await response.text();
+    let message = response.statusText;
+    try {
+      const errorJson = JSON.parse(errorText);
+      message = errorJson.detail || errorJson.message || message;
+    } catch {
+      message = errorText || message;
+    }
+    throw new ApiError(response.status, message);
+  }
+  return response.json();
+}
+
+/**
+ * 获取分析项目列表
+ */
+export async function getAnalysisProjects(params?: {
+  limit?: number;
+  offset?: number;
+  status?: string;
+}): Promise<{
+  success: boolean;
+  total: number;
+  projects: Array<{
+    id: string;
+    title: string;
+    status: string;
+    created_at: string;
+    items: Array<{
+      id: string;
+      product_id: string;
+      role_label?: string;
+      product?: {
+        id: string;
+        asin: string;
+        title: string;
+        image_url?: string;
+      };
+    }>;
+  }>;
+}> {
+  const searchParams = new URLSearchParams();
+  if (params?.limit) searchParams.set('limit', params.limit.toString());
+  if (params?.offset) searchParams.set('offset', params.offset.toString());
+  if (params?.status) searchParams.set('status', params.status);
+  
+  const query = searchParams.toString();
+  const url = `${API_BASE}/analysis/projects${query ? `?${query}` : ''}`;
+  const response = await fetch(url);
+  if (!response.ok) {
+    throw new ApiError(response.status, response.statusText);
+  }
+  return response.json();
+}
+
+/**
+ * 获取分析项目详情
+ */
+export async function getAnalysisProject(projectId: string): Promise<{
+  id: string;
+  title: string;
+  description?: string;
+  analysis_type: string;
+  status: string;
+  result_content?: any;
+  raw_data_snapshot?: any;
+  error_message?: string;
+  created_at: string;
+  updated_at?: string;
+  items: Array<{
+    id: string;
+    product_id: string;
+    role_label?: string;
+    product?: {
+      id: string;
+      asin: string;
+      title: string;
+      image_url?: string;
+    };
+  }>;
+}> {
+  const response = await fetch(`${API_BASE}/analysis/projects/${projectId}`);
+  if (!response.ok) {
+    throw new ApiError(response.status, response.statusText);
+  }
+  return response.json();
+}
+
+/**
+ * 触发分析任务
+ */
+export async function triggerAnalysis(projectId: string): Promise<{
+  success: boolean;
+  message: string;
+  project_id: string;
+  status: string;
+}> {
+  const response = await fetch(`${API_BASE}/analysis/projects/${projectId}/run`, {
+    method: 'POST',
+  });
+  if (!response.ok) {
+    throw new ApiError(response.status, response.statusText);
+  }
+  return response.json();
+}
+
+/**
+ * 删除分析项目
+ */
+export async function deleteAnalysisProject(projectId: string): Promise<{
+  success: boolean;
+  message: string;
+}> {
+  const response = await fetch(`${API_BASE}/analysis/projects/${projectId}`, {
+    method: 'DELETE',
+  });
+  if (!response.ok) {
+    throw new ApiError(response.status, response.statusText);
+  }
+  return response.json();
+}
+
+/**
+ * 获取对比预览数据
+ */
+export async function getComparisonPreview(productIds: string[]): Promise<{
+  success: boolean;
+  products: Record<string, {
+    product: {
+      id: string;
+      asin: string;
+      title: string;
+      image_url?: string;
+    };
+    total_reviews: number;
+    context: any;
+    insight: any;
+  }>;
+  can_compare: boolean;
+  error?: string;
+}> {
+  const response = await fetch(`${API_BASE}/analysis/preview`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ product_ids: productIds }),
+  });
+  if (!response.ok) {
+    throw new ApiError(response.status, response.statusText);
+  }
+  return response.json();
+}
+
 // ============== 导出服务对象 ==============
 
 const apiService = {
@@ -832,6 +1013,14 @@ const apiService = {
   getLatestReport,
   getReportById,
   deleteReport,
+  
+  // 对比分析
+  createAnalysisProject,
+  getAnalysisProjects,
+  getAnalysisProject,
+  triggerAnalysis,
+  deleteAnalysisProject,
+  getComparisonPreview,
 };
 
 export default apiService;

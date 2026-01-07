@@ -66,7 +66,7 @@ async def init_db():
     Safe to call multiple times (tables won't be recreated if they exist).
     """
     # Import all models to register them with Base
-    from app.models import Product, Review, Task  # noqa
+    from app.models import Product, Review, Task, AnalysisProject, AnalysisProjectItem  # noqa
     
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
