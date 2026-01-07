@@ -1186,7 +1186,15 @@ export const JsonReportRenderer = memo(function JsonReportRenderer({
     }
     
     updateTimerRef.current = window.setTimeout(() => {
-      setSections(Array.from(sectionsRef.current.values()));
+      const sectionsArray = Array.from(sectionsRef.current.values());
+      // 确保"数据概览"始终排在第一位
+      const dataOverview = sectionsArray.find(s => s.id === 'data-overview');
+      const otherSections = sectionsArray.filter(s => s.id !== 'data-overview');
+      // 如果存在"数据概览"，放在第一位；其他项保持原顺序
+      const sortedSections = dataOverview 
+        ? [dataOverview, ...otherSections]
+        : sectionsArray;
+      setSections(sortedSections);
       updateTimerRef.current = null;
     }, 100);
   }, []);
