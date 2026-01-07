@@ -69,7 +69,7 @@ services:
       dockerfile: Dockerfile
     container_name: voc-worker
     restart: unless-stopped
-    command: celery -A app.worker worker --loglevel=info --concurrency=2 -Q translation,celery
+    command: celery -A app.worker worker --loglevel=info --concurrency=8 -Q translation,celery
     environment:
       - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-vocmaster}:${POSTGRES_PASSWORD:-vocmaster123}@db-postgres:5432/${POSTGRES_DB:-vocmaster}
       - REDIS_URL=redis://db-redis:6379/0

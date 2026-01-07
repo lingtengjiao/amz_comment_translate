@@ -444,7 +444,7 @@ def task_process_reviews(self, product_id: str, task_id: str):
                 logger.debug(f"Translated review {review.id}: {review.rating} stars")
                 
                 # Rate limiting: wait between API calls
-                time.sleep(0.5)
+                time.sleep(0.2)
                 
             except Exception as e:
                 logger.error(f"Failed to translate review {review.id}: {e}", exc_info=True)
@@ -684,7 +684,7 @@ def task_extract_insights(self, product_id: str):
                 processed += 1
                 
                 # Rate limiting
-                time.sleep(0.5)
+                time.sleep(0.2)
                 
             except Exception as e:
                 logger.error(f"Failed to extract insights for review {review.id}: {e}")
@@ -973,7 +973,7 @@ def task_extract_themes(self, product_id: str):
                     update_task_heartbeat(db, str(task_record.id), processed_items=processed)
                 
                 # Rate limiting
-                time.sleep(0.5)
+                time.sleep(0.2)
                 
             except Exception as e:
                 logger.error(f"Failed to extract themes for review {review.id}: {e}")
