@@ -10,6 +10,7 @@ CREATE TABLE IF NOT EXISTS products (
     title VARCHAR(500),
     image_url TEXT,
     marketplace VARCHAR(20) DEFAULT 'US',
+    average_rating VARCHAR(10),  -- Real average rating from Amazon product page
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
@@ -117,7 +118,23 @@ CREATE TRIGGER update_tasks_updated_at
     FOR EACH ROW
     EXECUTE FUNCTION update_updated_at_column();
 
--- Add is_pinned, is_hidden, and is_deleted columns if they don't exist (for existing databases)
+-- Add missing columns if they don't exist (for existing databases)
+
+-- Add average_rating to products table
+DO $$ 
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 
+        FROM information_schema.columns 
+        WHERE table_name='products' 
+        AND column_name='average_rating'
+    ) THEN
+        ALTER TABLE products ADD COLUMN average_rating VARCHAR(10) NULL;
+        COMMENT ON COLUMN products.average_rating IS 'Real average rating from Amazon product page';
+    END IF;
+END $$;
+
+-- Add is_pinned, is_hidden, and is_deleted columns to reviews table
 DO $$ 
 BEGIN
     IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='reviews' AND column_name='is_pinned') THEN

@@ -527,9 +527,15 @@ import type {
  * 生成产品分析报告（AI 深度分析，自动持久化）
  * 需要 30-60 秒，因为需要调用 AI 进行深度分析
  * 报告会自动存入数据库，支持历史回溯
+ * 
+ * @param asin - 产品 ASIN
+ * @param reportType - 报告类型: comprehensive(综合版), operations(运营版), product(产品版), supply_chain(供应链版)
  */
-export async function generateReport(asin: string): Promise<ApiReportCreateResponse> {
-  const response = await fetch(`${API_BASE}/products/${asin}/report/generate`, {
+export async function generateReport(
+  asin: string, 
+  reportType: string = 'comprehensive'
+): Promise<ApiReportCreateResponse> {
+  const response = await fetch(`${API_BASE}/products/${asin}/report/generate?report_type=${reportType}`, {
     method: 'POST',
   });
   if (!response.ok) {
@@ -570,9 +576,21 @@ export async function getReportPreview(asin: string): Promise<ApiReportPreviewRe
 /**
  * 获取产品的历史报告列表
  * 按创建时间倒序排列
+ * 
+ * @param asin - 产品 ASIN
+ * @param limit - 返回数量限制
+ * @param reportType - 可选，按报告类型筛选
  */
-export async function getReportHistory(asin: string, limit: number = 10): Promise<ApiReportListResponse> {
-  const response = await fetch(`${API_BASE}/products/${asin}/reports?limit=${limit}`);
+export async function getReportHistory(
+  asin: string, 
+  limit: number = 10,
+  reportType?: string
+): Promise<ApiReportListResponse> {
+  let url = `${API_BASE}/products/${asin}/reports?limit=${limit}`;
+  if (reportType) {
+    url += `&report_type=${reportType}`;
+  }
+  const response = await fetch(url);
   if (!response.ok) {
     const errorText = await response.text();
     let message = response.statusText;
@@ -695,6 +713,58 @@ export async function exportReviewsByAsin(
  */
 export async function getTaskStatus(taskId: string): Promise<ApiTask> {
   const response = await fetch(`${API_BASE}/tasks/${taskId}`);
+  if (!response.ok) {
+    throw new ApiError(response.status, response.statusText);
+  }
+  return response.json();
+}
+
+/**
+ * 任务健康检查响应类型
+ */
+export interface TaskHealthResponse {
+  product_id: string;
+  asin: string;
+  tasks: Array<{
+    id: string;
+    task_type: string;
+    status: string;
+    total_items: number;
+    processed_items: number;
+    progress_percentage: number;
+    last_heartbeat: string | null;
+    heartbeat_timeout_seconds: number;
+    is_timeout: boolean;
+    error_message: string | null;
+    created_at: string | null;
+    updated_at: string | null;
+  }>;
+  has_timeout: boolean;
+  timeout_count: number;
+  recovered_tasks: Array<{
+    task_type: string;
+    action: string;
+    error?: string;
+  }>;
+}
+
+/**
+ * 检查产品任务健康状态
+ * 
+ * 功能：
+ * 1. 返回所有任务的状态和心跳信息
+ * 2. 检测心跳超时的任务
+ * 3. 自动触发超时任务的恢复（可选）
+ * 
+ * @param asin 产品 ASIN
+ * @param autoRecover 是否自动恢复超时任务（默认 true）
+ */
+export async function checkTasksHealth(
+  asin: string,
+  autoRecover: boolean = true
+): Promise<TaskHealthResponse> {
+  const url = `${API_BASE}/products/${asin}/tasks/health?auto_recover=${autoRecover}`;
+  const response = await fetch(url);
   if (!response.ok) {
     throw new ApiError(response.status, response.statusText);
   }

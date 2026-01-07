@@ -399,6 +399,123 @@ async def get_task_status(
     )
 
 
+@products_router.get("/{asin}/tasks/health")
+async def check_product_tasks_health(
+    asin: str,
+    auto_recover: bool = True,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    检查产品的所有后台任务健康状态。
+    
+    功能：
+    1. 返回所有任务的状态和心跳信息
+    2. 检测心跳超时的任务
+    3. 自动触发超时任务的恢复（可选）
+    
+    Args:
+        asin: 产品 ASIN
+        auto_recover: 是否自动恢复超时任务（默认 True）
+    
+    Returns:
+        {
+            "tasks": [...],           # 所有任务状态
+            "has_timeout": bool,      # 是否有超时任务
+            "recovered_tasks": [...]  # 已触发恢复的任务
+        }
+    """
+    from sqlalchemy import select
+    from app.models.product import Product
+    from app.models.task import Task, TaskStatus, TaskType
+    from app.worker import task_extract_themes, task_extract_insights
+    import logging
+    
+    logger = logging.getLogger(__name__)
+    
+    # 获取产品
+    result = await db.execute(
+        select(Product).where(Product.asin == asin)
+    )
+    product = result.scalar_one_or_none()
+    
+    if not product:
+        raise HTTPException(status_code=404, detail="Product not found")
+    
+    # 获取所有任务
+    tasks_result = await db.execute(
+        select(Task).where(Task.product_id == product.id)
+    )
+    tasks = tasks_result.scalars().all()
+    
+    task_list = []
+    timeout_tasks = []
+    recovered_tasks = []
+    
+    for task in tasks:
+        is_timeout = task.is_heartbeat_timeout
+        
+        task_info = {
+            "id": str(task.id),
+            "task_type": task.task_type,
+            "status": task.status,
+            "total_items": task.total_items,
+            "processed_items": task.processed_items,
+            "progress_percentage": task.progress_percentage,
+            "last_heartbeat": task.last_heartbeat.isoformat() if task.last_heartbeat else None,
+            "heartbeat_timeout_seconds": task.heartbeat_timeout_seconds,
+            "is_timeout": is_timeout,
+            "error_message": task.error_message,
+            "created_at": task.created_at.isoformat() if task.created_at else None,
+            "updated_at": task.updated_at.isoformat() if task.updated_at else None,
+        }
+        task_list.append(task_info)
+        
+        if is_timeout:
+            timeout_tasks.append(task)
+            
+            # 自动恢复
+            if auto_recover:
+                try:
+                    # 标记任务为超时
+                    task.status = TaskStatus.TIMEOUT.value
+                    task.error_message = f"心跳超时，自动触发恢复"
+                    await db.commit()
+                    
+                    # 根据任务类型触发恢复
+                    if task.task_type == TaskType.THEMES.value:
+                        task_extract_themes.delay(str(product.id))
+                        recovered_tasks.append({
+                            "task_type": task.task_type,
+                            "action": "triggered_retry"
+                        })
+                        logger.info(f"自动恢复主题提取任务: {task.id}")
+                        
+                    elif task.task_type == TaskType.INSIGHTS.value:
+                        task_extract_insights.delay(str(product.id))
+                        recovered_tasks.append({
+                            "task_type": task.task_type,
+                            "action": "triggered_retry"
+                        })
+                        logger.info(f"自动恢复洞察提取任务: {task.id}")
+                        
+                except Exception as e:
+                    logger.error(f"自动恢复任务失败: {e}")
+                    recovered_tasks.append({
+                        "task_type": task.task_type,
+                        "action": "failed",
+                        "error": str(e)
+                    })
+    
+    return {
+        "product_id": str(product.id),
+        "asin": asin,
+        "tasks": task_list,
+        "has_timeout": len(timeout_tasks) > 0,
+        "timeout_count": len(timeout_tasks),
+        "recovered_tasks": recovered_tasks
+    }
+
+
 @products_router.post("/{asin}/translate", response_model=IngestResponse)
 async def trigger_translation(
     asin: str,
@@ -1173,24 +1290,30 @@ async def delete_context_label(
 @products_router.post("/{asin}/report/generate", response_model=ProductReportCreateResponse)
 async def generate_product_report(
     asin: str,
+    report_type: str = Query(
+        default="comprehensive",
+        description="报告类型: comprehensive(综合版), operations(运营版), product(产品版), supply_chain(供应链版)"
+    ),
     db: AsyncSession = Depends(get_db)
 ):
     """
-    生成产品分析报告并持久化存储（Report Generation）。
+    生成指定类型的产品分析报告并持久化存储（Report Generation）。
     
     这是智能报告生成模块的核心接口，它会：
     1. **数据聚合**: 从数据库中聚合 5W (Who/Where/When/Why/What) 和维度洞察数据
     2. **统计画像**: 计算 Top N 人群、场景、动机、痛点、爽点等
-    3. **AI 撰写**: 将结构化数据填入 Prompt，调用 LLM 生成 Markdown 格式的战略报告
+    3. **AI 撰写**: 根据报告类型使用不同的角色化 Prompt，生成 JSON 格式的结构化报告
     4. **持久化存储**: 报告自动存入数据库，支持历史回溯
     
-    报告内容包括：
-    - 执行摘要 (Executive Summary)
-    - 用户与场景画像 (User & Context)
-    - 致命痛点与改进建议 (Critical Issues)
-    - 产品亮点与爽点 (Key Strengths)
-    - 营销卖点重构建议 (Marketing Strategy)
-    - 数据附录 (Data Appendix)
+    **支持四种报告类型（四位一体决策中台）：**
+    - `comprehensive`: CEO/综合战略版 - 全局战略视角，SWOT分析，各部门指令
+    - `operations`: CMO/运营市场版 - 卖点挖掘，广告定位，差评话术
+    - `product`: CPO/产品研发版 - 质量评分，缺陷分析，迭代建议
+    - `supply_chain`: 供应链/质检版 - 材质问题，包装优化，QC清单
+    
+    **输出格式：**
+    - `content`: JSON 格式的 AI 结构化分析结果（用于渲染卡片、列表等）
+    - `analysis_data`: 原始统计数据（用于 ECharts/Recharts 图表）
     
     **前置条件：**
     - 产品需要有至少 10 条已翻译的评论
@@ -1201,6 +1324,16 @@ async def generate_product_report(
     from sqlalchemy import select
     from app.models.product import Product
     from app.services.summary_service import SummaryService
+    from app.models.report import ReportType
+    
+    # 验证报告类型
+    valid_types = [ReportType.COMPREHENSIVE.value, ReportType.OPERATIONS.value, 
+                   ReportType.PRODUCT.value, ReportType.SUPPLY_CHAIN.value]
+    if report_type not in valid_types:
+        raise HTTPException(
+            status_code=400, 
+            detail=f"无效的报告类型。支持的类型: {', '.join(valid_types)}"
+        )
     
     # Get product
     product_result = await db.execute(
@@ -1214,7 +1347,11 @@ async def generate_product_report(
     summary_service = SummaryService(db)
     
     try:
-        result = await summary_service.generate_report(product.id, save_to_db=True)
+        result = await summary_service.generate_report(
+            product.id, 
+            report_type=report_type,
+            save_to_db=True
+        )
         
         if result["success"]:
             logger.info(f"成功为产品 {asin} 生成分析报告并存入数据库")
@@ -1297,6 +1434,8 @@ async def get_report_preview(
             has_existing_report=result.get("has_existing_report", False),
             latest_report_id=result.get("latest_report_id"),
             latest_report_date=result.get("latest_report_date"),
+            latest_report_type=result.get("latest_report_type"),
+            report_counts=result.get("report_counts"),
             error=result.get("error")
         )
         
@@ -1309,15 +1448,23 @@ async def get_report_preview(
 async def get_product_reports(
     asin: str,
     limit: int = 10,
+    report_type: Optional[str] = Query(
+        default=None,
+        description="按类型筛选: comprehensive, operations, product, supply_chain"
+    ),
     db: AsyncSession = Depends(get_db)
 ):
     """
-    获取产品的历史报告列表。
+    获取产品的历史报告列表（支持按类型筛选）。
     
     返回该产品所有生成过的报告，按创建时间倒序排列。
+    
+    **筛选参数：**
+    - `report_type`: 可选，按报告类型筛选 (comprehensive/operations/product/supply_chain)
+    
     可用于：
     1. 对比不同时期的报告，看痛点是否解决
-    2. 查看历史分析报告
+    2. 查看特定类型的历史报告
     3. 快速打开之前的报告（秒开）
     """
     from sqlalchemy import select
@@ -1336,7 +1483,11 @@ async def get_product_reports(
     summary_service = SummaryService(db)
     
     try:
-        reports = await summary_service.get_report_history(product.id, limit=limit)
+        reports = await summary_service.get_report_history(
+            product.id, 
+            limit=limit,
+            report_type=report_type
+        )
         
         report_responses = [
             ProductReportResponse(

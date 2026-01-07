@@ -124,7 +124,7 @@ DIMENSION_DISCOVERY_PROMPT = """你是一位资深的产品经理和用户研究
 请只输出 JSON，不要有其他解释文字。"""
 
 
-# [NEW] 动态维度提取 Prompt (用于执行)
+# [UPDATED] 动态维度提取 Prompt - 5类洞察系统
 INSIGHT_EXTRACTION_PROMPT_DYNAMIC = """# Role
 亚马逊评论深度分析师
 
@@ -139,13 +139,31 @@ INSIGHT_EXTRACTION_PROMPT_DYNAMIC = """# Role
 请只使用以下维度进行归类。如果内容完全不属于以下任何维度，请归类为 "其他"。
 {schema_str}
 
-# Requirements
-请仔细阅读评论，提取以下类型的洞察：
-- **weakness（痛点）**: 用户不满意的地方
-- **strength（爽点）**: 用户满意的地方  
-- **scenario（使用场景）**: 用户如何使用产品
-- **suggestion（用户建议）**: 用户的改进建议
-- **emotion（情感表达）**: 用户的整体情感态度
+# 5类洞察类型定义 (CRITICAL - 请严格区分)
+请将评论拆解为具体的洞察点，并归类为以下 5 种类型之一：
+
+1. **strength (产品优势/卖点)**: 用户明确表扬的功能或体验。
+   - 示例: "吸力非常强劲"、"续航比预期长"、"外观漂亮"
+   - 用途: 提炼为 Listing 卖点
+
+2. **weakness (改进空间/痛点)**: 用户吐槽的缺陷、Bug 或不满。
+   - 示例: "电池续航太短了"、"塑料感强"、"噪音太大"
+   - 用途: 产品改进依据
+
+3. **suggestion (用户建议/Feature Request)**: 用户主动提出的改进建议或期望功能。
+   - 示例: "如果能加个LED灯就好了"、"希望增加定时功能"
+   - 用途: 产品经理直接需求来源
+
+4. **scenario (具体使用场景/行为故事)**: 描述**具体的**使用过程或行为故事。
+   - 示例: "我试图用来清理车库的锯末，但是吸嘴被堵住了"、"给宝宝用着非常方便，晚上喂奶时一键开启"
+   - ⚠️ 重要区别：与5W标签（Where/When）不同！
+     - 5W标签是**简单名词**: "卧室"、"厨房"、"早上"
+     - scenario是**动态行为描述**: "在厨房做饭时试图清理面粉"
+   - 如果只是简单的地点/时间名词，**不要**提取为 scenario
+
+5. **emotion (强烈情感洞察)**: 用户表达的强烈情绪（愤怒/惊喜/失望/感动）。
+   - 示例: "我对此感到极其失望"、"这是我买过最好的东西"、"后悔没早点买"
+   - 用途: 运营团队情绪预警、好评素材
 
 # Output Format (JSON Array)
 [
@@ -154,7 +172,8 @@ INSIGHT_EXTRACTION_PROMPT_DYNAMIC = """# Role
     "dimension": "从上述维度中选择一个", 
     "quote": "原文引用", 
     "quote_translated": "引用翻译",
-    "analysis": "简要分析" 
+    "analysis": "简要分析",
+    "sentiment": "positive/negative/neutral"
   }}
 ]
 
@@ -165,10 +184,11 @@ INSIGHT_EXTRACTION_PROMPT_DYNAMIC = """# Role
 4. 对于简短的负面评论（如"Terrible"），提取为 weakness 类型。
 5. 提取要"颗粒度细"，不要笼统地说"质量不好"，要说"塑料感强"或"按键松动"。
 6. 绝对不要返回空数组 []，至少要有1个洞察。
+7. scenario 必须是**具体的行为描述**，不能是简单的地点/时间名词。
 """
 
 
-# [UPDATED] Insight extraction prompt with Chain of Thought (CoT)
+# [UPDATED] Insight extraction prompt - 5类洞察系统 (无维度 Schema 版本)
 INSIGHT_EXTRACTION_PROMPT = """# Role
 亚马逊评论深度分析师
 
@@ -179,18 +199,31 @@ INSIGHT_EXTRACTION_PROMPT = """# Role
 原文: {original_text}
 译文: {translated_text}
 
-# Requirements
-请仔细阅读评论，提取以下类型的洞察：
-- **weakness（痛点）**: 用户不满意的地方
-- **strength（爽点）**: 用户满意的地方  
-- **scenario（使用场景）**: 用户如何使用产品
-- **suggestion（用户建议）**: 用户的改进建议
-- **emotion（情感表达）**: 用户的整体情感态度
+# 5类洞察类型定义 (CRITICAL - 请严格区分)
+请将评论拆解为具体的洞察点，并归类为以下 5 种类型之一：
 
-对于每一个洞察点，请遵循以下步骤思考：
-1. 定位原文中的关键表达。
-2. 判断它属于哪个维度（如：整体满意度、产品质量、使用体验、物流服务、性价比等）。
-3. 用简练的中文总结价值。
+1. **strength (产品优势/卖点)**: 用户明确表扬的功能或体验。
+   - 示例: "吸力非常强劲"、"续航比预期长"
+   - 用途: 提炼为 Listing 卖点
+
+2. **weakness (改进空间/痛点)**: 用户吐槽的缺陷、Bug 或不满。
+   - 示例: "电池续航太短了"、"塑料感强"
+   - 用途: 产品改进依据
+
+3. **suggestion (用户建议/Feature Request)**: 用户主动提出的改进建议或期望功能。
+   - 示例: "如果能加个LED灯就好了"
+   - 用途: 产品经理直接需求来源
+
+4. **scenario (具体使用场景/行为故事)**: 描述**具体的**使用过程或行为故事。
+   - 示例: "我试图用来清理车库的锯末，但是吸嘴被堵住了"
+   - ⚠️ 重要：不要和简单的地点/时间名词混淆！
+
+5. **emotion (强烈情感洞察)**: 用户表达的强烈情绪。
+   - 示例: "我对此感到极其失望"、"这是我买过最好的东西"
+   - 用途: 运营团队情绪预警
+
+# 维度判断
+请根据评论内容自动判断维度（如：整体满意度、产品质量、使用体验、物流服务、性价比等）。
 
 # Output Format (JSON Array)
 [
@@ -199,23 +232,26 @@ INSIGHT_EXTRACTION_PROMPT = """# Role
     "dimension": "整体满意度",
     "quote": "Amazing toy", 
     "quote_translated": "太棒了",
-    "analysis": "用户对产品高度认可，表达了强烈的正面情感" 
+    "analysis": "用户对产品高度认可，表达了强烈的正面情感",
+    "sentiment": "positive"
   }},
   {{
     "type": "emotion",
     "dimension": "购买体验",
     "quote": "Great buy",
     "quote_translated": "买得值",
-    "analysis": "用户认为这次购买物超所值"
+    "analysis": "用户认为这次购买物超所值",
+    "sentiment": "positive"
   }}
 ]
 
 # 重要规则
 1. **每条评论必须至少提取1个洞察**，即使评论很短。
-2. 对于简短的正面评论（如"Amazing!"、"Love it!"），提取为 emotion 类型，分析用户的情感态度。
-3. 对于简短的负面评论（如"Terrible"、"Waste of money"），提取为 weakness 类型。
+2. 对于简短的正面评论（如"Amazing!"、"Love it!"），提取为 emotion 类型。
+3. 对于简短的负面评论（如"Terrible"），提取为 weakness 类型。
 4. 提取要"颗粒度细"，不要笼统地说"质量不好"，要说"塑料感强"或"按键松动"。
 5. 绝对不要返回空数组 []，至少要有1个洞察。
+6. scenario 必须是**具体的行为描述**，不能是简单的地点/时间名词。
 """
 
 
@@ -924,7 +960,13 @@ class TranslationService:
         
         return translated_title, translated_body, sentiment, insights
     
-    def process_review_parallel(self, title: Optional[str], body: str) -> Optional[dict]:
+    def process_review_parallel(
+        self, 
+        title: Optional[str], 
+        body: str,
+        dimension_schema: List[dict] = None,  # [NEW] 接收专属维度（用于洞察提取）
+        context_schema: dict = None           # [NEW] 接收专属5W标签（用于主题提取）
+    ) -> Optional[dict]:
         """
         [High Performance] Execute distinct prompts in parallel to maintain quality while boosting speed.
         
@@ -932,11 +974,19 @@ class TranslationService:
         - Phase 1: Translate Title, Translate Body, Analyze Sentiment (Parallel - no dependencies)
         - Phase 2: Extract Insights, Extract Themes (Parallel - dependent on Phase 1 translation results)
         
+        [UPDATED] Now supports dynamic schemas for personalized analysis:
+        - dimension_schema: Product-specific dimensions for insight categorization
+        - context_schema: Product-specific 5W labels for theme categorization
+        
         Expected speedup: ~50% (from ~6s to ~3.5s per review) while maintaining 100% quality.
         
         Args:
             title: Review title (optional)
             body: Review body (required)
+            dimension_schema: Optional list of dimension dicts for insight extraction
+                             [{"name": "维度名", "description": "维度定义"}, ...]
+            context_schema: Optional 5W label dict for theme extraction
+                           {"who": [{"name": "...", "description": "..."}], ...}
             
         Returns:
             Dict with all analysis results, or None if processing fails
@@ -994,16 +1044,20 @@ class TranslationService:
             # Now we have both original_text and translated_text
             # We can launch insight extraction and theme extraction in parallel
             
+            # [FIXED] 将专属维度 (dimension_schema) 透传给提取方法
             future_insights = executor.submit(
                 self.extract_insights, 
                 result["body_original"], 
-                result["body_translated"]
+                result["body_translated"],
+                dimension_schema  # <--- 注入维度表
             )
             
+            # [FIXED] 将专属标签 (context_schema) 透传给提取方法
             future_themes = executor.submit(
                 self.extract_themes, 
                 result["body_original"], 
-                result["body_translated"]
+                result["body_translated"],
+                context_schema  # <--- 注入5W标签库
             )
 
             # Wait for Phase 2 results (both can fail independently)

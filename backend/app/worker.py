@@ -87,6 +87,161 @@ def cleanup_stuck_reviews():
         db.close()
 
 
+def cleanup_stuck_tasks():
+    """
+    清理卡住的任务（心跳超时）。
+    将 PROCESSING 状态但心跳超时的任务标记为 TIMEOUT。
+    """
+    from app.models.task import Task, TaskStatus
+    from datetime import datetime, timezone, timedelta
+    
+    db = get_sync_db()
+    try:
+        # 查找所有 processing 状态的任务
+        result = db.execute(
+            select(Task).where(Task.status == TaskStatus.PROCESSING.value)
+        )
+        tasks = result.scalars().all()
+        
+        timeout_count = 0
+        for task in tasks:
+            if task.is_heartbeat_timeout:
+                task.status = TaskStatus.TIMEOUT.value
+                task.error_message = f"心跳超时：最后心跳时间 {task.last_heartbeat}"
+                timeout_count += 1
+                logger.warning(f"[启动清理] 任务 {task.id} ({task.task_type}) 心跳超时，标记为 TIMEOUT")
+        
+        if timeout_count > 0:
+            db.commit()
+            logger.warning(f"[启动清理] 已将 {timeout_count} 个超时任务标记为 TIMEOUT")
+        else:
+            logger.info("[启动清理] 没有发现心跳超时的任务")
+            
+    except Exception as e:
+        logger.error(f"[启动清理] 清理超时任务失败: {e}")
+        db.rollback()
+    finally:
+        db.close()
+
+
+# ============== 心跳更新辅助函数 ==============
+
+def update_task_heartbeat(db, task_id: str, processed_items: int = None):
+    """
+    更新任务心跳时间。
+    
+    Args:
+        db: 数据库会话
+        task_id: 任务 ID
+        processed_items: 可选，同时更新已处理数量
+    """
+    from app.models.task import Task
+    from datetime import datetime, timezone
+    
+    try:
+        values = {"last_heartbeat": datetime.now(timezone.utc)}
+        if processed_items is not None:
+            values["processed_items"] = processed_items
+        
+        db.execute(
+            update(Task)
+            .where(Task.id == task_id)
+            .values(**values)
+        )
+        db.commit()
+    except Exception as e:
+        logger.error(f"更新任务心跳失败: {e}")
+        db.rollback()
+
+
+def get_or_create_task(db, product_id: str, task_type: str, total_items: int = 0, celery_task_id: str = None):
+    """
+    获取或创建任务记录。
+    
+    Args:
+        db: 数据库会话
+        product_id: 产品 ID
+        task_type: 任务类型
+        total_items: 总项目数
+        celery_task_id: Celery 任务 ID
+        
+    Returns:
+        Task: 任务对象
+    """
+    from app.models.task import Task, TaskStatus
+    from datetime import datetime, timezone
+    
+    # 查找现有任务
+    result = db.execute(
+        select(Task).where(
+            and_(
+                Task.product_id == product_id,
+                Task.task_type == task_type
+            )
+        )
+    )
+    task = result.scalar_one_or_none()
+    
+    now = datetime.now(timezone.utc)
+    
+    if task:
+        # 更新现有任务
+        task.status = TaskStatus.PROCESSING.value
+        task.total_items = total_items
+        task.processed_items = 0
+        task.last_heartbeat = now
+        task.celery_task_id = celery_task_id
+        task.error_message = None
+    else:
+        # 创建新任务
+        task = Task(
+            product_id=product_id,
+            task_type=task_type,
+            status=TaskStatus.PROCESSING.value,
+            total_items=total_items,
+            processed_items=0,
+            last_heartbeat=now,
+            celery_task_id=celery_task_id
+        )
+        db.add(task)
+    
+    db.commit()
+    db.refresh(task)
+    return task
+
+
+def complete_task(db, task_id: str, success: bool = True, error_message: str = None):
+    """
+    完成任务。
+    
+    Args:
+        db: 数据库会话
+        task_id: 任务 ID
+        success: 是否成功
+        error_message: 错误信息（失败时）
+    """
+    from app.models.task import Task, TaskStatus
+    
+    try:
+        status = TaskStatus.COMPLETED.value if success else TaskStatus.FAILED.value
+        values = {
+            "status": status,
+            "last_heartbeat": None  # 清除心跳，表示任务已结束
+        }
+        if error_message:
+            values["error_message"] = error_message
+        
+        db.execute(
+            update(Task)
+            .where(Task.id == task_id)
+            .values(**values)
+        )
+        db.commit()
+    except Exception as e:
+        logger.error(f"完成任务失败: {e}")
+        db.rollback()
+
+
 # 使用 Celery 信号在 Worker 启动时执行清理
 from celery.signals import worker_ready
 
@@ -95,6 +250,7 @@ def on_worker_ready(**kwargs):
     """Worker 启动完成后执行清理"""
     logger.info("Worker 已就绪，开始检查卡住的任务...")
     cleanup_stuck_reviews()
+    cleanup_stuck_tasks()  # [NEW] 清理心跳超时的任务
 
 
 # ============== 任务1: 五点翻译 ==============
@@ -554,7 +710,7 @@ def task_extract_insights(self, product_id: str):
 
 # ============== 任务4: 主题高亮提取 ==============
 
-@celery_app.task(bind=True, max_retries=2, default_retry_delay=30)
+@celery_app.task(bind=True, max_retries=2, default_retry_delay=30, time_limit=1800, soft_time_limit=1700)
 def task_extract_themes(self, product_id: str):
     """
     Extract 5W theme keywords for already translated reviews.
@@ -572,12 +728,14 @@ def task_extract_themes(self, product_id: str):
     from app.models.review import Review
     from app.models.theme_highlight import ReviewThemeHighlight
     from app.models.product_context_label import ProductContextLabel
+    from app.models.task import TaskType
     from app.services.translation import translation_service
     from sqlalchemy import delete, exists, func
     
     logger.info(f"Starting theme extraction for product {product_id}")
     
     db = get_sync_db()
+    task_record = None  # 任务记录
     
     try:
         # [NEW] Step 1: 检查是否有 5W 标签库，如果没有则自动生成
@@ -726,6 +884,17 @@ def task_extract_themes(self, product_id: str):
         
         logger.info(f"Found {total_reviews} translated reviews for theme extraction")
         
+        # [NEW] 创建/更新任务记录，启用心跳
+        if total_reviews > 0:
+            task_record = get_or_create_task(
+                db=db,
+                product_id=product_id,
+                task_type=TaskType.THEMES.value,
+                total_items=total_reviews,
+                celery_task_id=self.request.id
+            )
+            logger.info(f"任务记录已创建: {task_record.id}")
+        
         # [NEW] 构建标签名到标签ID的映射表（用于关联 context_label_id）
         label_id_map = {}  # key: (theme_type, label_name), value: context_label_id
         if context_schema:
@@ -799,6 +968,10 @@ def task_extract_themes(self, product_id: str):
                 db.commit()
                 processed += 1
                 
+                # [NEW] 更新心跳（每处理一条评论）
+                if task_record:
+                    update_task_heartbeat(db, str(task_record.id), processed_items=processed)
+                
                 # Rate limiting
                 time.sleep(0.5)
                 
@@ -809,6 +982,10 @@ def task_extract_themes(self, product_id: str):
         
         logger.info(f"Theme extraction completed: {processed}/{total_reviews} reviews processed, {themes_extracted} theme entries created")
         
+        # [NEW] 标记任务完成
+        if task_record:
+            complete_task(db, str(task_record.id), success=True)
+        
         return {
             "product_id": product_id,
             "total_reviews": total_reviews,
@@ -818,6 +995,9 @@ def task_extract_themes(self, product_id: str):
         
     except Exception as e:
         logger.error(f"Theme extraction failed for product {product_id}: {e}")
+        # [NEW] 标记任务失败
+        if task_record:
+            complete_task(db, str(task_record.id), success=False, error_message=str(e))
         raise self.retry(exc=e)
         
     finally:

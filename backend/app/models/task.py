@@ -1,8 +1,10 @@
 """
 Task Model - Tracks async processing jobs (translation, etc.)
+
+支持心跳机制，用于检测卡住的任务并自动恢复。
 """
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from enum import Enum
 from typing import TYPE_CHECKING
 
@@ -22,12 +24,24 @@ class TaskStatus(str, Enum):
     PROCESSING = "processing"
     COMPLETED = "completed"
     FAILED = "failed"
+    TIMEOUT = "timeout"  # [NEW] 超时状态
 
 
 class TaskType(str, Enum):
     """Task type enumeration"""
     TRANSLATION = "translation"
     ANALYSIS = "analysis"
+    THEMES = "themes"      # [NEW] 主题提取
+    INSIGHTS = "insights"  # [NEW] 洞察提取
+
+
+# 每种任务的心跳超时时间（秒）
+TASK_HEARTBEAT_TIMEOUT = {
+    TaskType.TRANSLATION.value: 120,   # 翻译任务 2 分钟无心跳视为超时
+    TaskType.THEMES.value: 60,         # 主题提取 1 分钟无心跳视为超时
+    TaskType.INSIGHTS.value: 60,       # 洞察提取 1 分钟无心跳视为超时
+    TaskType.ANALYSIS.value: 120,      # 分析任务 2 分钟无心跳视为超时
+}
 
 
 class Task(Base):
@@ -77,6 +91,25 @@ class Task(Base):
     
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     
+    # [NEW] 心跳相关字段
+    last_heartbeat: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        comment="最后一次心跳时间，Worker 处理时定期更新"
+    )
+    
+    celery_task_id: Mapped[str | None] = mapped_column(
+        String(100),
+        nullable=True,
+        comment="Celery 任务 ID，用于追踪和取消任务"
+    )
+    
+    retry_count: Mapped[int] = mapped_column(
+        Integer,
+        default=0,
+        comment="重试次数"
+    )
+    
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now()
@@ -104,6 +137,41 @@ class Task(Base):
         if self.total_items == 0:
             return 0.0
         return (self.processed_items / self.total_items) * 100
+    
+    @property
+    def is_heartbeat_timeout(self) -> bool:
+        """
+        检测任务是否心跳超时（卡住）。
+        
+        只有 PROCESSING 状态的任务才需要检测心跳。
+        如果没有心跳记录但状态是 PROCESSING，也视为超时。
+        """
+        if self.status != TaskStatus.PROCESSING.value:
+            return False
+        
+        if self.last_heartbeat is None:
+            # 没有心跳记录，检查任务创建时间
+            # 如果创建超过 2 分钟还没有心跳，视为超时
+            if self.created_at:
+                from datetime import timezone
+                now = datetime.now(timezone.utc)
+                created = self.created_at.replace(tzinfo=timezone.utc) if self.created_at.tzinfo is None else self.created_at
+                return (now - created).total_seconds() > 120
+            return True
+        
+        # 获取该任务类型的超时时间
+        timeout_seconds = TASK_HEARTBEAT_TIMEOUT.get(self.task_type, 120)
+        
+        from datetime import timezone
+        now = datetime.now(timezone.utc)
+        last_hb = self.last_heartbeat.replace(tzinfo=timezone.utc) if self.last_heartbeat.tzinfo is None else self.last_heartbeat
+        
+        return (now - last_hb).total_seconds() > timeout_seconds
+    
+    @property
+    def heartbeat_timeout_seconds(self) -> int:
+        """获取该任务类型的心跳超时时间"""
+        return TASK_HEARTBEAT_TIMEOUT.get(self.task_type, 120)
     
     def __repr__(self) -> str:
         return f"<Task(id={self.id}, type={self.task_type}, status={self.status})>"

@@ -5,7 +5,7 @@
  * - /report/B0CYT6D2ZS - 显示该产品的最新报告
  * - /report/B0CYT6D2ZS/xxx-xxx-xxx - 显示指定 ID 的报告
  */
-import { useState, useEffect, memo } from 'react';
+import { useState, useEffect, memo, useMemo } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import { 
   FileText, 
@@ -19,7 +19,8 @@ import {
   History,
   RefreshCw,
   Share2,
-  AlertCircle
+  AlertCircle,
+  ChevronDown
 } from 'lucide-react';
 import { Button } from './ui/button';
 import { 
@@ -28,7 +29,9 @@ import {
   getReportHistory,
   generateReport 
 } from '@/api/service';
-import type { ProductReport } from '@/api/types';
+import type { ProductReport, ReportType } from '@/api/types';
+import { REPORT_TYPE_CONFIG } from '@/api/types';
+import { JsonReportRenderer } from './JsonReportRenderer';
 
 // Markdown 渲染组件
 const MarkdownRenderer = memo(function MarkdownRenderer({ content }: { content: string }) {
@@ -36,7 +39,6 @@ const MarkdownRenderer = memo(function MarkdownRenderer({ content }: { content: 
     const lines = text.split('\n');
     const elements: JSX.Element[] = [];
     let listItems: string[] = [];
-    let inList = false;
     
     const flushList = () => {
       if (listItems.length > 0) {
@@ -49,7 +51,6 @@ const MarkdownRenderer = memo(function MarkdownRenderer({ content }: { content: 
         );
         listItems = [];
       }
-      inList = false;
     };
     
     const parseInline = (text: string): string => {
@@ -99,13 +100,11 @@ const MarkdownRenderer = memo(function MarkdownRenderer({ content }: { content: 
       }
       
       if (trimmed.startsWith('- ') || trimmed.startsWith('* ')) {
-        inList = true;
         listItems.push(trimmed.slice(2));
         return;
       }
       
       if (/^\d+\.\s/.test(trimmed)) {
-        inList = true;
         listItems.push(trimmed.replace(/^\d+\.\s/, ''));
         return;
       }
@@ -139,6 +138,19 @@ const MarkdownRenderer = memo(function MarkdownRenderer({ content }: { content: 
   );
 });
 
+// 检测内容是否为 JSON
+function isJsonContent(content: string): boolean {
+  if (!content) return false;
+  const trimmed = content.trim();
+  if (!trimmed.startsWith('{') && !trimmed.startsWith('[')) return false;
+  try {
+    JSON.parse(trimmed);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function ReportPage() {
   const { asin, reportId } = useParams<{ asin: string; reportId?: string }>();
   const navigate = useNavigate();
@@ -150,6 +162,13 @@ export function ReportPage() {
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
+  const [generatingReportType, setGeneratingReportType] = useState<ReportType>('comprehensive');
+  const [showTypeSelector, setShowTypeSelector] = useState(false);
+  
+  // 判断当前报告是否为 JSON 格式
+  const isJsonReport = useMemo(() => {
+    return report?.content ? isJsonContent(report.content) : false;
+  }, [report?.content]);
   
   // 加载报告
   useEffect(() => {
@@ -199,14 +218,16 @@ export function ReportPage() {
     }
   };
   
-  const handleGenerateReport = async () => {
+  const handleGenerateReport = async (type: ReportType) => {
     if (!asin) return;
     
+    setGeneratingReportType(type);
     setIsGenerating(true);
     setError(null);
+    setShowTypeSelector(false);
     
     try {
-      const response = await generateReport(asin);
+      const response = await generateReport(asin, type);
       if (response.success && response.report) {
         setReport(response.report);
         // 更新 URL 到新报告
@@ -284,15 +305,19 @@ export function ReportPage() {
   
   // 生成中状态
   if (isGenerating) {
+    const typeConfig = REPORT_TYPE_CONFIG[generatingReportType];
     return (
       <div className="min-h-screen bg-gray-50 dark:bg-gray-900 flex items-center justify-center">
         <div className="text-center">
           <div className="relative inline-block">
             <Loader2 className="size-16 text-emerald-500 animate-spin" />
-            <FileText className="size-6 text-emerald-600 absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2" />
+            <span className="text-3xl absolute -top-2 -right-2">{typeConfig.icon}</span>
           </div>
-          <p className="mt-6 text-xl font-medium text-gray-900 dark:text-white">AI 正在撰写报告...</p>
-          <p className="mt-2 text-gray-500 dark:text-gray-400">预计需要 30-60 秒，请耐心等待</p>
+          <p className="mt-6 text-xl font-medium text-gray-900 dark:text-white">
+            AI 正在撰写 {typeConfig.label}...
+          </p>
+          <p className="mt-2 text-gray-500 dark:text-gray-400">{typeConfig.description}</p>
+          <p className="mt-1 text-sm text-gray-400 dark:text-gray-500">预计需要 30-60 秒，请耐心等待</p>
           <div className="mt-6 w-64 h-2 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden mx-auto">
             <div className="h-full bg-emerald-500 rounded-full" style={{
               animation: 'progress 30s ease-in-out forwards'
@@ -330,7 +355,7 @@ export function ReportPage() {
               </Button>
             </Link>
             <Button 
-              onClick={handleGenerateReport}
+              onClick={() => handleGenerateReport('comprehensive')}
               className="gap-2 bg-emerald-600 hover:bg-emerald-700"
             >
               <FileText className="size-4" />
@@ -397,16 +422,46 @@ export function ReportPage() {
               <ExternalLink className="size-4" />
               打印
             </Button>
-            <Button
-              variant="default"
-              size="sm"
-              onClick={handleGenerateReport}
-              disabled={isGenerating}
-              className="gap-1.5 bg-emerald-600 hover:bg-emerald-700"
-            >
-              <RefreshCw className="size-4" />
-              重新生成
-            </Button>
+            <div className="relative">
+              <Button
+                variant="default"
+                size="sm"
+                onClick={() => setShowTypeSelector(!showTypeSelector)}
+                disabled={isGenerating}
+                className="gap-1.5 bg-emerald-600 hover:bg-emerald-700"
+              >
+                <RefreshCw className="size-4" />
+                生成新报告
+                <ChevronDown className="size-3.5" />
+              </Button>
+              
+              {/* 报告类型选择下拉 */}
+              {showTypeSelector && (
+                <div className="absolute top-full right-0 mt-2 w-64 bg-white dark:bg-gray-800 rounded-lg shadow-xl border border-gray-200 dark:border-gray-700 z-50">
+                  <div className="p-2">
+                    <div className="text-xs text-gray-500 dark:text-gray-400 px-2 py-1 mb-1">选择报告类型</div>
+                    {(Object.keys(REPORT_TYPE_CONFIG) as ReportType[]).map((type) => {
+                      const config = REPORT_TYPE_CONFIG[type];
+                      return (
+                        <button
+                          key={type}
+                          onClick={() => handleGenerateReport(type)}
+                          className="w-full text-left px-3 py-2 rounded-md hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
+                        >
+                          <div className="flex items-center gap-2">
+                            <span className="text-lg">{config.icon}</span>
+                            <div>
+                              <div className="font-medium text-sm text-gray-900 dark:text-white">{config.label}</div>
+                              <div className="text-xs text-gray-500 dark:text-gray-400">{config.description}</div>
+                            </div>
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+            </div>
           </div>
         </div>
         
@@ -416,23 +471,34 @@ export function ReportPage() {
             <div className="max-w-5xl mx-auto px-4 py-3">
               <h3 className="text-sm font-medium text-gray-500 dark:text-gray-400 mb-2">历史报告</h3>
               <div className="space-y-1 max-h-64 overflow-y-auto">
-                {reportHistory.map((r) => (
-                  <button
-                    key={r.id}
-                    onClick={() => handleSelectReport(r)}
-                    className={`w-full text-left px-3 py-2 rounded-lg transition-colors ${
-                      r.id === report?.id 
-                        ? 'bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-400' 
-                        : 'hover:bg-gray-100 dark:hover:bg-gray-700'
-                    }`}
-                  >
-                    <div className="font-medium text-sm truncate">{r.title || '未命名报告'}</div>
-                    <div className="text-xs text-gray-500 dark:text-gray-400">
-                      {formatDate(r.created_at)}
-                      {r.analysis_data?.total_reviews && ` · ${r.analysis_data.total_reviews} 条评论`}
-                    </div>
-                  </button>
-                ))}
+                {reportHistory.map((r) => {
+                  const typeConfig = REPORT_TYPE_CONFIG[r.report_type as ReportType] || REPORT_TYPE_CONFIG.comprehensive;
+                  return (
+                    <button
+                      key={r.id}
+                      onClick={() => handleSelectReport(r)}
+                      className={`w-full text-left px-3 py-2 rounded-lg transition-colors ${
+                        r.id === report?.id 
+                          ? 'bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-400' 
+                          : 'hover:bg-gray-100 dark:hover:bg-gray-700'
+                      }`}
+                    >
+                      <div className="flex items-center gap-2">
+                        <span className="text-base">{typeConfig.icon}</span>
+                        <div className="flex-1 min-w-0">
+                          <div className="font-medium text-sm truncate">{r.title || '未命名报告'}</div>
+                          <div className="text-xs text-gray-500 dark:text-gray-400 flex items-center gap-2">
+                            <span className="px-1.5 py-0.5 rounded bg-gray-100 dark:bg-gray-700 text-xs">
+                              {typeConfig.label}
+                            </span>
+                            <span>{formatDate(r.created_at)}</span>
+                            {r.analysis_data?.total_reviews && <span>{r.analysis_data.total_reviews} 条评论</span>}
+                          </div>
+                        </div>
+                      </div>
+                    </button>
+                  );
+                })}
               </div>
             </div>
           </div>
@@ -445,10 +511,30 @@ export function ReportPage() {
         {report && (
           <>
             <div className="mb-8 print:mb-4">
-              <h1 className="text-3xl font-bold text-gray-900 dark:text-white mb-3 print:text-2xl">
-                {report.title || '产品深度洞察报告'}
-              </h1>
+              <div className="flex items-start gap-4 mb-3">
+                {/* 报告类型图标 */}
+                {report.report_type && REPORT_TYPE_CONFIG[report.report_type as ReportType] && (
+                  <span className="text-4xl">
+                    {REPORT_TYPE_CONFIG[report.report_type as ReportType].icon}
+                  </span>
+                )}
+                <div className="flex-1">
+                  <h1 className="text-3xl font-bold text-gray-900 dark:text-white print:text-2xl">
+                    {report.title || '产品深度洞察报告'}
+                  </h1>
+                  {report.report_type && REPORT_TYPE_CONFIG[report.report_type as ReportType] && (
+                    <p className="text-gray-500 dark:text-gray-400 mt-1">
+                      {REPORT_TYPE_CONFIG[report.report_type as ReportType].description}
+                    </p>
+                  )}
+                </div>
+              </div>
               <div className="flex flex-wrap items-center gap-4 text-sm text-gray-500 dark:text-gray-400">
+                {report.report_type && REPORT_TYPE_CONFIG[report.report_type as ReportType] && (
+                  <span className="px-2 py-0.5 bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400 rounded text-xs font-medium">
+                    {REPORT_TYPE_CONFIG[report.report_type as ReportType].label}
+                  </span>
+                )}
                 <span className="flex items-center gap-1.5">
                   <Calendar className="size-4" />
                   {formatDate(report.created_at)}
@@ -465,9 +551,18 @@ export function ReportPage() {
               </div>
             </div>
             
-            {/* Markdown 报告内容 */}
+            {/* 报告内容 - 根据格式选择渲染器 */}
             <div className="bg-gray-50 dark:bg-gray-800/50 rounded-xl p-8 print:bg-white print:p-0 print:rounded-none">
-              <MarkdownRenderer content={report.content} />
+              {isJsonReport ? (
+                <JsonReportRenderer 
+                  content={report.content} 
+                  reportType={(report.report_type as ReportType) || 'comprehensive'}
+                  analysisData={report.analysis_data}
+                  asin={asin}
+                />
+              ) : (
+                <MarkdownRenderer content={report.content} />
+              )}
             </div>
             
             {/* 底部信息 */}

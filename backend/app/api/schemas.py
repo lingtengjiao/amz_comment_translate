@@ -348,6 +348,7 @@ class ReviewResponse(BaseModel):
                             'items': items_data,
                             'keywords': item.keywords
                         })
+                    # 如果都不匹配，跳过该记录（不添加到 result）
                 return result
             # If it's already a list of dicts, filter out _empty types
             elif isinstance(v[0], dict):
@@ -685,6 +686,8 @@ class ReportPreviewResponse(BaseModel):
     has_existing_report: bool = Field(False, description="是否存在历史报告")
     latest_report_id: Optional[str] = Field(None, description="最新报告 ID")
     latest_report_date: Optional[str] = Field(None, description="最新报告生成时间")
+    latest_report_type: Optional[str] = Field(None, description="最新报告类型")
+    report_counts: Optional[dict] = Field(None, description="各类型报告数量")
     error: Optional[str] = Field(None, description="错误信息（如果失败）")
     
     model_config = ConfigDict(
@@ -712,6 +715,13 @@ class ReportPreviewResponse(BaseModel):
                 "has_existing_report": True,
                 "latest_report_id": "550e8400-e29b-41d4-a716-446655440001",
                 "latest_report_date": "2024-01-15T10:30:00+00:00",
+                "latest_report_type": "comprehensive",
+                "report_counts": {
+                    "comprehensive": 2,
+                    "operations": 1,
+                    "product": 0,
+                    "supply_chain": 0
+                },
                 "error": None
             }
         }
@@ -721,13 +731,13 @@ class ReportPreviewResponse(BaseModel):
 # ============== Product Report (Persisted) Schemas ==============
 
 class ProductReportResponse(BaseModel):
-    """持久化报告响应"""
+    """持久化报告响应 - 四位一体决策中台"""
     id: str = Field(..., description="报告 UUID")
     product_id: str = Field(..., description="产品 UUID")
     title: Optional[str] = Field(None, description="报告标题")
-    content: str = Field(..., description="Markdown 格式的报告内容")
-    analysis_data: Optional[dict] = Field(None, description="结构化分析数据")
-    report_type: str = Field("comprehensive", description="报告类型")
+    content: str = Field(..., description="JSON 格式的 AI 结构化分析结果（前端解析后渲染卡片/列表）")
+    analysis_data: Optional[dict] = Field(None, description="原始统计数据（用于 ECharts/Recharts 图表）")
+    report_type: str = Field("comprehensive", description="报告类型: comprehensive/operations/product/supply_chain")
     status: str = Field("completed", description="报告状态")
     error_message: Optional[str] = Field(None, description="错误信息")
     created_at: Optional[str] = Field(None, description="创建时间")
@@ -739,11 +749,11 @@ class ProductReportResponse(BaseModel):
             "example": {
                 "id": "550e8400-e29b-41d4-a716-446655440001",
                 "product_id": "550e8400-e29b-41d4-a716-446655440000",
-                "title": "产品深度洞察报告 - 2024-01-15 10:30",
-                "content": "# 产品机会与改进战略报告\n\n## 🎯 1. 执行摘要...",
+                "title": "全维度战略分析报告 - 2024-01-15 10:30",
+                "content": '{"strategic_verdict": "产品在细分市场表现强劲...", "core_swot": {...}}',
                 "analysis_data": {
-                    "total_reviews": 150,
-                    "top_who": [{"name": "老年人", "count": 45}]
+                    "context": {"who": [{"name": "老年人", "value": 45}]},
+                    "insight": {"weakness": [{"name": "电池", "value": 30}]}
                 },
                 "report_type": "comprehensive",
                 "status": "completed",

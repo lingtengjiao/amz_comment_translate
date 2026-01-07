@@ -135,6 +135,7 @@ export function transformProductToTask(apiProduct: ApiProduct, reviews: Review[]
     status: mapTranslationStatus(apiProduct.translation_status),
     reviewCount: apiProduct.total_reviews,
     translatedCount: apiProduct.translated_reviews,
+    averageRating: apiProduct.average_rating !== undefined && apiProduct.average_rating !== null ? apiProduct.average_rating : undefined,
     createdAt: new Date(apiProduct.created_at).toISOString().split('T')[0],
     reviews,
   };
@@ -161,6 +162,7 @@ export function transformStatsToTask(
     status: mapTranslationStatus(product.translation_status),
     reviewCount: product.total_reviews,
     translatedCount: product.translated_reviews,
+    averageRating: product.average_rating !== undefined && product.average_rating !== null ? product.average_rating : undefined,
     createdAt: new Date(product.created_at).toISOString().split('T')[0],
     reviews,
   };

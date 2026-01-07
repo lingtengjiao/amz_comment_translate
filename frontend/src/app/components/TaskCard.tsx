@@ -10,11 +10,17 @@ interface TaskCardProps {
 }
 
 export const TaskCard = memo(function TaskCard({ task, onClick, isLoading }: TaskCardProps) {
-  // Calculate average rating
+  // Use average rating from product page, fallback to calculated from reviews
   const avgRating = useMemo(() => {
-    if (task.reviews.length === 0) return '4.5';
-    return (task.reviews.reduce((acc, review) => acc + review.rating, 0) / task.reviews.length).toFixed(1);
-  }, [task.reviews]);
+    if (task.averageRating !== undefined && task.averageRating > 0) {
+      return task.averageRating.toFixed(1);
+    }
+    // Fallback: calculate from reviews if available
+    if (task.reviews.length > 0) {
+      return (task.reviews.reduce((acc, review) => acc + review.rating, 0) / task.reviews.length).toFixed(1);
+    }
+    return '4.5'; // Default fallback
+  }, [task.averageRating, task.reviews]);
 
   const handleClick = () => {
     // 如果正在加载，不响应点击

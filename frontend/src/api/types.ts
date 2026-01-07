@@ -87,6 +87,7 @@ export interface Task {
   status: TaskStatus;                  // 翻译任务状态
   reviewCount: number;                 // 评论总数
   translatedCount: number;             // 已翻译数量
+  averageRating?: number;              // 产品平均评分（来自产品页面的真实评分）
   createdAt: string;                   // 任务创建时间 YYYY-MM-DD
   reviews: Review[];                   // 评论列表
 }
@@ -453,9 +454,61 @@ export interface ApiDimensionGenerateResponse {
 
 // ============== 报告生成相关类型 ==============
 
+/** 报告类型枚举 - 四位一体决策中台 */
+export type ReportType = 'comprehensive' | 'operations' | 'product' | 'supply_chain';
+
+/** 报告类型配置 */
+export const REPORT_TYPE_CONFIG: Record<ReportType, { label: string; description: string; icon: string }> = {
+  comprehensive: { label: '综合战略版', description: 'CEO视角 - 全局战略分析', icon: '🎯' },
+  operations: { label: '运营市场版', description: 'CMO视角 - 卖点与广告定位', icon: '📢' },
+  product: { label: '产品研发版', description: 'CPO视角 - 缺陷与迭代建议', icon: '🔧' },
+  supply_chain: { label: '供应链版', description: '供应链视角 - 质量整改', icon: '📦' }
+};
+
+/** 证据样本 (用于溯源) */
+export interface EvidenceSample {
+  review_id: string;
+  quote: string;
+  rating?: number;
+  date?: string;
+  analysis?: string;
+  sentiment?: string;
+}
+
+/** ECharts 数据格式 (带证据溯源) */
+export interface ChartDataItem {
+  name: string;
+  value: number;
+  evidence?: EvidenceSample[];  // 证据锚点
+}
+
+/** 5类洞察数据 (ECharts 格式) */
+export interface InsightChartData {
+  strength: ChartDataItem[];
+  weakness: ChartDataItem[];
+  suggestion: ChartDataItem[];
+  scenario: ChartDataItem[];
+  emotion: ChartDataItem[];
+}
+
+/** 5W Context 数据 (ECharts 格式) */
+export interface ContextChartData {
+  who: ChartDataItem[];
+  where: ChartDataItem[];
+  when: ChartDataItem[];
+  why: ChartDataItem[];
+  what: ChartDataItem[];
+}
+
 /** 报告统计数据 */
 export interface ReportStats {
   total_reviews: number;
+  
+  // ECharts 格式数据 (新版)
+  context?: ContextChartData;
+  insight?: InsightChartData;
+  
+  // 字符串格式 (兼容旧版)
   context_stats?: {
     who: string;
     scene: string;
@@ -465,15 +518,24 @@ export interface ReportStats {
   insight_stats?: {
     weakness: string;
     strength: string;
+    suggestion?: string;
+    scenario?: string;
+    emotion?: string;
   };
-  // 结构化数据（用于前端可视化）
+  
+  // 结构化列表数据（用于前端卡片展示）
+  // 5W Context
   top_who?: Array<{ name: string; count: number }>;
   top_where?: Array<{ name: string; count: number }>;
   top_when?: Array<{ name: string; count: number }>;
   top_why?: Array<{ name: string; count: number }>;
   top_what?: Array<{ name: string; count: number }>;
-  top_weaknesses?: Array<{ dimension: string; count: number; quotes: string[] }>;
+  // 5类 Insight
   top_strengths?: Array<{ dimension: string; count: number; quotes: string[] }>;
+  top_weaknesses?: Array<{ dimension: string; count: number; quotes: string[] }>;
+  top_suggestions?: Array<{ dimension: string; count: number; quotes: string[] }>;
+  top_scenarios?: Array<{ dimension: string; count: number; quotes: string[] }>;
+  top_emotions?: Array<{ dimension: string; count: number; quotes: string[] }>;
 }
 
 /** 持久化报告对象 */
@@ -518,8 +580,122 @@ export interface ApiReportPreviewResponse {
   has_existing_report?: boolean;
   latest_report_id?: string | null;
   latest_report_date?: string | null;
+  latest_report_type?: ReportType | null;
+  report_counts?: Record<ReportType, number>;
   error: string | null;
 }
+
+// ============== JSON 报告内容类型定义 ==============
+
+/** 用户画像分析 (综合版) */
+export interface UserProfileComprehensive {
+  core_users: string;
+  user_characteristics?: string[];
+  usage_scenarios: string;
+  purchase_motivation: string;
+  jobs_to_be_done: string;
+  persona_insight: string;
+}
+
+/** 用户画像分析 (运营版) */
+export interface UserProfileOperations {
+  primary_audience: string;
+  secondary_audience?: string;
+  usage_context: string;
+  buying_triggers: string[];
+  use_cases: string[];
+  ad_targeting_keywords?: string[];
+}
+
+/** 用户研究洞察 (产品版) */
+export interface UserResearchProduct {
+  target_users: string;
+  user_pain_points?: string[];
+  real_usage_environments: string[];
+  design_for_context: string;
+  user_goals: string[];
+  unmet_expectations: string;
+}
+
+/** 使用环境分析 (供应链版) */
+export interface UsageContextSupplyChain {
+  user_groups: string;
+  usage_environments: string[];
+  environmental_requirements: string;
+  usage_intensity: string;
+  durability_focus?: string[];
+}
+
+/** 综合战略版报告内容 */
+export interface ComprehensiveReportContent {
+  user_profile?: UserProfileComprehensive;
+  strategic_verdict: string;
+  market_fit_analysis: string;
+  core_swot: {
+    strengths: string[];
+    weaknesses: string[];
+    opportunities: string[];
+    threats: string[];
+  };
+  department_directives: {
+    to_marketing: string;
+    to_product: string;
+    to_supply_chain: string;
+  };
+  priority_actions?: Array<{ action: string; owner: string; deadline: string }>;
+  risk_level?: 'low' | 'medium' | 'high' | 'critical';
+}
+
+/** 运营市场版报告内容 */
+export interface OperationsReportContent {
+  user_profile?: UserProfileOperations;
+  executive_summary: string;
+  selling_points: Array<{ title: string; copywriting: string; source_strength: string }>;
+  marketing_risks: string[];
+  target_audience: {
+    who: string[];
+    scenario: string[];
+    strategy: string;
+  };
+  competitor_analysis: string;
+  listing_optimization?: Array<{ element: string; suggestion: string }>;
+  review_response_templates?: Array<{ pain_point: string; response: string }>;
+}
+
+/** 产品研发版报告内容 */
+export interface ProductReportContent {
+  user_research?: UserResearchProduct;
+  quality_score: number;
+  critical_bugs: Array<{ issue: string; severity: string; root_cause_guess?: string; suggestion: string }>;
+  unmet_needs: string[];
+  usage_context_gap: string;
+  roadmap_suggestion: string;
+  usability_issues?: Array<{ issue: string; user_group: string; suggestion: string }>;
+  design_recommendations?: Array<{ area: string; current_state: string; recommendation: string }>;
+}
+
+/** 供应链版报告内容 */
+export interface SupplyChainReportContent {
+  usage_context_analysis?: UsageContextSupplyChain;
+  material_defects: Array<{ part: string; problem: string; frequency: string }>;
+  packaging_issues: {
+    is_damaged: boolean;
+    details: string;
+    improvement: string;
+  };
+  missing_parts: string[];
+  qc_checklist: string[];
+  supplier_issues?: Array<{ component: string; issue: string; action: string }>;
+  return_rate_factors?: Array<{ reason: string; percentage: string; solution: string }>;
+  assembly_defects?: Array<{ defect: string; frequency: string; station: string }>;
+}
+
+/** 报告内容联合类型 */
+export type ReportContent = 
+  | ComprehensiveReportContent 
+  | OperationsReportContent 
+  | ProductReportContent 
+  | SupplyChainReportContent;
 
 /** 报告列表响应 */
 export interface ApiReportListResponse {
