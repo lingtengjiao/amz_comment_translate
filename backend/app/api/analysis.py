@@ -20,6 +20,7 @@ from pydantic import BaseModel, Field
 from app.db.session import get_db, async_session_maker
 from app.services.analysis_service import AnalysisService
 from app.models.analysis import AnalysisStatus
+from sqlalchemy import select
 
 logger = logging.getLogger(__name__)
 
@@ -141,11 +142,12 @@ async def create_analysis_project(
         role_labels = [p.role_label for p in request.products]
         
         # 创建项目
+        # 注意：新的 N-Way 分析中，role_labels 仅作标记，不影响分析逻辑
         project = await service.create_comparison_project(
             title=request.title,
             product_ids=product_ids,
-            role_labels=role_labels,
-            description=request.description
+            description=request.description,
+            role_labels=role_labels
         )
         
         # 如果需要自动触发分析
@@ -390,4 +392,147 @@ async def get_comparison_preview(
     except Exception as e:
         logger.error(f"获取对比预览失败: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/products/{asin}/reviews-by-label")
+async def get_reviews_by_label(
+    asin: str,
+    dimension: str = Query(..., description="维度类型: who/when/where/why/what/strength/weakness/suggestion/scenario/emotion"),
+    label: str = Query(..., description="标签名称"),
+    limit: int = Query(50, ge=1, le=200, description="返回数量"),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    根据维度和标签获取评论
+    
+    用于对比分析页面和报告详情页点击标签时显示相关评论
+    
+    维度类型:
+    - 5W用户画像: who/when/where/why/what
+    - 5类口碑洞察: strength/weakness/suggestion/scenario/emotion
+    """
+    from app.models.product import Product
+    from app.models.review import Review
+    from app.models.theme_highlight import ReviewThemeHighlight
+    from app.models.insight import ReviewInsight
+    
+    # 获取产品
+    stmt = select(Product).where(Product.asin == asin)
+    result = await db.execute(stmt)
+    product = result.scalar_one_or_none()
+    
+    if not product:
+        raise HTTPException(status_code=404, detail="产品不存在")
+    
+    reviews = []
+    
+    # "General" 标签在数据库中对应 "其他"、"Other"、"其它" 等值
+    # summary_service.py 在聚合时将这些值统一映射为 "General"
+    general_labels = ["General", "其他", "Other", "其它"]
+    
+    # 根据维度类型查询
+    if dimension in ['who', 'when', 'where', 'why', 'what']:
+        # 5W 维度 - 从 theme_highlights 表查询
+        if label == "General":
+            # General 标签需要匹配多个可能的值
+            stmt = (
+                select(Review)
+                .join(ReviewThemeHighlight, ReviewThemeHighlight.review_id == Review.id)
+                .where(
+                    Review.product_id == product.id,
+                    ReviewThemeHighlight.theme_type == dimension,
+                    ReviewThemeHighlight.label_name.in_(general_labels)
+                )
+                .limit(limit)
+            )
+        else:
+            stmt = (
+                select(Review)
+                .join(ReviewThemeHighlight, ReviewThemeHighlight.review_id == Review.id)
+                .where(
+                    Review.product_id == product.id,
+                    ReviewThemeHighlight.theme_type == dimension,
+                    ReviewThemeHighlight.label_name == label
+                )
+                .limit(limit)
+            )
+        result = await db.execute(stmt)
+        reviews = list(result.scalars().all())
+        
+    elif dimension in ['strength', 'weakness', 'suggestion', 'scenario', 'emotion']:
+        # 5类口碑洞察 - 从 insights 表查询
+        # dimension 参数就是 insight_type，label 参数就是 dimension 字段
+        if label == "General":
+            # General 标签需要匹配多个可能的值
+            stmt = (
+                select(Review)
+                .join(ReviewInsight, ReviewInsight.review_id == Review.id)
+                .where(
+                    Review.product_id == product.id,
+                    ReviewInsight.insight_type == dimension,
+                    ReviewInsight.dimension.in_(general_labels)
+                )
+                .limit(limit)
+            )
+        else:
+            stmt = (
+                select(Review)
+                .join(ReviewInsight, ReviewInsight.review_id == Review.id)
+                .where(
+                    Review.product_id == product.id,
+                    ReviewInsight.insight_type == dimension,
+                    ReviewInsight.dimension == label
+                )
+                .limit(limit)
+            )
+        result = await db.execute(stmt)
+        reviews = list(result.scalars().all())
+    
+    elif dimension in ['pros', 'cons']:
+        # 兼容旧的 pros/cons 参数（映射到 strength/weakness）
+        insight_type = 'strength' if dimension == 'pros' else 'weakness'
+        if label == "General":
+            stmt = (
+                select(Review)
+                .join(ReviewInsight, ReviewInsight.review_id == Review.id)
+                .where(
+                    Review.product_id == product.id,
+                    ReviewInsight.insight_type == insight_type,
+                    ReviewInsight.dimension.in_(general_labels)
+                )
+                .limit(limit)
+            )
+        else:
+            stmt = (
+                select(Review)
+                .join(ReviewInsight, ReviewInsight.review_id == Review.id)
+                .where(
+                    Review.product_id == product.id,
+                    ReviewInsight.insight_type == insight_type,
+                    ReviewInsight.dimension == label
+                )
+                .limit(limit)
+            )
+        result = await db.execute(stmt)
+        reviews = list(result.scalars().all())
+    
+    # 转换为响应格式
+    return {
+        "success": True,
+        "total": len(reviews),
+        "reviews": [
+            {
+                "id": str(r.id),
+                "author": r.author or "匿名",
+                "rating": r.rating,
+                "date": r.review_date.isoformat() if r.review_date else None,
+                "title_original": r.title_original,
+                "title_translated": r.title_translated,
+                "body_original": r.body_original,
+                "body_translated": r.body_translated,
+                "verified_purchase": r.verified_purchase,
+            }
+            for r in reviews
+        ]
+    }
 

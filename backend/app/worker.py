@@ -33,7 +33,8 @@ celery_app.conf.update(
     timezone="UTC",
     enable_utc=True,
     task_track_started=True,
-    task_time_limit=600,  # 10 minutes timeout per task
+    task_time_limit=1800,  # 30 minutes timeout per task (increased from 600s to handle large batches)
+    task_soft_time_limit=1500,  # 25 minutes soft limit (warning before hard kill)
     worker_prefetch_multiplier=1,
     task_acks_late=True,
     task_routes={
@@ -590,12 +591,14 @@ def task_extract_insights(self, product_id: str):
     from app.models.review import Review
     from app.models.insight import ReviewInsight
     from app.models.product_dimension import ProductDimension
+    from app.models.task import Task, TaskType, TaskStatus
     from app.services.translation import translation_service
-    from sqlalchemy import delete
+    from sqlalchemy import delete, exists
     
     logger.info(f"Starting insight extraction for product {product_id}")
     
     db = get_sync_db()
+    task_record = None
     
     try:
         # [NEW] 获取产品的维度 Schema（如果有的话）
@@ -617,25 +620,74 @@ def task_extract_insights(self, product_id: str):
         else:
             logger.info(f"产品暂无定义维度，使用通用洞察提取逻辑")
         
-        # Get translated reviews (completed status) - ordered by review_date to match page display order
+        # [FIX] 先获取总评论数（已翻译的评论）
+        total_translated_result = db.execute(
+            select(func.count(Review.id))
+            .where(
+                and_(
+                    Review.product_id == product_id,
+                    Review.translation_status == "completed",
+                    Review.body_translated.isnot(None),
+                    Review.is_deleted == False
+                )
+            )
+        )
+        total_translated = total_translated_result.scalar() or 0
+        
+        # [FIX] 获取已有洞察的评论数（processed_items）
+        already_processed_result = db.execute(
+            select(func.count(func.distinct(ReviewInsight.review_id)))
+            .join(Review, Review.id == ReviewInsight.review_id)
+            .where(
+                and_(
+                    Review.product_id == product_id,
+                    Review.is_deleted == False
+                )
+            )
+        )
+        already_processed = already_processed_result.scalar() or 0
+        
+        # [NEW] 创建/更新 Task 记录（total_items = 总评论数，processed_items = 已处理数）
+        task_record = get_or_create_task(
+            db=db,
+            product_id=product_id,
+            task_type=TaskType.INSIGHTS.value,
+            total_items=total_translated,  # 总评论数（固定值）
+            celery_task_id=self.request.id
+        )
+        # 设置已处理数为当前已有洞察的评论数
+        task_record.processed_items = already_processed
+        db.commit()
+        logger.info(f"Task record: total_items={total_translated}, processed_items={already_processed}, remaining={total_translated - already_processed}")
+        
+        # [FIX] 使用 NOT EXISTS 子查询排除已有洞察的评论，避免重复处理
+        insight_exists_subquery = (
+            select(ReviewInsight.id)
+            .where(ReviewInsight.review_id == Review.id)
+            .exists()
+        )
+        
+        # Get translated reviews that DON'T have insights yet - ordered by review_date to match page display order
         result = db.execute(
             select(Review)
             .where(
                 and_(
                     Review.product_id == product_id,
                     Review.translation_status == "completed",
-                    Review.body_translated.isnot(None)
+                    Review.body_translated.isnot(None),
+                    Review.is_deleted == False,
+                    ~insight_exists_subquery  # [FIX] Only process reviews without insights
                 )
             )
             .order_by(Review.review_date.desc().nullslast(), Review.created_at.desc())
         )
         reviews = result.scalars().all()
         
-        total_reviews = len(reviews)
+        reviews_to_process = len(reviews)
         processed = 0
         insights_extracted = 0
         
-        logger.info(f"Found {total_reviews} translated reviews for insight extraction")
+        logger.info(f"Found {reviews_to_process} reviews remaining for insight extraction (total={total_translated}, already_done={already_processed})")
         
         for review in reviews:
             try:
@@ -647,12 +699,7 @@ def task_extract_insights(self, product_id: str):
                     dimension_schema=dimension_schema  # [NEW] 注入维度
                 )
                 
-                # 无论是否有洞察，都删除旧数据并记录处理完成
-                # Delete existing insights for this review
-                db.execute(
-                    delete(ReviewInsight).where(ReviewInsight.review_id == review.id)
-                )
-                
+                # [FIX] 由于现在只处理没有洞察的评论，不需要删除旧数据
                 # Insert new insights (if any)
                 if insights:
                     for insight_data in insights:
@@ -683,6 +730,12 @@ def task_extract_insights(self, product_id: str):
                 db.commit()
                 processed += 1
                 
+                # [FIX] 定期更新 Task 进度（每10条更新一次）
+                # processed_items = already_processed + 新处理的数量
+                if task_record and processed % 10 == 0:
+                    task_record.processed_items = already_processed + processed
+                    db.commit()
+                
                 # Rate limiting
                 time.sleep(0.2)
                 
@@ -691,17 +744,28 @@ def task_extract_insights(self, product_id: str):
                 db.rollback()
                 continue
         
-        logger.info(f"Insight extraction completed: {processed}/{total_reviews} reviews processed, {insights_extracted} insights extracted")
+        logger.info(f"Insight extraction completed: processed {processed} new reviews (total={total_translated}, now_done={already_processed + processed}), {insights_extracted} insights extracted")
+        
+        # [FIX] 更新 Task 状态为完成
+        if task_record:
+            task_record.status = TaskStatus.COMPLETED.value
+            task_record.processed_items = already_processed + processed  # 最终处理数
+            db.commit()
         
         return {
             "product_id": product_id,
-            "total_reviews": total_reviews,
+            "total_reviews": total_translated,  # 修复：使用正确的变量名
             "processed": processed,
             "insights_extracted": insights_extracted
         }
         
     except Exception as e:
         logger.error(f"Insight extraction failed for product {product_id}: {e}")
+        # [NEW] 更新 Task 状态为失败
+        if task_record:
+            task_record.status = TaskStatus.FAILED.value
+            task_record.error_message = str(e)
+            db.commit()
         raise self.retry(exc=e)
         
     finally:
@@ -728,14 +792,14 @@ def task_extract_themes(self, product_id: str):
     from app.models.review import Review
     from app.models.theme_highlight import ReviewThemeHighlight
     from app.models.product_context_label import ProductContextLabel
-    from app.models.task import TaskType
+    from app.models.task import Task, TaskType, TaskStatus
     from app.services.translation import translation_service
     from sqlalchemy import delete, exists, func
     
     logger.info(f"Starting theme extraction for product {product_id}")
     
     db = get_sync_db()
-    task_record = None  # 任务记录
+    task_record = None
     
     try:
         # [NEW] Step 1: 检查是否有 5W 标签库，如果没有则自动生成
@@ -982,9 +1046,12 @@ def task_extract_themes(self, product_id: str):
         
         logger.info(f"Theme extraction completed: {processed}/{total_reviews} reviews processed, {themes_extracted} theme entries created")
         
-        # [NEW] 标记任务完成
+        # [NEW] 更新 Task 状态为完成
         if task_record:
-            complete_task(db, str(task_record.id), success=True)
+            task_record.status = TaskStatus.COMPLETED.value
+            task_record.total_items = total_reviews
+            task_record.processed_items = processed
+            db.commit()
         
         return {
             "product_id": product_id,
@@ -995,9 +1062,11 @@ def task_extract_themes(self, product_id: str):
         
     except Exception as e:
         logger.error(f"Theme extraction failed for product {product_id}: {e}")
-        # [NEW] 标记任务失败
+        # [NEW] 更新 Task 状态为失败
         if task_record:
-            complete_task(db, str(task_record.id), success=False, error_message=str(e))
+            task_record.status = TaskStatus.FAILED.value
+            task_record.error_message = str(e)
+            db.commit()
         raise self.retry(exc=e)
         
     finally:

@@ -21,6 +21,7 @@ import type {
   MediaPageData,
   Sentiment,
   WebSocketMessage,
+  AnalysisProject,
 } from './types';
 
 // API 基础配置
@@ -481,6 +482,25 @@ export async function triggerThemeExtraction(asin: string): Promise<{
   return response.json();
 }
 
+/**
+ * 停止产品的所有分析任务
+ */
+export async function stopAnalysisTasks(asin: string): Promise<{
+  success: boolean;
+  message: string;
+  product_id: string;
+  asin: string;
+  revoked_count: number;
+}> {
+  const response = await fetch(`${API_BASE}/products/${asin}/stop-analysis`, {
+    method: 'POST',
+  });
+  if (!response.ok) {
+    throw new ApiError(response.status, response.statusText);
+  }
+  return response.json();
+}
+
 // ============== 产品维度相关 ==============
 
 /**
@@ -858,34 +878,14 @@ export async function getAnalysisProjects(params?: {
 /**
  * 获取分析项目详情
  */
-export async function getAnalysisProject(projectId: string): Promise<{
-  id: string;
-  title: string;
-  description?: string;
-  analysis_type: string;
-  status: string;
-  result_content?: any;
-  raw_data_snapshot?: any;
-  error_message?: string;
-  created_at: string;
-  updated_at?: string;
-  items: Array<{
-    id: string;
-    product_id: string;
-    role_label?: string;
-    product?: {
-      id: string;
-      asin: string;
-      title: string;
-      image_url?: string;
-    };
-  }>;
-}> {
+export async function getAnalysisProject(projectId: string): Promise<AnalysisProject> {
   const response = await fetch(`${API_BASE}/analysis/projects/${projectId}`);
   if (!response.ok) {
     throw new ApiError(response.status, response.statusText);
   }
-  return response.json();
+  const data = await response.json();
+  // API 返回的 status 是 string，需要类型断言
+  return data as AnalysisProject;
 }
 
 /**
@@ -1001,6 +1001,9 @@ const apiService = {
   
   // 主题高亮提取
   triggerThemeExtraction,
+  
+  // 停止分析任务
+  stopAnalysisTasks,
   
   // 产品维度
   getDimensions,

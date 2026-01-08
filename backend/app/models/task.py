@@ -24,7 +24,8 @@ class TaskStatus(str, Enum):
     PROCESSING = "processing"
     COMPLETED = "completed"
     FAILED = "failed"
-    TIMEOUT = "timeout"  # [NEW] 超时状态
+    TIMEOUT = "timeout"
+    STOPPED = "stopped"  # [NEW] 用户手动停止
 
 
 class TaskType(str, Enum):

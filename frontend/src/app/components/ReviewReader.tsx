@@ -11,7 +11,9 @@ import {
   Check,
   Tag,
   Maximize2,
-  Minimize2
+  Minimize2,
+  StopCircle,
+  AlertTriangle
 } from 'lucide-react';
 import { useState, useMemo, useRef, useEffect, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
@@ -85,6 +87,16 @@ export function ReviewReader() {
   const pageSize = 50;
   const pageContainerRef = useRef<HTMLDivElement | null>(null);
   const pollingRef = useRef<{ active: boolean; timer: NodeJS.Timeout | null }>({ active: false, timer: null }); // 轮询状态管理
+  const stuckDetectionRef = useRef<{ lastProgress: number; stuckCount: number }>({ lastProgress: 0, stuckCount: 0 }); // 卡住检测
+  const manuallyStoppedRef = useRef(false); // 用户手动停止标志
+  const [isTaskStuck, setIsTaskStuck] = useState(false); // 任务是否卡住
+  
+  // [NEW] 存储后端返回的活跃任务状态
+  const [activeTasks, setActiveTasks] = useState<{
+    translation: string;
+    insights: string;
+    themes: string;
+  } | null>(null);
 
   // 加载产品统计信息和评论
   const fetchData = useCallback(async () => {
@@ -130,6 +142,92 @@ export function ReviewReader() {
         1: statsResponse.rating_distribution.star_1,
       });
       setApiSentimentDistribution(statsResponse.sentiment_distribution);
+      
+      // [NEW] 保存活跃任务状态，并根据状态恢复轮询
+      if (statsResponse.active_tasks) {
+        setActiveTasks({
+          translation: statsResponse.active_tasks.translation,
+          insights: statsResponse.active_tasks.insights,
+          themes: statsResponse.active_tasks.themes,
+        });
+        
+        // 只有后端任务状态是 processing 时才恢复轮询（用户可控）
+        if (!manuallyStoppedRef.current && !pollingRef.current.active) {
+          const { translation, insights, themes } = statsResponse.active_tasks;
+          
+          if (translation === 'processing') {
+            console.log('Backend reports translation is processing, resuming polling');
+            setIsTranslating(true);
+            // 翻译轮询由现有的 useEffect 自动处理
+          }
+          
+          // 恢复洞察提取状态并启动轮询
+          if (insights === 'processing') {
+            console.log('Backend reports insights is processing, resuming polling');
+            setIsExtractingInsights(true);
+            pollingRef.current.active = true;
+            
+            // 启动洞察轮询
+            const pollInsights = async () => {
+              if (!pollingRef.current.active || manuallyStoppedRef.current) return;
+              
+              try {
+                const stats = await apiService.getProductStats(asin);
+                const total = stats.product.translated_reviews;
+                const withInsights = stats.product.reviews_with_insights || 0;
+                
+                setReviewsWithInsights(withInsights);
+                
+                if (withInsights >= total && total > 0) {
+                  setIsExtractingInsights(false);
+                  pollingRef.current.active = false;
+                  toast.success('洞察提取完成！');
+                } else if (pollingRef.current.active && !manuallyStoppedRef.current) {
+                  pollingRef.current.timer = setTimeout(pollInsights, 2000);
+                }
+              } catch (err) {
+                if (pollingRef.current.active && !manuallyStoppedRef.current) {
+                  pollingRef.current.timer = setTimeout(pollInsights, 3000);
+                }
+              }
+            };
+            pollingRef.current.timer = setTimeout(pollInsights, 1000);
+          }
+          
+          // 恢复主题提取状态并启动轮询
+          if (themes === 'processing') {
+            console.log('Backend reports themes is processing, resuming polling');
+            setIsExtractingThemes(true);
+            pollingRef.current.active = true;
+            
+            // 启动主题轮询
+            const pollThemes = async () => {
+              if (!pollingRef.current.active || manuallyStoppedRef.current) return;
+              
+              try {
+                const stats = await apiService.getProductStats(asin);
+                const total = stats.product.translated_reviews;
+                const withThemes = stats.product.reviews_with_themes || 0;
+                
+                setReviewsWithThemes(withThemes);
+                
+                if (withThemes >= total && total > 0) {
+                  setIsExtractingThemes(false);
+                  pollingRef.current.active = false;
+                  toast.success('主题提取完成！');
+                } else if (pollingRef.current.active && !manuallyStoppedRef.current) {
+                  pollingRef.current.timer = setTimeout(pollThemes, 2000);
+                }
+              } catch (err) {
+                if (pollingRef.current.active && !manuallyStoppedRef.current) {
+                  pollingRef.current.timer = setTimeout(pollThemes, 3000);
+                }
+              }
+            };
+            pollingRef.current.timer = setTimeout(pollThemes, 1000);
+          }
+        }
+      }
     } catch (err) {
       console.error('Failed to fetch data:', err);
       setError(err instanceof Error ? err.message : '获取数据失败');
@@ -333,92 +431,8 @@ export function ReviewReader() {
     return () => clearInterval(interval);
   }, [isTranslating, isFullAnalysis, asin, fetchData, updateReviewsIncrementally]);
 
-  // ========== 自动检测并恢复后台任务轮询 ==========
-  // 解决问题：刷新页面后，后台任务继续进行但前端不再轮询更新
-  // 依赖 task 加载完成后检测状态
-  useEffect(() => {
-    // 只在初次加载完成、有数据、且没有活跃轮询时执行
-    if (loading || !task || !asin || pollingRef.current.active || isTranslating || isFullAnalysis) {
-      return;
-    }
-    
-    const total = totalReviews;
-    const translated = translatedCount;
-    const withInsights = reviewsWithInsights;
-    const withThemes = reviewsWithThemes;
-    
-    // 检查翻译是否正在进行
-    const isTranslationInProgress = translated > 0 && translated < total && total > 0;
-    
-    // 检查洞察/主题提取是否正在进行（翻译已完成但洞察/主题未完成）
-    const translationComplete = translated >= total && total > 0 && bulletPointsTranslated;
-    const isInsightsInProgress = translationComplete && translated > 0 && withInsights < translated;
-    const isThemesInProgress = translationComplete && translated > 0 && withThemes < translated;
-    const isPhase2InProgress = isInsightsInProgress || isThemesInProgress;
-    
-    console.log('Auto-resume check:', {
-      total, translated, withInsights, withThemes,
-      isTranslationInProgress, translationComplete, isPhase2InProgress,
-      bulletPointsTranslated
-    });
-    
-    // 如果有正在进行的任务，恢复轮询
-    if (isPhase2InProgress) {
-      console.log('Resuming Phase 2 polling (insights/themes)...');
-      pollingRef.current.active = true;
-      setIsFullAnalysis(true);
-      setAnalysisPhase('insights');
-      toast.info('检测到后台任务', '正在同步洞察和主题提取进度...');
-      
-      // 启动 Phase 2 轮询
-      const resumePhase2Polling = async () => {
-        if (!pollingRef.current.active) return;
-        
-        try {
-          const stats = await apiService.getProductStats(asin);
-          const total = stats.product.translated_reviews;
-          const withInsights = stats.product.reviews_with_insights || 0;
-          const withThemes = stats.product.reviews_with_themes || 0;
-          
-          setReviewsWithInsights(withInsights);
-          setReviewsWithThemes(withThemes);
-          await updateReviewsIncrementally();
-          
-          const allDone = withInsights >= total && withThemes >= total && total > 0;
-          
-          console.log('Phase 2 resume progress:', { total, withInsights, withThemes, allDone });
-          
-          if (allDone) {
-            setAnalysisPhase('complete');
-            toast.success('分析完成！', `已处理 ${total} 条评论`);
-            setIsFullAnalysis(false);
-            pollingRef.current.active = false;
-            if (pollingRef.current.timer) {
-              clearTimeout(pollingRef.current.timer);
-              pollingRef.current.timer = null;
-            }
-            fetchData(); // 最后刷新一次
-          } else if (pollingRef.current.active) {
-            pollingRef.current.timer = setTimeout(resumePhase2Polling, 2000);
-          }
-        } catch (err) {
-          console.error('Phase 2 resume polling error:', err);
-          if (pollingRef.current.active) {
-            pollingRef.current.timer = setTimeout(resumePhase2Polling, 3000);
-          }
-        }
-      };
-      
-      pollingRef.current.timer = setTimeout(resumePhase2Polling, 1000);
-      
-    } else if (isTranslationInProgress) {
-      console.log('Resuming translation polling...');
-      setIsTranslating(true);
-      setTranslationProgress(total > 0 ? Math.round((translated / total) * 100) : 0);
-      toast.info('检测到后台任务', '正在同步翻译进度...');
-      // 翻译轮询由上面的 useEffect 自动处理
-    }
-  }, [loading, task, asin, totalReviews, translatedCount, reviewsWithInsights, reviewsWithThemes, bulletPointsTranslated, isTranslating, isFullAnalysis, updateReviewsIncrementally, fetchData]);
+  // [SIMPLIFIED] 自动恢复逻辑已移至 fetchData，基于后端 active_tasks 状态
+  // 不再基于数据完整度"猜测"任务状态，完全由后端控制
 
   // Review action handlers
   const handleEdit = (id: string) => {
@@ -711,6 +725,9 @@ export function ReviewReader() {
   const handleStartTranslation = async () => {
     if (!asin) return;
     
+    // 清除手动停止标志，允许正常轮询
+    manuallyStoppedRef.current = false;
+    
     setIsTranslating(true);
     setTranslationProgress(0);
 
@@ -730,21 +747,48 @@ export function ReviewReader() {
   const handleExtractInsights = async () => {
     if (!asin) return;
     
+    // 清除手动停止标志，允许正常轮询
+    manuallyStoppedRef.current = false;
+    
     setIsExtractingInsights(true);
     
     try {
       const result = await apiService.triggerInsightExtraction(asin);
-      setInfoDialog({
-        show: true,
-        title: '洞察提取已启动',
-        message: `正在处理 ${result.reviews_to_process} 条评论`,
-        type: 'success'
-      });
-      // 几秒后刷新数据
-      setTimeout(() => {
-        fetchData();
-        setIsExtractingInsights(false);
-      }, 5000);
+      toast.success('洞察提取已启动', `正在处理 ${result.reviews_to_process} 条评论`);
+      
+      // 启动轮询检查进度
+      pollingRef.current.active = true;
+      const checkInsightProgress = async () => {
+        if (!pollingRef.current.active || manuallyStoppedRef.current) {
+          console.log('Insight polling stopped');
+          return;
+        }
+        
+        try {
+          const stats = await apiService.getProductStats(asin);
+          const total = stats.product.translated_reviews;
+          const withInsights = stats.product.reviews_with_insights || 0;
+          
+          setReviewsWithInsights(withInsights);
+          await updateReviewsIncrementally();
+          
+          if (withInsights >= total && total > 0) {
+            toast.success('洞察提取完成！', `已处理 ${total} 条评论`);
+            setIsExtractingInsights(false);
+            pollingRef.current.active = false;
+            fetchData();
+          } else if (pollingRef.current.active && !manuallyStoppedRef.current) {
+            pollingRef.current.timer = setTimeout(checkInsightProgress, 2000);
+          }
+        } catch (err) {
+          console.error('Failed to check insight progress:', err);
+          if (pollingRef.current.active && !manuallyStoppedRef.current) {
+            pollingRef.current.timer = setTimeout(checkInsightProgress, 3000);
+          }
+        }
+      };
+      
+      pollingRef.current.timer = setTimeout(checkInsightProgress, 2000);
     } catch (err) {
       console.error('Failed to extract insights:', err);
       setIsExtractingInsights(false);
@@ -761,6 +805,9 @@ export function ReviewReader() {
   
   const handleFullAnalysis = async () => {
     if (!asin) return;
+    
+    // 清除手动停止标志，允许正常轮询
+    manuallyStoppedRef.current = false;
     
     setIsFullAnalysis(true);
     phase2TriggeredRef.current = false; // 重置 Phase 2 触发标志
@@ -795,8 +842,9 @@ export function ReviewReader() {
         
         // 开始轮询洞察和主题进度，直到完成
         const checkPhase2Progress = async () => {
-          // 检查轮询是否应该继续
-          if (!pollingRef.current.active) {
+          // 检查轮询是否应该继续（包括检查手动停止标志）
+          if (!pollingRef.current.active || manuallyStoppedRef.current) {
+            console.log('Phase 2 polling stopped');
             return;
           }
           
@@ -813,11 +861,31 @@ export function ReviewReader() {
             // 更新评论列表，显示新的洞察和主题
             await updateReviewsIncrementally();
             
+            // 卡住检测：检查进度是否有变化
+            const currentProgress = withInsights + withThemes;
+            if (currentProgress === stuckDetectionRef.current.lastProgress) {
+              stuckDetectionRef.current.stuckCount++;
+              console.log('Progress unchanged, stuck count:', stuckDetectionRef.current.stuckCount);
+              
+              // 连续 5 次（~10 秒）没有进度变化，标记为卡住
+              if (stuckDetectionRef.current.stuckCount >= 5 && !isTaskStuck) {
+                setIsTaskStuck(true);
+                toast.warning('任务可能已卡住', '后台服务可能已停止，点击「停止分析」后可重新启动');
+              }
+            } else {
+              // 有进度，重置计数
+              stuckDetectionRef.current.lastProgress = currentProgress;
+              stuckDetectionRef.current.stuckCount = 0;
+              setIsTaskStuck(false);
+            }
+            
             console.log('Phase 2 progress:', { 
               total, withInsights, withThemes,
               insightProgress: total > 0 ? Math.round((withInsights / total) * 100) : 0,
               themeProgress: total > 0 ? Math.round((withThemes / total) * 100) : 0,
-              pollingActive: pollingRef.current.active
+              pollingActive: pollingRef.current.active,
+              manuallyStopped: manuallyStoppedRef.current,
+              stuckCount: stuckDetectionRef.current.stuckCount
             });
             
             // 检查是否全部完成（洞察和主题都处理完所有已翻译评论）
@@ -829,19 +897,21 @@ export function ReviewReader() {
               setIsFullAnalysis(false);
               setIsTranslating(false);
               pollingRef.current.active = false; // 停止轮询
+              stuckDetectionRef.current = { lastProgress: 0, stuckCount: 0 };
+              setIsTaskStuck(false);
               if (pollingRef.current.timer) {
                 clearTimeout(pollingRef.current.timer);
                 pollingRef.current.timer = null;
               }
               // 最后刷新一次数据
               await fetchData();
-            } else if (pollingRef.current.active) {
-              // 继续轮询
+            } else if (pollingRef.current.active && !manuallyStoppedRef.current) {
+              // 继续轮询（仅在没有手动停止时）
               pollingRef.current.timer = setTimeout(checkPhase2Progress, 2000);
             }
           } catch (err) {
             console.error('Failed to check Phase 2 progress:', err);
-            if (pollingRef.current.active) {
+            if (pollingRef.current.active && !manuallyStoppedRef.current) {
               pollingRef.current.timer = setTimeout(checkPhase2Progress, 3000);
             }
           }
@@ -895,8 +965,9 @@ export function ReviewReader() {
       
       // 轮询翻译进度，完成后自动触发洞察和主题提取
       const checkProgress = async () => {
-        // 检查轮询是否应该继续
-        if (!pollingRef.current.active || phase2TriggeredRef.current) {
+        // 检查轮询是否应该继续（包括检查手动停止标志）
+        if (!pollingRef.current.active || phase2TriggeredRef.current || manuallyStoppedRef.current) {
+          console.log('Translation polling stopped');
           return;
         }
         
@@ -923,20 +994,21 @@ export function ReviewReader() {
             progress, translated, total, 
             translationDone, bulletsDone, titleDone,
             status: stats.product.translation_status,
-            pollingActive: pollingRef.current.active
+            pollingActive: pollingRef.current.active,
+            manuallyStopped: manuallyStoppedRef.current
           });
           
           if (translationDone && bulletsDone && titleDone && !phase2TriggeredRef.current) {
             setIsTranslating(false);
             toast.success('翻译完成', '正在自动提取洞察和主题...');
             await triggerPhase2();
-          } else if (pollingRef.current.active && !phase2TriggeredRef.current) {
-            // 继续轮询
+          } else if (pollingRef.current.active && !phase2TriggeredRef.current && !manuallyStoppedRef.current) {
+            // 继续轮询（仅在没有手动停止时）
             pollingRef.current.timer = setTimeout(checkProgress, 2000);
           }
         } catch (err) {
           console.error('Failed to check progress:', err);
-          if (pollingRef.current.active && !phase2TriggeredRef.current) {
+          if (pollingRef.current.active && !phase2TriggeredRef.current && !manuallyStoppedRef.current) {
             pollingRef.current.timer = setTimeout(checkProgress, 3000);
           }
         }
@@ -953,31 +1025,100 @@ export function ReviewReader() {
       toast.error('启动完整分析失败', '请重试');
     }
   };
-  
+
   const handleExtractThemes = async () => {
     if (!asin) return;
+    
+    // 清除手动停止标志，允许正常轮询
+    manuallyStoppedRef.current = false;
     
     setIsExtractingThemes(true);
     
     try {
       const result = await apiService.triggerThemeExtraction(asin);
-      setInfoDialog({
-        show: true,
-        title: '主题提取已启动',
-        message: `正在处理 ${result.reviews_to_process} 条评论`,
-        type: 'success'
-      });
-      // 几秒后刷新数据
-      setTimeout(() => {
-        fetchData();
-        setIsExtractingThemes(false);
-      }, 5000);
+      toast.success('主题提取已启动', `正在处理 ${result.reviews_to_process} 条评论`);
+      
+      // 启动轮询检查进度
+      pollingRef.current.active = true;
+      const checkThemeProgress = async () => {
+        if (!pollingRef.current.active || manuallyStoppedRef.current) {
+          console.log('Theme polling stopped');
+          return;
+        }
+        
+        try {
+          const stats = await apiService.getProductStats(asin);
+          const total = stats.product.translated_reviews;
+          const withThemes = stats.product.reviews_with_themes || 0;
+          
+          setReviewsWithThemes(withThemes);
+          await updateReviewsIncrementally();
+          
+          if (withThemes >= total && total > 0) {
+            toast.success('主题提取完成！', `已处理 ${total} 条评论`);
+            setIsExtractingThemes(false);
+            pollingRef.current.active = false;
+            fetchData();
+          } else if (pollingRef.current.active && !manuallyStoppedRef.current) {
+            pollingRef.current.timer = setTimeout(checkThemeProgress, 2000);
+          }
+        } catch (err) {
+          console.error('Failed to check theme progress:', err);
+          if (pollingRef.current.active && !manuallyStoppedRef.current) {
+            pollingRef.current.timer = setTimeout(checkThemeProgress, 3000);
+          }
+        }
+      };
+      
+      pollingRef.current.timer = setTimeout(checkThemeProgress, 2000);
     } catch (err) {
       console.error('Failed to extract themes:', err);
       setIsExtractingThemes(false);
       toast.error('提取主题失败', '请确保有已翻译的评论');
     }
   };
+
+  // 停止分析任务（前端停止轮询 + 后端终止任务）
+  const handleStopAnalysis = useCallback(async () => {
+    if (!asin) return;
+    
+    try {
+      // 调用后端API终止 Celery 任务并更新 Task 表状态
+      await apiService.stopAnalysisTasks(asin);
+      
+      // 设置手动停止标志（防止刷新后立即恢复）
+      manuallyStoppedRef.current = true;
+      
+      // 清除轮询定时器
+      if (pollingRef.current.timer) {
+        clearTimeout(pollingRef.current.timer);
+        pollingRef.current.timer = null;
+      }
+      pollingRef.current.active = false;
+      
+      // 重置所有分析状态
+      setIsTranslating(false);
+      setIsFullAnalysis(false);
+      setIsExtractingInsights(false);
+      setIsExtractingThemes(false);
+      setAnalysisPhase('idle');
+      setTranslationProgress(0);
+      setIsTaskStuck(false);
+      phase2TriggeredRef.current = false;
+      stuckDetectionRef.current = { lastProgress: 0, stuckCount: 0 };
+      
+      // 刷新数据以获取最新状态（后端会返回 stopped 状态）
+      await fetchData();
+      
+      toast.success('分析已停止', '后台任务已终止，可重新启动');
+    } catch (error) {
+      console.error('Failed to stop analysis:', error);
+      toast.error('停止失败', '请重试或刷新页面');
+    }
+  }, [asin, fetchData]);
+  
+  // [REMOVED] handleResumeAnalysis 不再需要
+  // 用户可以直接点击「完整分析」「提取洞察」等按钮重新启动任务
 
   const handleOpenProductLink = () => {
     if (!asin) return;
@@ -1109,9 +1250,9 @@ export function ReviewReader() {
                   );
                 } else if (isFullAnalysis || (isTranslating && isFullAnalysis)) {
                   return (
-                    <Button disabled size="sm" className="gap-2 min-w-[120px] bg-blue-600">
+                    <Button disabled size="sm" className="gap-2 min-w-[100px] bg-blue-600">
                       <PlayCircle className="size-4 animate-spin" />
-                      完整分析中
+                      分析中
                     </Button>
                   );
                 } else if (!allTranslated && !isTranslating) {
@@ -1156,7 +1297,7 @@ export function ReviewReader() {
                   );
                 } else if (isTranslating && !isFullAnalysis) {
                   return (
-                    <Button disabled size="sm" className="gap-2 min-w-[100px]">
+                    <Button disabled size="sm" className="gap-2 min-w-[80px]">
                       <PlayCircle className="size-4 animate-spin" />
                       翻译中
                     </Button>
@@ -1259,6 +1400,21 @@ export function ReviewReader() {
                 }
                 return null;
               })()}
+              
+              {/* 停止按钮 - 仅在任务运行时显示 */}
+              {(isTranslating || isFullAnalysis || isExtractingInsights || isExtractingThemes) && (
+                <Button 
+                  onClick={handleStopAnalysis}
+                  size="sm"
+                  variant="outline"
+                  className={`gap-2 min-w-[80px] ${isTaskStuck ? 'bg-red-500 text-white border-red-600 animate-pulse hover:bg-red-600' : 'text-red-600 border-red-500 hover:bg-red-50'}`}
+                  title={isTaskStuck ? '⚠️ 任务可能已卡住，点击停止终止任务' : '停止并终止后台任务'}
+                >
+                  {isTaskStuck ? <AlertTriangle className="size-4" /> : <StopCircle className="size-4" />}
+                  停止
+                </Button>
+              )}
+              
               <Button onClick={handleExportXLSX} size="sm" className="gap-2">
                 <FileSpreadsheet className="size-4" />
                 XLSX

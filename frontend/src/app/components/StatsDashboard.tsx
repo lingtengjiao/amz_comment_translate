@@ -32,6 +32,7 @@ import { TocContext } from './JsonReportRenderer';
 interface StatsDashboardProps {
   analysisData: ReportStats;
   onViewEvidence?: (title: string, evidence: EvidenceSample[], totalCount: number) => void;
+  onViewReviews?: (dimensionKey: string, dimensionLabel: string, tagLabel: string, totalCount: number) => void;
 }
 
 // 进度条组件
@@ -82,6 +83,8 @@ const StatsCard = memo(function StatsCard({
   data,
   colorClass,
   onViewEvidence,
+  onViewReviews,
+  dimensionKey,
   defaultExpanded = false
 }: {
   title: string;
@@ -90,6 +93,8 @@ const StatsCard = memo(function StatsCard({
   data: ChartDataItem[] | StatsCategoryData | undefined;
   colorClass: string;
   onViewEvidence?: (title: string, evidence: EvidenceSample[], totalCount: number) => void;
+  onViewReviews?: (dimensionKey: string, dimensionLabel: string, tagLabel: string, totalCount: number) => void;
+  dimensionKey?: string;
   defaultExpanded?: boolean;
 }) {
   const [expanded, setExpanded] = useState(defaultExpanded);
@@ -127,9 +132,13 @@ const StatsCard = memo(function StatsCard({
             item={item}
             maxPercent={maxPercent}
             colorClass={colorClass}
-            onClick={onViewEvidence && item.evidence && item.evidence.length > 0 
-              ? () => onViewEvidence(`${title} - ${item.name}`, item.evidence!, item.value)
-              : undefined
+            onClick={
+              // 优先使用 onViewReviews（显示完整评论），否则使用 onViewEvidence（显示证据样本）
+              onViewReviews && dimensionKey
+                ? () => onViewReviews(dimensionKey, title, item.name, item.value)
+                : (onViewEvidence && item.evidence && item.evidence.length > 0 
+                    ? () => onViewEvidence(`${title} - ${item.name}`, item.evidence!, item.value)
+                    : undefined)
             }
           />
         ))}
@@ -159,9 +168,11 @@ const StatsCard = memo(function StatsCard({
 
 export const StatsDashboard = memo(function StatsDashboard({
   analysisData,
-  onViewEvidence
+  onViewEvidence,
+  onViewReviews
 }: StatsDashboardProps) {
-  const { context, insight, total_reviews, meta } = analysisData;
+  const { context, insight, total_reviews } = analysisData;
+  const meta = (analysisData as any).meta;
   const dashboardRef = useRef<HTMLDivElement>(null);
   
   // 从 TocContext 获取 registerSection 函数
@@ -228,6 +239,8 @@ export const StatsDashboard = memo(function StatsDashboard({
               data={context?.who}
               colorClass="bg-blue-500"
               onViewEvidence={onViewEvidence}
+              onViewReviews={onViewReviews}
+              dimensionKey="who"
               defaultExpanded
             />
             <StatsCard
@@ -237,6 +250,8 @@ export const StatsDashboard = memo(function StatsDashboard({
               data={context?.where}
               colorClass="bg-purple-500"
               onViewEvidence={onViewEvidence}
+              onViewReviews={onViewReviews}
+              dimensionKey="where"
             />
             <StatsCard
               title="When 时机"
@@ -245,6 +260,8 @@ export const StatsDashboard = memo(function StatsDashboard({
               data={context?.when}
               colorClass="bg-orange-500"
               onViewEvidence={onViewEvidence}
+              onViewReviews={onViewReviews}
+              dimensionKey="when"
             />
             <StatsCard
               title="Why 动机"
@@ -253,6 +270,8 @@ export const StatsDashboard = memo(function StatsDashboard({
               data={context?.why}
               colorClass="bg-pink-500"
               onViewEvidence={onViewEvidence}
+              onViewReviews={onViewReviews}
+              dimensionKey="why"
             />
             <StatsCard
               title="What 任务"
@@ -261,6 +280,8 @@ export const StatsDashboard = memo(function StatsDashboard({
               data={context?.what}
               colorClass="bg-cyan-500"
               onViewEvidence={onViewEvidence}
+              onViewReviews={onViewReviews}
+              dimensionKey="what"
             />
           </div>
         </div>
@@ -281,6 +302,8 @@ export const StatsDashboard = memo(function StatsDashboard({
               data={insight?.strength}
               colorClass="bg-emerald-500"
               onViewEvidence={onViewEvidence}
+              onViewReviews={onViewReviews}
+              dimensionKey="strength"
               defaultExpanded
             />
             <StatsCard
@@ -290,6 +313,8 @@ export const StatsDashboard = memo(function StatsDashboard({
               data={insight?.weakness}
               colorClass="bg-red-500"
               onViewEvidence={onViewEvidence}
+              onViewReviews={onViewReviews}
+              dimensionKey="weakness"
               defaultExpanded
             />
             <StatsCard
@@ -299,6 +324,8 @@ export const StatsDashboard = memo(function StatsDashboard({
               data={insight?.suggestion}
               colorClass="bg-amber-500"
               onViewEvidence={onViewEvidence}
+              onViewReviews={onViewReviews}
+              dimensionKey="suggestion"
             />
             <StatsCard
               title="使用场景"
@@ -307,6 +334,8 @@ export const StatsDashboard = memo(function StatsDashboard({
               data={insight?.scenario}
               colorClass="bg-indigo-500"
               onViewEvidence={onViewEvidence}
+              onViewReviews={onViewReviews}
+              dimensionKey="scenario"
             />
             <StatsCard
               title="情绪反馈"
@@ -315,6 +344,8 @@ export const StatsDashboard = memo(function StatsDashboard({
               data={insight?.emotion}
               colorClass="bg-rose-500"
               onViewEvidence={onViewEvidence}
+              onViewReviews={onViewReviews}
+              dimensionKey="emotion"
             />
           </div>
         </div>

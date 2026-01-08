@@ -72,8 +72,8 @@ export default function WorkbenchPage() {
         setIsModalOpen(false);
         setSelectedIds([]);
         
-        // 可选：跳转到项目详情页
-        // navigate(`/analysis/${result.project.id}`);
+        // 跳转到项目详情页（会自动轮询直到分析完成）
+        navigate(`/analysis/${result.project.id}`);
       } else {
         throw new Error(result.error || '创建失败');
       }

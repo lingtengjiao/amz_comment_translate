@@ -3,9 +3,11 @@ import { useState, useCallback, useEffect } from 'react';
 import { UnifiedProductCard } from './UnifiedProductCard';
 import { TaskListHeader } from './TaskListHeader';
 import { DimensionSetupDialog } from './DimensionSetupDialog';
+import { AnalysisProjectCard } from './AnalysisProjectCard';
 import { apiService } from '@/api';
-import type { ApiProduct } from '@/api/types';
+import type { ApiProduct, AnalysisProject } from '@/api/types';
 import { toast } from 'sonner';
+import { GitCompare } from 'lucide-react';
 
 function EmptyState() {
   return (
@@ -49,6 +51,10 @@ export function TaskList() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   
+  // 对比分析项目
+  const [analysisProjects, setAnalysisProjects] = useState<AnalysisProject[]>([]);
+  const [loadingProjects, setLoadingProjects] = useState(true);
+  
   // 维度设置对话框状态
   const [dimensionDialogOpen, setDimensionDialogOpen] = useState(false);
   const [selectedProduct, setSelectedProduct] = useState<ApiProduct | null>(null);
@@ -68,9 +74,23 @@ export function TaskList() {
     }
   }, []);
 
+  const fetchAnalysisProjects = useCallback(async () => {
+    setLoadingProjects(true);
+    try {
+      const response = await apiService.getAnalysisProjects({ limit: 6 });
+      setAnalysisProjects(response.projects || []);
+    } catch (err) {
+      console.error('Failed to fetch analysis projects:', err);
+      // 静默失败，不影响主流程
+    } finally {
+      setLoadingProjects(false);
+    }
+  }, []);
+
   useEffect(() => {
     fetchTasks();
-  }, [fetchTasks]);
+    fetchAnalysisProjects();
+  }, [fetchTasks, fetchAnalysisProjects]);
 
   // 检查是否有维度，如果没有则显示对话框
   const handleViewReviews = useCallback(async (productId: string) => {
@@ -120,27 +140,57 @@ export function TaskList() {
       <TaskListHeader />
 
       {/* Main Content */}
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
-        {/* Task Grid */}
+      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12 space-y-12">
+        {/* 对比分析项目区域 */}
+        {!loadingProjects && analysisProjects.length > 0 && (
+          <section>
+            <div className="flex items-center justify-between mb-6">
+              <div className="flex items-center gap-2">
+                <GitCompare className="size-5 text-indigo-600" />
+                <h2 className="text-2xl font-bold text-gray-900 dark:text-gray-100">
+                  对比分析项目
+                </h2>
+              </div>
+              <button
+                onClick={() => navigate('/analysis')}
+                className="text-sm text-indigo-600 hover:text-indigo-700 dark:text-indigo-400 dark:hover:text-indigo-300 font-medium"
+              >
+                查看全部 →
+              </button>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+              {analysisProjects.map(project => (
+                <AnalysisProjectCard key={project.id} project={project} />
+              ))}
+            </div>
+          </section>
+        )}
+
+        {/* 产品任务区域 */}
+        <section>
+          <h2 className="text-2xl font-bold text-gray-900 dark:text-gray-100 mb-6">
+            产品列表
+          </h2>
         {loading ? (
           <LoadingState />
         ) : error ? (
           <ErrorState error={error} onRetry={fetchTasks} />
-        ) : products.length === 0 ? (
+          ) : products.length === 0 ? (
           <EmptyState />
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {products.map(product => (
-              <UnifiedProductCard
-                key={product.id}
-                product={product}
-                mode="view"
-                onClick={() => handleViewReviews(product.id)}
-                isLoading={checkingDimensions && selectedProduct?.id === product.id}
+              {products.map(product => (
+                <UnifiedProductCard
+                  key={product.id}
+                  product={product}
+                  mode="view"
+                  onClick={() => handleViewReviews(product.id)}
+                  isLoading={checkingDimensions && selectedProduct?.id === product.id}
               />
             ))}
           </div>
         )}
+        </section>
       </main>
       
       {/* 维度设置对话框 */}

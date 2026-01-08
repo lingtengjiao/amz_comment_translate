@@ -394,11 +394,25 @@ export interface ApiSentimentDistribution {
   negative: number;
 }
 
+/** 活跃任务状态枚举 */
+export type ActiveTaskStatus = 'idle' | 'processing' | 'completed' | 'stopped' | 'failed';
+
+/** 活跃任务状态响应 */
+export interface ApiActiveTasksResponse {
+  translation: ActiveTaskStatus;
+  insights: ActiveTaskStatus;
+  themes: ActiveTaskStatus;
+  translation_progress: number;
+  insights_progress: number;
+  themes_progress: number;
+}
+
 /** 后端产品统计响应 */
 export interface ApiProductStatsResponse {
   product: ApiProduct;
   rating_distribution: ApiRatingDistribution;
   sentiment_distribution: ApiSentimentDistribution;
+  active_tasks?: ApiActiveTasksResponse;  // [NEW] 活跃任务状态
 }
 
 /** 后端 Ingest 响应 */
@@ -729,4 +743,191 @@ export interface ApiReportListResponse {
   success: boolean;
   reports: ProductReport[];
   total: number;
+}
+
+// ============== 对比分析相关类型 ==============
+
+/** 分析项目状态 */
+export type AnalysisProjectStatus = 'pending' | 'processing' | 'completed' | 'failed';
+
+/** 分析项目产品项 */
+export interface AnalysisItem {
+  id: string;
+  product_id: string;
+  role_label?: string;
+  display_order?: number;
+  product?: {
+    id: string;
+    asin: string;
+    title: string;
+    image_url?: string;
+    marketplace?: string;
+  };
+}
+
+/** 分析项目 */
+export interface AnalysisProject {
+  id: string;
+  title: string;
+  description?: string;
+  analysis_type: string;
+  status: AnalysisProjectStatus;
+  result_content?: ComparisonResultContent;
+  raw_data_snapshot?: any;
+  error_message?: string;
+  created_at: string;
+  updated_at?: string;
+  items: AnalysisItem[];
+}
+
+/** 对比分析结果内容（对应后端 MUTUAL_COMPETITOR_PROMPT 的输出结构） */
+export interface ComparisonResultContent {
+  overview_verdict: string;
+  feature_matrix: FeatureMatrixItem[];
+  audience_diff: AudienceDiff;
+  swot_comparison: Record<string, SwotItem>;
+  sentiment_comparison: SentimentContrast;
+  actionable_advice: ActionAdvice[];
+  final_conclusion: string;
+}
+
+/** 维度对比矩阵项 */
+export interface FeatureMatrixItem {
+  dimension: string;
+  weight: string;
+  rankings: {
+    product_name: string;
+    score: number;
+    reason: string;
+  }[];
+  summary: string;
+}
+
+/** 人群与场景差异 */
+export interface AudienceDiff {
+  demographic_contrast: string;
+  scenario_contrast: string;
+  buying_motivation_gap: string;
+}
+
+/** SWOT 分析项 */
+export interface SwotItem {
+  strengths: string[];
+  weaknesses: string[];
+  opportunities: string[];
+  threats: string[];
+}
+
+/** 口碑热词对比 */
+export interface SentimentContrast {
+  positive_themes_contrast: string;
+  negative_themes_contrast: string;
+  verdict: string;
+}
+
+/** 行动建议 */
+export interface ActionAdvice {
+  priority: string;
+  category: string;
+  advice: string;
+  rationale: string;
+}
+
+// ============== VOC 对比分析类型 ==============
+
+/** 标签+描述+数量 清单项 */
+export interface LabelDescItem {
+  label: string;
+  desc: string;
+  count?: number;  // 评论数量
+  is_inferred?: boolean;  // 是否为AI智能推断（无原始评论关联）
+}
+
+/** 5W 用户画像 */
+export interface FiveWProfile {
+  who: LabelDescItem[];
+  when: LabelDescItem[];
+  where: LabelDescItem[];
+  why: LabelDescItem[];
+  what: LabelDescItem[];
+}
+
+/** 维度评价（5类口碑洞察：优势/痛点/建议/场景/情绪） */
+export interface DimensionProfile {
+  pros: LabelDescItem[];
+  cons: LabelDescItem[];
+  suggestion?: LabelDescItem[];  // 用户建议
+  scenario?: LabelDescItem[];    // 使用场景
+  emotion?: LabelDescItem[];     // 情绪反馈
+}
+
+/** 产品画像 */
+export interface ProductProfile {
+  product_name: string;
+  asin: string;
+  image_url?: string;
+  five_w: FiveWProfile;
+  dimensions: DimensionProfile;
+}
+
+/** 维度洞察项（差异/定位） */
+export interface InsightHighlight {
+  product: number;  // 产品序号（1-5）
+  text: string;
+}
+
+/** 单个维度的洞察 */
+export interface DimensionInsight {
+  name: string;
+  commonality: string;
+  differences: InsightHighlight[];
+  positioning: InsightHighlight[];
+}
+
+/** 维度洞察集合（10个维度：5W用户画像 + 5类口碑洞察） */
+export interface DimensionInsights {
+  // 5W 用户画像
+  who?: DimensionInsight;
+  when?: DimensionInsight;
+  where?: DimensionInsight;
+  why?: DimensionInsight;
+  what?: DimensionInsight;
+  // 5类口碑洞察
+  pros?: DimensionInsight;
+  cons?: DimensionInsight;
+  suggestion?: DimensionInsight;  // 用户建议
+  scenario?: DimensionInsight;    // 使用场景
+  emotion?: DimensionInsight;     // 情绪反馈
+}
+
+/** 策略总结项 */
+export interface StrategySummaryItem {
+  title: string;
+  emoji: string;
+  content: string;
+}
+
+/** 策略总结 */
+export interface StrategySummary {
+  market_positioning: StrategySummaryItem;
+  scenario_deep_dive: StrategySummaryItem;
+  growth_opportunities: StrategySummaryItem;
+}
+
+/** VOC 对比分析结果（新版 Prompt 输出） */
+export interface StructuredResultContent {
+  product_profiles: ProductProfile[];
+  dimension_insights?: DimensionInsights;
+  market_summary: string;
+  strategy_summary?: StrategySummary;
+}
+
+/** 辅助函数：判断是否为新版结构化分析结果 */
+export function isStructuredResult(data: any): data is StructuredResultContent {
+  return data && 'product_profiles' in data && Array.isArray(data.product_profiles);
+}
+
+/** 辅助函数：判断是否为旧版对比分析结果 */
+export function isComparisonResult(data: any): data is ComparisonResultContent {
+  return data && 'overview_verdict' in data && 'feature_matrix' in data;
 }

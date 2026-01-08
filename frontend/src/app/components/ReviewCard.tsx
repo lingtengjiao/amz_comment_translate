@@ -221,21 +221,21 @@ export const ReviewCard = memo(function ReviewCard({
               {review.translatedText ? (
                 <>
                   {/* Translated Title */}
-                  {review.translatedTitle && (
+              {review.translatedTitle && (
                     <p className="text-gray-900 dark:text-white font-bold mb-2.5 leading-snug">
                       {review.translatedTitle}
                     </p>
-                  )}
-                  
+              )}
+              
                   {/* Translated Body */}
-                  {highlightEnabled ? (
-                    <ThemeHighlightedText 
-                      text={review.translatedText} 
-                      activeThemes={activeThemes} 
-                      allTags={allTags}
-                      className="text-gray-900 dark:text-white leading-relaxed"
-                    />
-                  ) : (
+              {highlightEnabled ? (
+                <ThemeHighlightedText 
+                  text={review.translatedText} 
+                  activeThemes={activeThemes} 
+                  allTags={allTags}
+                  className="text-gray-900 dark:text-white leading-relaxed" 
+                />
+              ) : (
                     <p className="text-gray-900 dark:text-white leading-relaxed whitespace-pre-wrap">
                       {review.translatedText}
                     </p>

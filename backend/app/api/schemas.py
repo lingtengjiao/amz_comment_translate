@@ -469,11 +469,33 @@ class SentimentDistribution(BaseModel):
     negative: int = 0
 
 
+class ActiveTaskStatus(str, Enum):
+    """活跃任务状态 - 用于前端判断是否需要轮询"""
+    IDLE = "idle"            # 空闲，未启动任何任务
+    PROCESSING = "processing" # 正在处理中
+    COMPLETED = "completed"   # 已完成
+    STOPPED = "stopped"       # 用户手动停止
+    FAILED = "failed"         # 失败
+
+
+class ActiveTasksResponse(BaseModel):
+    """活跃任务状态 - 用于前端判断哪些任务正在运行"""
+    translation: ActiveTaskStatus = ActiveTaskStatus.IDLE
+    insights: ActiveTaskStatus = ActiveTaskStatus.IDLE
+    themes: ActiveTaskStatus = ActiveTaskStatus.IDLE
+    
+    # 各任务的进度信息
+    translation_progress: int = 0  # 0-100
+    insights_progress: int = 0     # 0-100
+    themes_progress: int = 0       # 0-100
+
+
 class ProductStatsResponse(BaseModel):
     """Detailed statistics for a product"""
     product: ProductResponse
     rating_distribution: RatingDistribution
     sentiment_distribution: SentimentDistribution
+    active_tasks: Optional[ActiveTasksResponse] = None  # [NEW] 活跃任务状态
 
 
 # ============== Dimension Schemas ==============

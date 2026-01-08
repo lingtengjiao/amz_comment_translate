@@ -353,7 +353,53 @@ async def get_product_stats(
             # We don't trigger it here to avoid unnecessary processing
             # The worker.task_extract_themes will handle label generation automatically
     
-    return stats
+    # [NEW] 查询活跃任务状态
+    from app.models.task import Task, TaskType, TaskStatus as ModelTaskStatus
+    from app.api.schemas import ActiveTasksResponse, ActiveTaskStatus
+    
+    active_tasks = ActiveTasksResponse()
+    
+    if product:
+        # 查询所有任务类型的当前状态
+        tasks_result = await db.execute(
+            select(Task).where(Task.product_id == product.id)
+        )
+        tasks = tasks_result.scalars().all()
+        
+        for task in tasks:
+            # 计算进度
+            progress = 0
+            if task.total_items > 0:
+                progress = min(100, int((task.processed_items / task.total_items) * 100))
+            
+            # 映射状态
+            if task.status == ModelTaskStatus.PROCESSING.value:
+                status = ActiveTaskStatus.PROCESSING
+            elif task.status == ModelTaskStatus.COMPLETED.value:
+                status = ActiveTaskStatus.COMPLETED
+            elif task.status == ModelTaskStatus.STOPPED.value:
+                status = ActiveTaskStatus.STOPPED
+            elif task.status == ModelTaskStatus.FAILED.value:
+                status = ActiveTaskStatus.FAILED
+            else:
+                status = ActiveTaskStatus.IDLE
+            
+            # 根据任务类型设置
+            if task.task_type == TaskType.TRANSLATION.value:
+                active_tasks.translation = status
+                active_tasks.translation_progress = progress
+            elif task.task_type == TaskType.INSIGHTS.value:
+                active_tasks.insights = status
+                active_tasks.insights_progress = progress
+            elif task.task_type == TaskType.THEMES.value:
+                active_tasks.themes = status
+                active_tasks.themes_progress = progress
+    
+    # 将 active_tasks 添加到返回结果
+    stats_dict = stats.model_dump() if hasattr(stats, 'model_dump') else dict(stats)
+    stats_dict['active_tasks'] = active_tasks
+    
+    return stats_dict
 
 
 # Tasks endpoints  
@@ -704,7 +750,7 @@ async def trigger_insight_extraction(
     
     This endpoint:
     1. Finds the product by ASIN
-    2. Counts translated reviews
+    2. Counts translated reviews and already processed reviews
     3. Dispatches insight extraction task to Celery worker
     
     Note: This does NOT re-translate reviews, only extracts insights from existing translations.
@@ -712,6 +758,7 @@ async def trigger_insight_extraction(
     from sqlalchemy import select, func, and_
     from app.models.product import Product
     from app.models.review import Review, TranslationStatus
+    from app.models.insight import ReviewInsight
     from app.worker import task_extract_insights
     
     # Get product
@@ -723,34 +770,129 @@ async def trigger_insight_extraction(
     if not product:
         raise HTTPException(status_code=404, detail="Product not found")
     
-    # Count translated reviews
+    # Count total translated reviews
     translated_count_result = await db.execute(
         select(func.count(Review.id)).where(
             and_(
                 Review.product_id == product.id,
                 Review.translation_status == TranslationStatus.COMPLETED.value,
-                Review.body_translated.isnot(None)
+                Review.body_translated.isnot(None),
+                Review.is_deleted == False
             )
         )
     )
-    translated_count = translated_count_result.scalar() or 0
+    total_translated = translated_count_result.scalar() or 0
     
-    if translated_count == 0:
+    # Count reviews that already have insights (processed)
+    already_processed_result = await db.execute(
+        select(func.count(func.distinct(ReviewInsight.review_id)))
+        .join(Review, Review.id == ReviewInsight.review_id)
+        .where(
+            and_(
+                Review.product_id == product.id,
+                Review.is_deleted == False
+            )
+        )
+    )
+    already_processed = already_processed_result.scalar() or 0
+    
+    # Calculate remaining to process
+    remaining_to_process = total_translated - already_processed
+    
+    if total_translated == 0:
         raise HTTPException(
             status_code=400, 
             detail="No translated reviews available for insight extraction"
         )
     
+    if remaining_to_process <= 0:
+        return {
+            "success": True,
+            "message": "All reviews already have insights extracted",
+            "product_id": str(product.id),
+            "asin": asin,
+            "reviews_to_process": 0,
+            "total_reviews": total_translated,
+            "already_processed": already_processed
+        }
+    
     # Dispatch async task to Celery
     task_extract_insights.delay(str(product.id))
-    logger.info(f"Triggered insight extraction for {translated_count} translated reviews of {asin}")
+    logger.info(f"Triggered insight extraction: {remaining_to_process} remaining (total={total_translated}, done={already_processed}) for {asin}")
     
     return {
         "success": True,
-        "message": f"Insight extraction started for {translated_count} translated reviews",
+        "message": f"Insight extraction started for {remaining_to_process} reviews",
         "product_id": str(product.id),
         "asin": asin,
-        "reviews_to_process": translated_count
+        "reviews_to_process": remaining_to_process,  # 待处理数
+        "total_reviews": total_translated,           # 总数
+        "already_processed": already_processed       # 已处理数
+    }
+
+
+@products_router.post("/{asin}/stop-analysis")
+async def stop_analysis_tasks(
+    asin: str,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    停止产品的所有分析任务（翻译、洞察、主题提取）
+    
+    1. 使用 Celery revoke 终止正在运行的任务
+    2. 更新 Task 表状态为 stopped
+    """
+    from sqlalchemy import select, update
+    from app.models.product import Product
+    from app.models.task import Task, TaskStatus as ModelTaskStatus
+    from app.worker import celery_app
+    
+    # Get product
+    product_result = await db.execute(
+        select(Product).where(Product.asin == asin)
+    )
+    product = product_result.scalar_one_or_none()
+    
+    if not product:
+        raise HTTPException(status_code=404, detail="Product not found")
+    
+    # 1. 获取 Celery 的活跃任务并终止
+    inspect = celery_app.control.inspect()
+    active_tasks = inspect.active()
+    
+    revoked_count = 0
+    
+    if active_tasks:
+        product_id_str = str(product.id)
+        for worker, tasks in active_tasks.items():
+            for task in tasks:
+                # 检查任务参数中是否包含此产品ID
+                task_args = task.get('args', [])
+                if task_args and len(task_args) > 0 and task_args[0] == product_id_str:
+                    # 终止任务
+                    celery_app.control.revoke(task['id'], terminate=True, signal='SIGKILL')
+                    revoked_count += 1
+                    logger.info(f"Revoked task {task['id']} for product {asin}")
+    
+    # 2. 更新 Task 表中所有 processing 状态的任务为 stopped
+    await db.execute(
+        update(Task)
+        .where(
+            Task.product_id == product.id,
+            Task.status == ModelTaskStatus.PROCESSING.value
+        )
+        .values(status=ModelTaskStatus.STOPPED.value)
+    )
+    await db.commit()
+    
+    logger.info(f"Stopped all tasks for product {asin}, revoked {revoked_count} Celery tasks")
+    
+    return {
+        "success": True,
+        "message": f"已终止 {revoked_count} 个任务",
+        "product_id": str(product.id),
+        "asin": asin,
+        "revoked_count": revoked_count
     }
 
 

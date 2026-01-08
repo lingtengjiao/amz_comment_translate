@@ -49,6 +49,7 @@ import type {
 import { REPORT_TYPE_CONFIG, getStatsItems } from '@/api/types';
 import { EvidenceDrawer } from './EvidenceDrawer';
 import { StatsDashboard } from './StatsDashboard';
+import { CompareReviewSidebar } from './CompareReviewSidebar';
 
 // 证据上下文 - 用于在子组件中访问 analysisData
 interface EvidenceContextType {
@@ -1242,6 +1243,21 @@ export const JsonReportRenderer = memo(function JsonReportRenderer({
     category: ''
   });
   
+  // 评论侧边栏状态
+  const [reviewSidebar, setReviewSidebar] = useState<{
+    isOpen: boolean;
+    dimensionKey: string;
+    dimensionLabel: string;
+    tagLabel: string;
+    totalCount: number;
+  }>({
+    isOpen: false,
+    dimensionKey: '',
+    dimensionLabel: '',
+    tagLabel: '',
+    totalCount: 0
+  });
+  
   // 打开证据抽屉的函数
   const openEvidence = useCallback((title: string, sourceTag: string, sourceType: 'context' | 'insight', category: string) => {
     if (!analysisData) return;
@@ -1275,12 +1291,28 @@ export const JsonReportRenderer = memo(function JsonReportRenderer({
     setEvidenceDrawer(prev => ({ ...prev, isOpen: false }));
   }, []);
   
+  // 打开评论侧边栏
+  const openReviewSidebar = useCallback((dimensionKey: string, dimensionLabel: string, tagLabel: string, totalCount: number) => {
+    setReviewSidebar({
+      isOpen: true,
+      dimensionKey,
+      dimensionLabel,
+      tagLabel,
+      totalCount
+    });
+  }, []);
+  
+  // 关闭评论侧边栏
+  const closeReviewSidebar = useCallback(() => {
+    setReviewSidebar(prev => ({ ...prev, isOpen: false }));
+  }, []);
+  
   // 当抽屉状态变化时，通知父组件
   useEffect(() => {
     if (onDrawerStateChange) {
-      onDrawerStateChange(evidenceDrawer.isOpen);
+      onDrawerStateChange(evidenceDrawer.isOpen || reviewSidebar.isOpen);
     }
-  }, [evidenceDrawer.isOpen, onDrawerStateChange]);
+  }, [evidenceDrawer.isOpen, reviewSidebar.isOpen, onDrawerStateChange]);
 
   if (!parsedContent) {
     return (
@@ -1320,6 +1352,7 @@ export const JsonReportRenderer = memo(function JsonReportRenderer({
           <StatsDashboard 
             analysisData={analysisData}
             onViewEvidence={handleViewEvidenceFromDashboard}
+            onViewReviews={asin ? openReviewSidebar : undefined}
           />
         )}
         
@@ -1366,6 +1399,19 @@ export const JsonReportRenderer = memo(function JsonReportRenderer({
         sourceCategory={evidenceDrawer.category}
         asin={asin}
       />
+      
+      {/* 评论侧边栏 - 显示完整评论（包含原文和译文） */}
+      {asin && (
+        <CompareReviewSidebar
+          isOpen={reviewSidebar.isOpen}
+          onClose={closeReviewSidebar}
+          productAsin={asin}
+          dimension={reviewSidebar.dimensionLabel}
+          dimensionKey={reviewSidebar.dimensionKey}
+          tagLabel={reviewSidebar.tagLabel}
+          totalCount={reviewSidebar.totalCount}
+        />
+      )}
       </EvidenceContext.Provider>
     </TocContext.Provider>
   );
