@@ -20,7 +20,9 @@ import {
   RefreshCw,
   Share2,
   AlertCircle,
-  ChevronDown
+  ChevronDown,
+  Maximize2,
+  Minimize2
 } from 'lucide-react';
 import { Button } from './ui/button';
 import { 
@@ -210,6 +212,7 @@ export function ReportPage() {
   const [generatingReportType, setGeneratingReportType] = useState<ReportType>('comprehensive');
   const [showTypeSelector, setShowTypeSelector] = useState(false);
   const [isDrawerOpen, setIsDrawerOpen] = useState(false); // 证据抽屉是否打开
+  const [isFullscreen, setIsFullscreen] = useState(false); // 沉浸模式状态
   
   // 判断当前报告是否为 JSON 格式
   const isJsonReport = useMemo(() => {
@@ -292,6 +295,33 @@ export function ReportPage() {
       setIsGenerating(false);
     }
   };
+  
+  // 切换沉浸模式
+  const handleFullscreenClick = async () => {
+    try {
+      if (!isFullscreen) {
+        await document.documentElement.requestFullscreen();
+      } else {
+        if (document.fullscreenElement) {
+          await document.exitFullscreen();
+        }
+      }
+    } catch (err) {
+      console.error('全屏切换失败:', err);
+    }
+  };
+  
+  // 监听全屏状态变化
+  useEffect(() => {
+    const handleFullscreenChange = () => {
+      setIsFullscreen(!!document.fullscreenElement);
+    };
+    
+    document.addEventListener('fullscreenchange', handleFullscreenChange);
+    return () => {
+      document.removeEventListener('fullscreenchange', handleFullscreenChange);
+    };
+  }, []);
   
   const handleCopyReport = async () => {
     if (!report?.content) return;
@@ -475,7 +505,9 @@ export function ReportPage() {
         }
       `}</style>
       
-      <div className="min-h-screen bg-white dark:bg-gray-900 print:bg-white">
+      <div className={`min-h-screen bg-white dark:bg-gray-900 print:bg-white ${
+        isFullscreen ? 'fixed inset-0 z-40 w-screen h-screen overflow-y-auto' : ''
+      }`}>
       {/* 顶部导航栏 - 打印时隐藏 */}
       <header className="sticky top-0 z-50 bg-white/95 dark:bg-gray-900/95 backdrop-blur border-b border-gray-200 dark:border-gray-800 print:hidden">
         <div className="max-w-[1700px] mx-auto px-8 py-4 flex items-center justify-between">
@@ -527,6 +559,16 @@ export function ReportPage() {
             >
               <ExternalLink className="size-4" />
               打印
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={handleFullscreenClick}
+              className="gap-1.5"
+              title={isFullscreen ? '退出沉浸模式' : '进入沉浸模式'}
+            >
+              {isFullscreen ? <Minimize2 className="size-4" /> : <Maximize2 className="size-4" />}
+              沉浸
             </Button>
             <div className="relative">
               <Button

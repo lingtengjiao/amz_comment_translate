@@ -19,7 +19,8 @@ import {
   ChevronUp,
   AlertCircle,
   Languages,
-  Loader2
+  Loader2,
+  ExternalLink
 } from 'lucide-react';
 import { Button } from './ui/button';
 import type { EvidenceSample, ApiReview } from '@/api/types';
@@ -255,7 +256,7 @@ export const EvidenceDrawer = memo(function EvidenceDrawer({
                   <div className="text-xs font-medium text-gray-500 dark:text-gray-400 mb-2 pt-2 border-t border-gray-200 dark:border-gray-700">
                     全部 {allReviews.length} 条相关评论
                   </div>
-                  {allReviews.map((review, index) => (
+                                  {allReviews.map((review, index) => (
                     <div
                       key={review.id || index}
                       className="p-4 bg-gray-50 dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700"
@@ -282,6 +283,21 @@ export const EvidenceDrawer = memo(function EvidenceDrawer({
                             <span className="font-medium text-gray-500 dark:text-gray-500">原文: </span>
                             <span className="italic">"{review.body_original}"</span>
                           </div>
+                        </div>
+                      )}
+                      {/* 查看亚马逊原文链接 */}
+                      {review.review_url && (
+                        <div className="mt-2 pt-2 border-t border-gray-200 dark:border-gray-700">
+                          <a
+                            href={review.review_url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex items-center gap-1 text-xs text-orange-600 hover:text-orange-700 dark:text-orange-400 dark:hover:text-orange-300"
+                            title="在亚马逊查看原文"
+                          >
+                            <ExternalLink className="size-3" />
+                            <span>在亚马逊查看原文</span>
+                          </a>
                         </div>
                       )}
                     </div>
@@ -333,13 +349,29 @@ export const EvidenceDrawer = memo(function EvidenceDrawer({
                     </div>
                   )}
                   
-                  {/* 查看完整评论按钮 - 在弹窗内展开 */}
-                  {asin && item.review_id && (
-                    <ReviewExpander
-                      asin={asin}
-                      reviewId={item.review_id}
-                    />
-                  )}
+                  {/* 操作按钮 - 查看完整评论和查看原文链接 */}
+                  <div className="mt-3 pt-3 border-t border-gray-200 dark:border-gray-700 flex items-center gap-3">
+                    {/* 查看亚马逊原文链接 */}
+                    {item.review_url && (
+                      <a
+                        href={item.review_url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1 text-xs text-orange-600 hover:text-orange-700 dark:text-orange-400 dark:hover:text-orange-300"
+                        title="在亚马逊查看原文"
+                      >
+                        <ExternalLink className="size-3" />
+                        <span>亚马逊原文</span>
+                      </a>
+                    )}
+                    {/* 查看完整评论按钮 - 在弹窗内展开 */}
+                    {asin && item.review_id && (
+                      <ReviewExpander
+                        asin={asin}
+                        reviewId={item.review_id}
+                      />
+                    )}
+                  </div>
                 </div>
               ))}
             </div>
@@ -501,17 +533,30 @@ const ReviewExpander = memo(function ReviewExpander({
               </div>
             )}
 
-            {/* 其他信息 */}
-            <div className="flex flex-wrap gap-4 text-xs text-gray-500 dark:text-gray-400 pt-2 border-t border-gray-200 dark:border-gray-700">
-              {fullReview.verified_purchase && (
-                <span className="px-2 py-0.5 bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-400 rounded">
-                  已验证购买
-                </span>
-              )}
-              {fullReview.helpful_votes > 0 && (
-                <span>有用 ({fullReview.helpful_votes})</span>
-              )}
-            </div>
+                            {/* 其他信息 */}
+                            <div className="flex flex-wrap gap-4 text-xs text-gray-500 dark:text-gray-400 pt-2 border-t border-gray-200 dark:border-gray-700">
+                              {fullReview.verified_purchase && (
+                                <span className="px-2 py-0.5 bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-400 rounded">
+                                  已验证购买
+                                </span>
+                              )}
+                              {fullReview.helpful_votes > 0 && (
+                                <span>有用 ({fullReview.helpful_votes})</span>
+                              )}
+                              {/* 查看亚马逊原文链接 */}
+                              {fullReview.review_url && (
+                                <a
+                                  href={fullReview.review_url}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="inline-flex items-center gap-1 text-orange-600 hover:text-orange-700 dark:text-orange-400 dark:hover:text-orange-300"
+                                  title="在亚马逊查看原文"
+                                >
+                                  <ExternalLink className="size-3" />
+                                  <span>亚马逊原文</span>
+                                </a>
+                              )}
+                            </div>
           </div>
         </div>
       )}

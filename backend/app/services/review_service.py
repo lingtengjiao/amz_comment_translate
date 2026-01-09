@@ -208,6 +208,14 @@ class ReviewService:
             if video_url and len(video_url) > 500:
                 video_url = video_url[:500]
             
+            # 处理 review_url - 如果没有则根据 review_id 生成
+            review_url = review_data.get("review_url")
+            if review_url and len(review_url) > 500:
+                review_url = review_url[:500]
+            # 如果没有 review_url，根据 review_id 生成默认链接
+            if not review_url and review_id.startswith('R'):
+                review_url = f"https://www.amazon.com/gp/customer-reviews/{review_id}"
+            
             review_records.append({
                 "id": uuid.uuid4(),
                 "product_id": product_id,
@@ -224,6 +232,8 @@ class ReviewService:
                 "has_images": review_data.get("has_images", False),
                 "image_urls": image_urls_json,
                 "video_url": video_url,
+                # Review link
+                "review_url": review_url,
                 "sentiment": "neutral",
                 "translation_status": TranslationStatus.PENDING.value
             })

@@ -55,6 +55,8 @@ class ReviewRawData(BaseModel):
     has_images: bool = Field(False, description="Whether review contains images")
     image_urls: Optional[List[str]] = Field(None, description="List of image URLs")
     video_url: Optional[str] = Field(None, description="Video URL if present")
+    # Review link
+    review_url: Optional[str] = Field(None, description="Amazon review original link")
 
 
 class ReviewIngestRequest(BaseModel):
@@ -228,6 +230,8 @@ class ReviewResponse(BaseModel):
     has_images: bool = False
     image_urls: Optional[List[str]] = None
     video_url: Optional[str] = None
+    # Review link
+    review_url: Optional[str] = None
     # Analysis
     sentiment: Sentiment
     translation_status: TranslationStatus

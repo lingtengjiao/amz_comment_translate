@@ -100,6 +100,9 @@ class Review(Base):
     image_urls: Mapped[str | None] = mapped_column(Text, nullable=True, comment="图片链接JSON数组")
     video_url: Mapped[str | None] = mapped_column(String(500), nullable=True, comment="视频链接")
     
+    # Review link
+    review_url: Mapped[str | None] = mapped_column(String(500), nullable=True, comment="亚马逊评论原文链接")
+    
     # Analysis results
     sentiment: Mapped[str] = mapped_column(
         String(20),

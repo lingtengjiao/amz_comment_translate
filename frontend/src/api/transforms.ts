@@ -59,6 +59,7 @@ export function transformReview(apiReview: ApiReview): Review {
     verified: apiReview.verified_purchase,
     images: apiReview.image_urls || undefined,
     videos: apiReview.video_url ? [apiReview.video_url] : undefined,
+    reviewUrl: apiReview.review_url || undefined,
     // AI 深度解读
     insights: insights && insights.length > 0 ? insights : undefined,
     // [UPDATED] 主题高亮内容 - 支持 5W 模型 + 带证据的可解释结构

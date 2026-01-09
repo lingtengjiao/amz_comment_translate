@@ -1,5 +1,5 @@
 import { memo, useState, useEffect, useRef } from 'react';
-import { Star, ShieldCheck, Image as ImageIcon, Video, ThumbsUp, Pin } from 'lucide-react';
+import { Star, ShieldCheck, Image as ImageIcon, Video, ThumbsUp, Pin, ExternalLink } from 'lucide-react';
 import { Card } from './ui/card';
 import { Badge } from './ui/badge';
 import { ThemeHighlightedText, type ThemeTag } from './ThemeHighlight';
@@ -153,6 +153,19 @@ export const ReviewCard = memo(function ReviewCard({
               <div className="flex items-center justify-between mb-3">
                 <div className="flex items-center gap-2">
                   <span className="text-xs text-gray-500 dark:text-gray-400 font-medium">原文</span>
+                  {/* 查看亚马逊原文链接 */}
+                  {review.reviewUrl && (
+                    <a
+                      href={review.reviewUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1 px-2 py-0.5 text-xs text-orange-600 dark:text-orange-400 hover:text-orange-700 dark:hover:text-orange-300 hover:bg-orange-50 dark:hover:bg-orange-900/20 rounded transition-colors"
+                      title="在亚马逊查看原文"
+                    >
+                      <ExternalLink className="size-3" />
+                      <span>查看原文</span>
+                    </a>
+                  )}
                 </div>
                 {/* Media Icons */}
                 {(hasImages || hasVideos) && (

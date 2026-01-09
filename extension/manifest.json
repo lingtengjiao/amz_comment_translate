@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "VOC-Master: Amazon Review Collector",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Collect Amazon product reviews for translation and analysis. 采集亚马逊商品评论，智能翻译分析。",
   "author": "VOC-Master Team",
   
@@ -20,6 +20,14 @@
     "https://*.amazon.co.jp/*",
     "http://localhost:8000/*"
   ],
+  
+  "externally_connectable": {
+    "matches": [
+      "http://localhost:*/*",
+      "http://127.0.0.1:*/*",
+      "https://*.voc-master.com/*"
+    ]
+  },
   
   "action": {
     "default_popup": "popup/popup.html",

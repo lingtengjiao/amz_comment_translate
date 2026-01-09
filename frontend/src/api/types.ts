@@ -64,6 +64,7 @@ export interface Review {
   verified: boolean;                   // 是否已验证购买
   images?: string[];                   // 评论图片URL列表
   videos?: string[];                   // 评论视频URL列表
+  reviewUrl?: string;                  // 亚马逊评论原文链接
   insights?: ReviewInsight[];          // AI深度解读
   themeHighlights?: ReviewThemeHighlight[];  // 主题高亮关键词
   isPinned?: boolean;                  // 是否置顶
@@ -333,6 +334,7 @@ export interface ApiReview {
   has_images: boolean;
   image_urls: string[] | null;
   video_url: string | null;
+  review_url: string | null;  // 亚马逊评论原文链接
   sentiment: Sentiment;
   translation_status: string;
   is_pinned: boolean;
@@ -488,6 +490,7 @@ export interface EvidenceSample {
   date?: string;
   analysis?: string;
   sentiment?: string;
+  review_url?: string;  // 亚马逊评论原文链接
 }
 
 /** ECharts 数据格式 (带证据溯源) */
