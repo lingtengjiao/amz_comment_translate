@@ -215,7 +215,13 @@ SUPPLY_CHAIN_PROMPT = """你是一位**供应链总监**。请基于统计数据
 
 """ + COMMON_INSTRUCTION
 
-# [MAP] 映射表：4个类型 -> 4个Prompt
+# ==========================================
+# [REPORT TYPE CONFIGS] 统一配置注册表
+# ==========================================
+# 导入 ReportTypeConfig
+from app.models.report import ReportTypeConfig
+
+# [MAP] 映射表：类型 -> Prompt（保留向后兼容）
 PROMPT_MAP = {
     ReportType.COMPREHENSIVE.value: COMPREHENSIVE_PROMPT,
     ReportType.OPERATIONS.value: OPERATIONS_PROMPT,
@@ -223,13 +229,137 @@ PROMPT_MAP = {
     ReportType.SUPPLY_CHAIN.value: SUPPLY_CHAIN_PROMPT,
 }
 
-# 报告标题映射
-REPORT_TITLE_MAP = {
-    ReportType.COMPREHENSIVE.value: "全维度战略分析报告",
-    ReportType.OPERATIONS.value: "运营与市场策略报告",
-    ReportType.PRODUCT.value: "产品迭代建议书",
-    ReportType.SUPPLY_CHAIN.value: "供应链质量整改报告",
+# [NEW] 统一配置注册表 - 管理所有报告类型的元数据
+# 添加新类型时，在此添加配置项即可
+REPORT_TYPE_CONFIGS: Dict[str, ReportTypeConfig] = {
+    ReportType.COMPREHENSIVE.value: ReportTypeConfig(
+        key=ReportType.COMPREHENSIVE.value,
+        display_name="全维度战略分析报告",
+        short_name="CEO综合版",
+        description="面向企业高管的全局战略视角报告，评估产品市场匹配度(PMF)、SWOT分析、部门指令",
+        target_audience="CEO/企业高管/战略决策层",
+        icon="🎯",
+        color="#4F46E5",
+        sort_order=1,
+        is_active=True,
+        expected_fields=["user_profile", "strategic_verdict", "market_fit_analysis", "core_swot", "department_directives", "priority_actions", "risk_level"],
+        category="strategy"
+    ),
+    ReportType.OPERATIONS.value: ReportTypeConfig(
+        key=ReportType.OPERATIONS.value,
+        display_name="运营与市场策略报告",
+        short_name="运营版",
+        description="面向运营团队的营销策略报告，挖掘产品卖点、规避退货风险、精准定位广告受众",
+        target_audience="CMO/运营经理/市场营销团队",
+        icon="📈",
+        color="#059669",
+        sort_order=2,
+        is_active=True,
+        expected_fields=["user_profile", "executive_summary", "selling_points", "marketing_risks", "target_audience", "competitor_analysis", "listing_optimization", "review_response_templates"],
+        category="operations"
+    ),
+    ReportType.PRODUCT.value: ReportTypeConfig(
+        key=ReportType.PRODUCT.value,
+        display_name="产品迭代建议书",
+        short_name="产品版",
+        description="面向研发团队的产品改进报告，发现设计缺陷、明确下一代产品改进方向",
+        target_audience="CPO/产品经理/研发团队",
+        icon="🔧",
+        color="#D97706",
+        sort_order=3,
+        is_active=True,
+        expected_fields=["user_research", "quality_score", "critical_bugs", "unmet_needs", "usage_context_gap", "roadmap_suggestion", "usability_issues", "design_recommendations"],
+        category="product"
+    ),
+    ReportType.SUPPLY_CHAIN.value: ReportTypeConfig(
+        key=ReportType.SUPPLY_CHAIN.value,
+        display_name="供应链质量整改报告",
+        short_name="供应链版",
+        description="面向工厂和QC团队的质量整改报告，降低退货率、优化包装、追责供应商",
+        target_audience="供应链总监/QC团队/工厂管理",
+        icon="🏭",
+        color="#DC2626",
+        sort_order=4,
+        is_active=True,
+        expected_fields=["usage_context_analysis", "material_defects", "packaging_issues", "missing_parts", "qc_checklist", "supplier_issues", "return_rate_factors", "assembly_defects"],
+        category="quality"
+    ),
+    # ==========================================
+    # [预留扩展位置] 未来可添加更多类型：
+    # ==========================================
+    # "logistics": ReportTypeConfig(
+    #     key="logistics",
+    #     display_name="物流配送优化报告",
+    #     short_name="物流版",
+    #     description="分析物流相关问题，优化配送体验",
+    #     target_audience="物流经理/仓储团队",
+    #     icon="🚚",
+    #     color="#8B5CF6",
+    #     sort_order=5,
+    #     expected_fields=["delivery_issues", "packaging_damage", "logistics_recommendations"],
+    #     category="logistics"
+    # ),
 }
+
+# 报告标题映射（向后兼容，从配置中自动生成）
+REPORT_TITLE_MAP = {key: config.display_name for key, config in REPORT_TYPE_CONFIGS.items()}
+
+
+# ==========================================
+# [辅助函数] 报告类型管理
+# ==========================================
+
+def get_available_report_types() -> List[ReportTypeConfig]:
+    """
+    获取所有可用（已启用）的报告类型配置
+    
+    Returns:
+        按 sort_order 排序的配置列表
+    """
+    return sorted(
+        [c for c in REPORT_TYPE_CONFIGS.values() if c.is_active],
+        key=lambda x: x.sort_order
+    )
+
+
+def get_report_type_config(type_key: str) -> Optional[ReportTypeConfig]:
+    """
+    获取指定类型的配置
+    
+    Args:
+        type_key: 报告类型标识（如 "comprehensive"）
+        
+    Returns:
+        ReportTypeConfig 对象，或 None（如果类型不存在）
+    """
+    return REPORT_TYPE_CONFIGS.get(type_key)
+
+
+def validate_report_type(type_key: str) -> bool:
+    """
+    验证报告类型是否有效且已启用
+    
+    Args:
+        type_key: 报告类型标识
+        
+    Returns:
+        True 如果类型有效且已启用
+    """
+    config = REPORT_TYPE_CONFIGS.get(type_key)
+    return config is not None and config.is_active
+
+
+def get_prompt_for_type(type_key: str) -> Optional[str]:
+    """
+    获取指定类型的 Prompt 模板
+    
+    Args:
+        type_key: 报告类型标识
+        
+    Returns:
+        Prompt 模板字符串，或 None
+    """
+    return PROMPT_MAP.get(type_key)
 
 
 class SummaryService:
@@ -272,7 +402,7 @@ class SummaryService:
         
         Args:
             product_id: 产品 UUID
-            report_type: 报告类型 (comprehensive/operations/product/supply_chain)
+            report_type: 报告类型 (使用 ReportType 枚举值)
             min_reviews: 最少评论数（默认 10）
             save_to_db: 是否存入数据库（默认 True）
             
@@ -281,10 +411,34 @@ class SummaryService:
                 "success": True/False,
                 "report": ProductReport 对象的 dict,
                 "stats": {...原始统计数据...},
+                "report_type_config": {...报告类型配置...},
                 "error": "错误信息（如果失败）"
             }
+            
+        Note:
+            支持的报告类型请参考 REPORT_TYPE_CONFIGS 配置表
         """
         try:
+            # 0. [NEW] 验证报告类型
+            type_config = get_report_type_config(report_type)
+            if not type_config:
+                return {
+                    "success": False,
+                    "report": None,
+                    "stats": None,
+                    "report_type_config": None,
+                    "error": f"不支持的报告类型: {report_type}。可用类型: {', '.join(REPORT_TYPE_CONFIGS.keys())}"
+                }
+            
+            if not type_config.is_active:
+                return {
+                    "success": False,
+                    "report": None,
+                    "stats": None,
+                    "report_type_config": type_config.to_dict(),
+                    "error": f"报告类型 '{type_config.display_name}' 当前已禁用"
+                }
+            
             # 1. 获取产品信息
             product = await self._get_product(product_id)
             if not product:
@@ -292,6 +446,7 @@ class SummaryService:
                     "success": False,
                     "report": None,
                     "stats": None,
+                    "report_type_config": type_config.to_dict(),
                     "error": "产品不存在"
                 }
             
@@ -303,6 +458,7 @@ class SummaryService:
                     "success": False,
                     "report": None,
                     "stats": {"total_reviews": total_reviews},
+                    "report_type_config": type_config.to_dict(),
                     "error": f"数据量不足（当前 {total_reviews} 条，需要至少 {min_reviews} 条）。请先采集更多评论并完成翻译。"
                 }
             
@@ -313,8 +469,11 @@ class SummaryService:
             # 4. [关键] 数据融合格式化 - 喂给 LLM
             stats_text = self._format_stats_for_llm(context_stats, insight_stats, total_reviews)
             
-            # 5. 选择 Prompt
-            prompt_template = PROMPT_MAP.get(report_type, COMPREHENSIVE_PROMPT)
+            # 5. [UPDATED] 从配置表获取 Prompt
+            prompt_template = get_prompt_for_type(report_type)
+            if not prompt_template:
+                prompt_template = COMPREHENSIVE_PROMPT  # 降级到默认
+                logger.warning(f"No prompt found for type '{report_type}', falling back to comprehensive")
             final_prompt = prompt_template.format(stats_text=stats_text)
             
             # 6. 调用 LLM (强制 JSON 输出)
@@ -327,6 +486,7 @@ class SummaryService:
                         "context": context_stats,
                         "insight": insight_stats
                     },
+                    "report_type_config": type_config.to_dict(),
                     "error": "AI 服务未配置（缺少 API Key）"
                 }
             
@@ -396,6 +556,7 @@ class SummaryService:
                         "success": True,
                         "report": new_report.to_dict(),
                         "stats": analysis_data,
+                        "report_type_config": type_config.to_dict(),
                         "error": None
                     }
                 else:
@@ -407,6 +568,7 @@ class SummaryService:
                             "analysis_data": analysis_data
                         },
                         "stats": analysis_data,
+                        "report_type_config": type_config.to_dict(),
                         "error": None
                     }
                 
@@ -420,6 +582,7 @@ class SummaryService:
                         "context": context_stats,
                         "insight": insight_stats
                     },
+                    "report_type_config": type_config.to_dict(),
                     "error": f"AI 报告生成失败: {str(e)}"
                 }
                 
@@ -429,6 +592,7 @@ class SummaryService:
                 "success": False,
                 "report": None,
                 "stats": None,
+                "report_type_config": None,
                 "error": f"报告生成失败: {str(e)}"
             }
     

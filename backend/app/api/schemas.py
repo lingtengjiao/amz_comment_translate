@@ -754,6 +754,52 @@ class ReportPreviewResponse(BaseModel):
     )
 
 
+# ============== Report Type Schemas ==============
+
+class ReportTypeInfo(BaseModel):
+    """
+    报告类型信息 - 用于前端展示可用的报告类型
+    
+    前端可通过 /report-types 端点获取所有可用类型
+    """
+    key: str = Field(..., description="类型标识（如 comprehensive）")
+    display_name: str = Field(..., description="完整显示名称")
+    short_name: str = Field(..., description="简称/标签名")
+    description: str = Field(..., description="详细描述")
+    target_audience: str = Field(..., description="目标用户群体")
+    icon: str = Field(..., description="图标（emoji 或 class）")
+    color: str = Field(..., description="主题色（十六进制）")
+    sort_order: int = Field(..., description="排序权重")
+    is_active: bool = Field(True, description="是否启用")
+    expected_fields: List[str] = Field(default_factory=list, description="期望输出的关键字段")
+    category: str = Field("general", description="报告分类")
+    
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "key": "comprehensive",
+                "display_name": "全维度战略分析报告",
+                "short_name": "CEO综合版",
+                "description": "面向企业高管的全局战略视角报告",
+                "target_audience": "CEO/企业高管",
+                "icon": "🎯",
+                "color": "#4F46E5",
+                "sort_order": 1,
+                "is_active": True,
+                "expected_fields": ["user_profile", "strategic_verdict", "core_swot"],
+                "category": "strategy"
+            }
+        }
+    )
+
+
+class ReportTypeListResponse(BaseModel):
+    """报告类型列表响应"""
+    success: bool = True
+    types: List[ReportTypeInfo] = Field(default_factory=list, description="可用的报告类型列表")
+    total: int = Field(0, description="类型总数")
+
+
 # ============== Product Report (Persisted) Schemas ==============
 
 class ProductReportResponse(BaseModel):
@@ -764,6 +810,7 @@ class ProductReportResponse(BaseModel):
     content: str = Field(..., description="JSON 格式的 AI 结构化分析结果（前端解析后渲染卡片/列表）")
     analysis_data: Optional[dict] = Field(None, description="原始统计数据（用于 ECharts/Recharts 图表）")
     report_type: str = Field("comprehensive", description="报告类型: comprehensive/operations/product/supply_chain")
+    report_type_info: Optional[ReportTypeInfo] = Field(None, description="报告类型详细信息")
     status: str = Field("completed", description="报告状态")
     error_message: Optional[str] = Field(None, description="错误信息")
     created_at: Optional[str] = Field(None, description="创建时间")
@@ -801,5 +848,6 @@ class ProductReportCreateResponse(BaseModel):
     success: bool
     report: Optional[ProductReportResponse] = Field(None, description="生成的报告")
     stats: Optional[dict] = Field(None, description="分析统计数据")
+    report_type_config: Optional[ReportTypeInfo] = Field(None, description="报告类型配置信息")
     error: Optional[str] = Field(None, description="错误信息")
 

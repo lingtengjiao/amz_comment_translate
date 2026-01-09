@@ -42,6 +42,9 @@ from app.api.schemas import (
     ProductReportResponse,
     ProductReportListResponse,
     ProductReportCreateResponse,
+    # Report Types
+    ReportTypeInfo,
+    ReportTypeListResponse,
 )
 from app.services.review_service import ReviewService
 from app.models.task import TaskType
@@ -1427,6 +1430,31 @@ async def delete_context_label(
     }
 
 
+# ============== Report Types API ==============
+
+@products_router.get("/report-types", response_model=ReportTypeListResponse)
+async def get_report_types():
+    """
+    获取所有可用的报告类型配置。
+    
+    前端可通过此接口获取：
+    - 所有可用的报告类型及其元数据
+    - 用于生成报告的类型选择下拉框
+    - 展示不同报告类型的图标、颜色、描述等
+    
+    返回按 sort_order 排序的类型列表，只包含已启用 (is_active=True) 的类型。
+    """
+    from app.services.summary_service import get_available_report_types
+    
+    configs = get_available_report_types()
+    
+    return ReportTypeListResponse(
+        success=True,
+        types=[ReportTypeInfo(**c.to_dict()) for c in configs],
+        total=len(configs)
+    )
+
+
 # ============== Report Generation API ==============
 
 @products_router.post("/{asin}/report/generate", response_model=ProductReportCreateResponse)
@@ -1447,7 +1475,10 @@ async def generate_product_report(
     3. **AI 撰写**: 根据报告类型使用不同的角色化 Prompt，生成 JSON 格式的结构化报告
     4. **持久化存储**: 报告自动存入数据库，支持历史回溯
     
-    **支持四种报告类型（四位一体决策中台）：**
+    **报告类型说明：**
+    使用 GET /products/report-types 接口可获取所有可用类型的详细信息。
+    
+    **常用类型：**
     - `comprehensive`: CEO/综合战略版 - 全局战略视角，SWOT分析，各部门指令
     - `operations`: CMO/运营市场版 - 卖点挖掘，广告定位，差评话术
     - `product`: CPO/产品研发版 - 质量评分，缺陷分析，迭代建议
@@ -1456,6 +1487,7 @@ async def generate_product_report(
     **输出格式：**
     - `content`: JSON 格式的 AI 结构化分析结果（用于渲染卡片、列表等）
     - `analysis_data`: 原始统计数据（用于 ECharts/Recharts 图表）
+    - `report_type_config`: 报告类型的详细配置信息
     
     **前置条件：**
     - 产品需要有至少 10 条已翻译的评论
@@ -1465,16 +1497,16 @@ async def generate_product_report(
     """
     from sqlalchemy import select
     from app.models.product import Product
-    from app.services.summary_service import SummaryService
-    from app.models.report import ReportType
+    from app.services.summary_service import SummaryService, validate_report_type, get_report_type_config
     
-    # 验证报告类型
-    valid_types = [ReportType.COMPREHENSIVE.value, ReportType.OPERATIONS.value, 
-                   ReportType.PRODUCT.value, ReportType.SUPPLY_CHAIN.value]
-    if report_type not in valid_types:
+    # [UPDATED] 使用新的验证函数
+    if not validate_report_type(report_type):
+        type_config = get_report_type_config(report_type)
+        from app.services.summary_service import REPORT_TYPE_CONFIGS
+        available_types = ", ".join(REPORT_TYPE_CONFIGS.keys())
         raise HTTPException(
             status_code=400, 
-            detail=f"无效的报告类型。支持的类型: {', '.join(valid_types)}"
+            detail=f"无效的报告类型: '{report_type}'。可用类型: {available_types}"
         )
     
     # Get product

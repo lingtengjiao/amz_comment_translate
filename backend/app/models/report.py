@@ -4,13 +4,15 @@ Product Report Model - 存储 AI 生成的产品分析报告
 功能：
 1. 持久化存储 JSON 格式的结构化报告内容（用于前端 Dashboard 渲染）
 2. 保存原始统计数据（用于前端图表可视化）
-3. 支持多种报告类型：CEO综合版、运营版、产品版、供应链版
+3. 支持多种报告类型：CEO综合版、运营版、产品版、供应链版（可扩展）
 4. 支持历史报告回溯和版本对比
+5. 通过 ReportTypeConfig 统一管理报告类型元数据
 """
 import uuid
 import enum
+from dataclasses import dataclass, field
 from datetime import datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, List, Optional, Dict
 
 from sqlalchemy import String, Text, ForeignKey, func, DateTime
 from sqlalchemy.dialects.postgresql import UUID, JSONB
@@ -22,13 +24,95 @@ if TYPE_CHECKING:
     from app.models.product import Product
 
 
-# [NEW] 定义报告类型枚举：四位一体
+# ==========================================
+# [REPORT TYPE CONFIGURATION]
+# ==========================================
+
+@dataclass
+class ReportTypeConfig:
+    """
+    报告类型配置 - 统一管理报告类型的元数据
+    
+    添加新报告类型时，只需：
+    1. 在 ReportType 枚举中添加新值
+    2. 编写对应的 Prompt 模板
+    3. 在 REPORT_TYPE_CONFIGS (summary_service.py) 中添加配置
+    
+    Attributes:
+        key: 类型标识（与 ReportType 枚举值一致）
+        display_name: 完整显示名称
+        short_name: 简称/标签名
+        description: 详细描述（用途说明）
+        target_audience: 目标用户群体
+        icon: 图标（emoji 或 icon class）
+        color: 主题色（十六进制）
+        sort_order: 排序权重（数字越小越靠前）
+        is_active: 是否启用
+        expected_fields: 期望 AI 输出的关键字段列表
+        category: 报告分类（如 "strategy", "operations", "quality"）
+    """
+    key: str
+    display_name: str
+    short_name: str
+    description: str
+    target_audience: str
+    icon: str
+    color: str
+    sort_order: int
+    is_active: bool = True
+    expected_fields: List[str] = field(default_factory=list)
+    category: str = "general"
+    
+    def to_dict(self) -> Dict:
+        """转换为字典格式（用于 API 响应）"""
+        return {
+            "key": self.key,
+            "display_name": self.display_name,
+            "short_name": self.short_name,
+            "description": self.description,
+            "target_audience": self.target_audience,
+            "icon": self.icon,
+            "color": self.color,
+            "sort_order": self.sort_order,
+            "is_active": self.is_active,
+            "expected_fields": self.expected_fields,
+            "category": self.category,
+        }
+
+
+# ==========================================
+# [REPORT TYPE ENUM] - 可扩展的报告类型定义
+# ==========================================
+
 class ReportType(str, enum.Enum):
-    """报告类型枚举 - 四位一体决策中台"""
+    """
+    报告类型枚举 - 四位一体决策中台
+    
+    扩展新类型说明：
+    1. 在此枚举中添加新值（如 LOGISTICS = "logistics"）
+    2. 在 summary_service.py 的 REPORT_TYPE_CONFIGS 中添加对应配置
+    3. 编写对应的 Prompt 模板
+    """
     COMPREHENSIVE = "comprehensive"  # CEO/综合战略版
     OPERATIONS = "operations"        # CMO/运营市场版
     PRODUCT = "product"              # CPO/产品研发版
     SUPPLY_CHAIN = "supply_chain"    # 供应链/质检版
+    
+    # [预留扩展位置] 未来可添加更多类型：
+    # LOGISTICS = "logistics"        # 物流配送版
+    # CUSTOMER_SERVICE = "cs"        # 客服话术版
+    # COMPETITOR = "competitor"      # 竞品对比版
+    # PRICE_ANALYSIS = "pricing"     # 定价策略版
+    
+    @classmethod
+    def get_all_values(cls) -> List[str]:
+        """获取所有报告类型值"""
+        return [t.value for t in cls]
+    
+    @classmethod
+    def is_valid(cls, value: str) -> bool:
+        """验证类型值是否有效"""
+        return value in cls.get_all_values()
 
 
 class ReportStatus(str, enum.Enum):
