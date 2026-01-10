@@ -1,4 +1,5 @@
-import React, { useState, useCallback, useEffect } from 'react';
+import React, { useState, useCallback, useEffect, useRef } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   Dialog,
   DialogContent,
@@ -19,8 +20,11 @@ import {
   Settings2,
   Zap,
   Shield,
-  RefreshCw
+  RefreshCw,
+  BarChart3,
+  FileText
 } from 'lucide-react';
+import { apiService } from '@/api';
 
 // 扩展 Window 类型以支持 Chrome 扩展 API
 declare global {
@@ -59,6 +63,17 @@ interface QueueStatus {
   };
 }
 
+// 全自动分析状态
+interface AnalysisStatus {
+  asin: string;
+  status: 'waiting' | 'collecting' | 'processing' | 'completed' | 'failed';
+  currentStep?: string;
+  progress?: number;
+  message?: string;
+  reportId?: string;
+  error?: string;
+}
+
 // 从环境变量或 localStorage 获取插件 ID
 const getExtensionId = (): string => {
   // 优先从 localStorage 读取用户配置的 ID
@@ -78,6 +93,7 @@ export function BatchCollectorDialog({
   onOpenChange, 
   onTasksAdded 
 }: BatchCollectorDialogProps) {
+  const navigate = useNavigate();
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
   const [extensionStatus, setExtensionStatus] = useState<'checking' | 'connected' | 'disconnected'>('checking');
@@ -90,6 +106,11 @@ export function BatchCollectorDialog({
   const [speedMode, setSpeedMode] = useState<'fast' | 'stable'>('fast');
   const [pagesPerStar, setPagesPerStar] = useState(5);
   const [selectedStars, setSelectedStars] = useState<number[]>([1, 2, 3, 4, 5]);
+  
+  // [NEW] 全自动分析状态跟踪
+  const [analysisStatuses, setAnalysisStatuses] = useState<Map<string, AnalysisStatus>>(new Map());
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
   // 检测插件是否可用
   const checkExtension = useCallback(() => {
@@ -172,6 +193,138 @@ export function BatchCollectorDialog({
     }
   }, [open, checkExtension]);
 
+  // [NEW] 轮询分析状态
+  const pollAnalysisStatus = useCallback(async (asins: string[]) => {
+    if (asins.length === 0) return;
+    
+    for (const asin of asins) {
+      try {
+        const status = await apiService.getAutoAnalysisStatus(asin);
+        
+        setAnalysisStatuses(prev => {
+          const newMap = new Map(prev);
+          const currentStatus = prev.get(asin);
+          
+          if (status.status === 'completed') {
+            newMap.set(asin, {
+              asin,
+              status: 'completed',
+              currentStep: '分析完成',
+              progress: 100,
+              message: status.message,
+              reportId: status.report_id
+            });
+            
+            // 如果所有任务都完成了，停止轮询
+            const allCompleted = Array.from(newMap.values()).every(
+              s => s.status === 'completed' || s.status === 'failed'
+            );
+            
+            if (allCompleted) {
+              if (pollingIntervalRef.current) {
+                clearInterval(pollingIntervalRef.current);
+                pollingIntervalRef.current = null;
+              }
+              setIsAnalyzing(false);
+              
+              // 如果只有一个 ASIN，自动跳转
+              if (asins.length === 1 && status.report_id) {
+                toast.success('🎉 分析完成！正在跳转到报告页...');
+                setTimeout(() => {
+                  onOpenChange(false);
+                  navigate(`/report/${asin}/${status.report_id}`);
+                }, 1500);
+              } else {
+                toast.success('🎉 所有分析任务已完成！');
+              }
+            }
+          } else if (status.status === 'failed') {
+            newMap.set(asin, {
+              asin,
+              status: 'failed',
+              error: status.error_message || '分析失败'
+            });
+          } else if (status.status === 'processing' || status.status === 'pending') {
+            newMap.set(asin, {
+              asin,
+              status: 'processing',
+              currentStep: status.current_step,
+              progress: status.progress || 0,
+              message: status.message
+            });
+          } else if (status.status === 'not_started') {
+            // 还在采集中，保持 collecting 状态
+            if (!currentStatus || currentStatus.status === 'waiting') {
+              newMap.set(asin, {
+                asin,
+                status: 'collecting',
+                currentStep: '采集中',
+                progress: 0,
+                message: '正在采集评论数据...'
+              });
+            }
+          }
+          
+          return newMap;
+        });
+      } catch (err) {
+        // 产品还不存在，继续等待（采集还没开始上传）
+        setAnalysisStatuses(prev => {
+          const newMap = new Map(prev);
+          if (!prev.has(asin)) {
+            newMap.set(asin, {
+              asin,
+              status: 'collecting',
+              currentStep: '采集中',
+              progress: 0,
+              message: '正在采集评论数据...'
+            });
+          }
+          return newMap;
+        });
+      }
+    }
+  }, [navigate, onOpenChange]);
+
+  // 开始轮询
+  const startPolling = useCallback((asins: string[]) => {
+    // 初始化状态
+    const initialStatuses = new Map<string, AnalysisStatus>();
+    asins.forEach(asin => {
+      initialStatuses.set(asin, {
+        asin,
+        status: 'waiting',
+        currentStep: '等待开始',
+        progress: 0,
+        message: '任务已发送，等待插件开始采集...'
+      });
+    });
+    setAnalysisStatuses(initialStatuses);
+    setIsAnalyzing(true);
+    
+    // 清除旧的轮询
+    if (pollingIntervalRef.current) {
+      clearInterval(pollingIntervalRef.current);
+    }
+    
+    // 立即执行一次
+    pollAnalysisStatus(asins);
+    
+    // 每 5 秒轮询一次
+    pollingIntervalRef.current = setInterval(() => {
+      pollAnalysisStatus(asins);
+    }, 5000);
+  }, [pollAnalysisStatus]);
+
+  // 清理轮询
+  useEffect(() => {
+    return () => {
+      if (pollingIntervalRef.current) {
+        clearInterval(pollingIntervalRef.current);
+      }
+    };
+  }, []);
+
   // 从输入中提取 ASIN
   const extractAsins = (text: string): string[] => {
     const lines = text.split('\n').map(l => l.trim()).filter(l => l);
@@ -248,6 +401,9 @@ export function BatchCollectorDialog({
             setInput('');
             fetchQueueStatus();
             onTasksAdded?.();
+            
+            // [NEW] 开始轮询分析状态
+            startPolling(asins);
           } else {
             toast.error('插件接收任务失败');
           }
@@ -382,6 +538,79 @@ export function BatchCollectorDialog({
             </div>
           )}
 
+          {/* [NEW] 全自动分析进度 */}
+          {isAnalyzing && analysisStatuses.size > 0 && (
+            <div className="p-4 rounded-lg bg-gradient-to-r from-purple-50 to-indigo-50 border border-purple-200">
+              <div className="flex items-center gap-2 mb-3">
+                <BarChart3 className="h-5 w-5 text-purple-600" />
+                <span className="font-medium text-purple-700">全自动分析进行中</span>
+              </div>
+              <div className="space-y-3">
+                {Array.from(analysisStatuses.values()).map(status => (
+                  <div key={status.asin} className="bg-white rounded-lg p-3 shadow-sm">
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="font-mono text-sm text-gray-700">{status.asin}</span>
+                      <span className={`text-xs px-2 py-0.5 rounded-full ${
+                        status.status === 'completed' ? 'bg-green-100 text-green-700' :
+                        status.status === 'failed' ? 'bg-red-100 text-red-700' :
+                        status.status === 'processing' ? 'bg-purple-100 text-purple-700' :
+                        'bg-blue-100 text-blue-700'
+                      }`}>
+                        {status.status === 'completed' ? '✅ 完成' :
+                         status.status === 'failed' ? '❌ 失败' :
+                         status.status === 'processing' ? '⚙️ 分析中' :
+                         status.status === 'collecting' ? '📦 采集中' :
+                         '⏳ 等待中'}
+                      </span>
+                    </div>
+                    
+                    {/* 进度条 */}
+                    {(status.status === 'processing' || status.status === 'collecting') && (
+                      <div className="mb-2">
+                        <div className="h-2 bg-gray-200 rounded-full overflow-hidden">
+                          <div 
+                            className="h-full bg-gradient-to-r from-purple-500 to-indigo-500 transition-all duration-500"
+                            style={{ width: `${status.progress || 0}%` }}
+                          />
+                        </div>
+                      </div>
+                    )}
+                    
+                    {/* 状态信息 */}
+                    <div className="flex items-center justify-between text-xs text-gray-500">
+                      <span>{status.currentStep || status.message || ''}</span>
+                      {status.progress !== undefined && status.progress > 0 && (
+                        <span>{Math.round(status.progress)}%</span>
+                      )}
+                    </div>
+                    
+                    {/* 完成后的操作按钮 */}
+                    {status.status === 'completed' && status.reportId && (
+                      <Button
+                        size="sm"
+                        className="mt-2 w-full gap-2"
+                        onClick={() => {
+                          onOpenChange(false);
+                          navigate(`/report/${status.asin}/${status.reportId}`);
+                        }}
+                      >
+                        <FileText className="h-4 w-4" />
+                        查看报告
+                      </Button>
+                    )}
+                    
+                    {/* 错误信息 */}
+                    {status.status === 'failed' && status.error && (
+                      <div className="mt-2 text-xs text-red-600 bg-red-50 p-2 rounded">
+                        {status.error}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
           {/* 输入区域 */}
           <div className="space-y-2">
             <label className="text-sm font-medium text-gray-700">
@@ -483,17 +712,25 @@ export function BatchCollectorDialog({
 
         <DialogFooter className="flex items-center justify-between sm:justify-between">
           <p className="text-xs text-gray-400">
-            插件将在后台排队执行，请保持浏览器开启
+            {isAnalyzing 
+              ? '🚀 全自动分析中，完成后将自动跳转到报告页...'
+              : '插件将在后台排队执行，请保持浏览器开启'
+            }
           </p>
           <Button
             onClick={handleStart}
-            disabled={loading || extensionStatus !== 'connected' || extractedAsins.length === 0}
+            disabled={loading || extensionStatus !== 'connected' || extractedAsins.length === 0 || isAnalyzing}
             className="gap-2"
           >
             {loading ? (
               <>
                 <Loader2 className="h-4 w-4 animate-spin" />
                 发送中...
+              </>
+            ) : isAnalyzing ? (
+              <>
+                <Loader2 className="h-4 w-4 animate-spin" />
+                分析进行中...
               </>
             ) : (
               <>

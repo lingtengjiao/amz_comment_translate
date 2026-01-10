@@ -69,7 +69,7 @@ services:
       dockerfile: Dockerfile
     container_name: voc-worker
     restart: unless-stopped
-    command: celery -A app.worker worker --loglevel=info --concurrency=8 -Q translation,celery
+    command: celery -A app.worker worker --loglevel=info --concurrency=8 -Q translation,analysis,celery
     environment:
       - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-vocmaster}:${POSTGRES_PASSWORD:-vocmaster123}@db-postgres:5432/${POSTGRES_DB:-vocmaster}
       - REDIS_URL=redis://db-redis:6379/0
@@ -82,6 +82,12 @@ services:
         condition: service_healthy
     volumes:
       - ./backend:/app
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A app.worker inspect ping -d celery@$$HOSTNAME || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
     networks:
       - voc-network
 

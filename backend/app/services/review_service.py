@@ -26,6 +26,106 @@ class ReviewService:
     def __init__(self, db: AsyncSession):
         self.db = db
     
+    async def get_scientific_samples(
+        self,
+        product_id: UUID,
+        limit_total: int = 50
+    ) -> List[str]:
+        """
+        科学采样算法：从数据库中提取"高质量、无偏差"的样本，用于 AI 学习。
+        
+        采样策略：
+        1. 分层抽样 (Stratified): 覆盖 1-5 星，每种星级取 limit_total / 5 条
+        2. 质量排序 (Quality): 优先取 helpful_votes 高、字数多的评论
+        3. 兼容原文: 返回英文原文 (body_original)，用于跨语言零样本学习
+        
+        这允许系统在翻译尚未完成时就开始学习维度和标签。
+        
+        Args:
+            product_id: 产品 UUID
+            limit_total: 总采样数量，默认 50
+            
+        Returns:
+            英文原文评论列表 (body_original)
+        """
+        from sqlalchemy import desc
+        
+        samples = []
+        limit_per_star = max(1, limit_total // 5)  # 每个星级至少取 1 条
+        
+        for star in range(1, 6):
+            stmt = (
+                select(Review.body_original)
+                .where(
+                    and_(
+                        Review.product_id == product_id,
+                        Review.rating == star,
+                        Review.body_original.isnot(None),
+                        Review.body_original != "",
+                        Review.is_deleted == False
+                    )
+                )
+                .order_by(
+                    desc(Review.helpful_votes),             # 权重1: 有用票数高
+                    desc(func.length(Review.body_original)) # 权重2: 评论长度长
+                )
+                .limit(limit_per_star)
+            )
+            result = await self.db.execute(stmt)
+            star_samples = [r[0] for r in result.all() if r[0] and r[0].strip()]
+            samples.extend(star_samples)
+            logger.debug(f"科学采样: {star}星取到 {len(star_samples)} 条")
+        
+        # 如果样本不够（比如某些星级没有评论），从全量中补充
+        if len(samples) < limit_total:
+            needed = limit_total - len(samples)
+            existing_set = set(samples)
+            
+            supplement_stmt = (
+                select(Review.body_original)
+                .where(
+                    and_(
+                        Review.product_id == product_id,
+                        Review.body_original.isnot(None),
+                        Review.body_original != "",
+                        Review.is_deleted == False,
+                        ~Review.body_original.in_(list(existing_set)) if existing_set else True
+                    )
+                )
+                .order_by(
+                    desc(Review.helpful_votes),
+                    desc(func.length(Review.body_original))
+                )
+                .limit(needed)
+            )
+            result = await self.db.execute(supplement_stmt)
+            supplement_samples = [r[0] for r in result.all() if r[0] and r[0].strip() and r[0] not in existing_set]
+            samples.extend(supplement_samples)
+            logger.debug(f"科学采样: 补充了 {len(supplement_samples)} 条")
+        
+        logger.info(f"科学采样完成: 产品 {product_id} 共采样 {len(samples)} 条高质量英文评论")
+        return samples
+    
+    async def count_reviews(self, product_id: UUID) -> int:
+        """
+        统计产品的评论数量（排除已删除）。
+        
+        Args:
+            product_id: 产品 UUID
+            
+        Returns:
+            评论数量
+        """
+        result = await self.db.execute(
+            select(func.count(Review.id)).where(
+                and_(
+                    Review.product_id == product_id,
+                    Review.is_deleted == False
+                )
+            )
+        )
+        return result.scalar() or 0
+    
     async def get_or_create_product(
         self,
         asin: str,
@@ -241,33 +341,9 @@ class ReviewService:
         if not review_records:
             return 0, 0
         
-        # Use PostgreSQL ON CONFLICT to handle duplicates atomically
-        stmt = insert(Review).values(review_records)
-        stmt = stmt.on_conflict_do_nothing(
-            index_elements=['product_id', 'review_id']
-        )
-        
-        result = await self.db.execute(stmt)
-        await self.db.flush()
-        
-        # Calculate counts
-        # Note: result.rowcount might not be accurate for ON CONFLICT
-        # So we'll check how many were actually inserted
         total_count = len(review_records)
         
-        # Count how many reviews actually exist now for this product
-        # (This is approximate, but better than nothing)
-        existing_result = await self.db.execute(
-            select(func.count(Review.id)).where(Review.product_id == product_id)
-        )
-        total_in_db = existing_result.scalar() or 0
-        
-        # We can't get exact inserted count from ON CONFLICT
-        # So we'll estimate: assume all were inserted if no errors
-        # The actual skipped count is total_count - actually_inserted
-        # But we don't have that info, so we'll use a simpler approach
-        
-        # Alternative: Check which review_ids already exist
+        # 🔥 [FIX] 在 INSERT 之前检查已存在的 review_id
         review_ids = [r["review_id"] for r in review_records]
         existing_reviews_result = await self.db.execute(
             select(Review.review_id).where(
@@ -279,6 +355,17 @@ class ReviewService:
         )
         existing_review_ids = set(existing_reviews_result.scalars().all())
         skipped_duplicates = len(existing_review_ids)
+        
+        # Use PostgreSQL ON CONFLICT to handle duplicates atomically
+        stmt = insert(Review).values(review_records)
+        stmt = stmt.on_conflict_do_nothing(
+            index_elements=['product_id', 'review_id']
+        )
+        
+        result = await self.db.execute(stmt)
+        await self.db.flush()
+        
+        # 🔥 [FIX] 正确计算插入数量：总数 - 之前已存在的数量
         inserted = total_count - skipped_duplicates
         
         logger.info(

@@ -48,7 +48,7 @@ from app.api.schemas import (
 )
 from app.services.review_service import ReviewService
 from app.models.task import TaskType
-from app.worker import task_process_reviews
+from app.worker import task_process_reviews, task_ingest_translation_only, task_scientific_learning_and_analysis, task_full_auto_analysis
 
 logger = logging.getLogger(__name__)
 
@@ -114,16 +114,26 @@ async def ingest_reviews(
             reviews_data=reviews_data
         )
         
-        # Don't auto-create translation task - user will trigger manually
-        # Just return success with product info
-        
         await db.commit()
+        
+        # [NEW] 🔥 流式翻译触发：数据入库后立即触发轻量翻译任务
+        # 只有当有新数据插入时才触发
+        stream_flag = "流式" if request.is_stream else "批量"
+        print(f"[{stream_flag}上传] 产品 {request.asin}: 收到 {len(request.reviews)} 条, 新增 {inserted} 条, 跳过 {skipped} 条")
+        
+        if inserted > 0:
+            # 触发流式轻量翻译（只做文本翻译，不做洞察分析）
+            celery_result = task_ingest_translation_only.delay(str(product.id))
+            print(f"[{stream_flag}上传] ✅ 产品 {request.asin} 已触发翻译任务: {celery_result.id}")
+            logger.info(f"[{stream_flag}上传] 产品 {request.asin} 入库 {inserted} 条, 翻译任务ID: {celery_result.id}")
+        else:
+            print(f"[{stream_flag}上传] ⚠️ 产品 {request.asin} 无新数据，跳过翻译触发")
         
         return IngestResponse(
             success=True,
             message=f"Received {len(request.reviews)} reviews, {inserted} new, {skipped} duplicates skipped",
             product_id=product.id,
-            task_id=None,  # No task created - user will trigger translation manually
+            task_id=None,  # 流式翻译不返回 task_id，它是自动触发的
             reviews_received=inserted,
             dashboard_url=f"http://localhost:3000/products/{request.asin}"
         )
@@ -272,6 +282,76 @@ async def export_reviews(
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": f"attachment; filename=reviews_{asin}.xlsx"}
     )
+
+
+# ==========================================
+# System Health Check endpoints
+# ==========================================
+system_router = APIRouter(prefix="/system", tags=["System"])
+
+
+@system_router.get("/worker-health")
+async def check_worker_health():
+    """
+    检查 Celery Worker 健康状态
+    
+    Returns:
+        - is_healthy: Worker 是否健康
+        - registered_tasks: 已注册的任务列表
+        - missing_tasks: 缺少的必需任务
+        - message: 状态说明
+    """
+    from celery import current_app
+    
+    # 必须注册的任务
+    required_tasks = [
+        'app.worker.task_full_auto_analysis',
+        'app.worker.task_ingest_translation_only',
+        'app.worker.task_extract_insights',
+        'app.worker.task_extract_themes',
+    ]
+    
+    try:
+        # 获取已注册的任务
+        inspect = current_app.control.inspect()
+        registered = inspect.registered() or {}
+        
+        if not registered:
+            return {
+                "is_healthy": False,
+                "active_workers": 0,
+                "registered_tasks": [],
+                "missing_tasks": required_tasks,
+                "message": "⚠️ 没有活跃的 Worker，请运行: docker restart voc-worker"
+            }
+        
+        # 获取所有 worker 注册的任务
+        all_tasks = set()
+        for worker_tasks in registered.values():
+            all_tasks.update(worker_tasks)
+        
+        # 检查缺少的任务
+        missing = [t for t in required_tasks if t not in all_tasks]
+        
+        is_healthy = len(missing) == 0
+        
+        return {
+            "is_healthy": is_healthy,
+            "active_workers": len(registered),
+            "registered_tasks": list(all_tasks),
+            "missing_tasks": missing,
+            "message": "✅ Worker 正常" if is_healthy else f"⚠️ Worker 缺少任务: {missing}，请运行: docker restart voc-worker"
+        }
+        
+    except Exception as e:
+        logger.error(f"Worker health check failed: {e}")
+        return {
+            "is_healthy": False,
+            "active_workers": 0,
+            "registered_tasks": [],
+            "missing_tasks": required_tasks,
+            "message": f"❌ 无法连接 Worker: {str(e)}"
+        }
 
 
 # Products endpoints
@@ -563,6 +643,339 @@ async def check_product_tasks_health(
         "timeout_count": len(timeout_tasks),
         "recovered_tasks": recovered_tasks
     }
+
+
+@products_router.post("/{asin}/start-analysis")
+async def start_deep_analysis(
+    asin: str,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    🚀 一键深度分析接口 (Start Deep Analysis)
+    
+    当采集完成，调用此接口启动科学学习和全量分析。
+    
+    流程：
+    1. 科学采样（基于英文原文，不等待翻译完成）
+    2. 跨语言零样本学习（维度 + 5W标签）
+    3. 全量洞察回填
+    4. 全量主题回填
+    
+    注意：这是一个重量级任务，执行时间可能较长（1-5分钟）
+    
+    Returns:
+        - status: "started" 表示任务已启动
+        - message: 进度信息
+    """
+    from sqlalchemy import select, func, and_
+    from app.models.product import Product
+    from app.models.review import Review
+    
+    # 获取产品
+    product_result = await db.execute(
+        select(Product).where(Product.asin == asin)
+    )
+    product = product_result.scalar_one_or_none()
+    
+    if not product:
+        raise HTTPException(status_code=404, detail="产品不存在")
+    
+    # 检查是否有足够的数据
+    review_count_result = await db.execute(
+        select(func.count(Review.id))
+        .where(
+            and_(
+                Review.product_id == product.id,
+                Review.is_deleted == False
+            )
+        )
+    )
+    review_count = review_count_result.scalar() or 0
+    
+    if review_count < 10:
+        raise HTTPException(
+            status_code=400, 
+            detail=f"数据量不足：当前仅有 {review_count} 条评论，需要至少 10 条才能进行科学分析"
+        )
+    
+    # 启动科学学习与分析任务
+    task_scientific_learning_and_analysis.delay(str(product.id))
+    
+    logger.info(f"[深度分析] 产品 {asin} 已启动，当前 {review_count} 条评论")
+    
+    return {
+        "success": True,
+        "status": "started",
+        "message": f"正在基于 {review_count} 条评论进行科学分析...",
+        "product_id": str(product.id),
+        "asin": asin,
+        "review_count": review_count
+    }
+
+
+# ==========================================
+# [NEW] 采集完成触发接口 - 全自动分析
+# ==========================================
+
+@products_router.post("/{asin}/collection-complete")
+async def collection_complete(
+    asin: str,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    🚀 采集完成触发接口 (Collection Complete Trigger)
+    
+    当 Chrome 插件采集完成后，自动调用此接口触发全自动分析流程。
+    
+    流程（全自动，无需用户二次点击）：
+    1. 等待所有翻译完成
+    2. 科学学习（维度 + 5W标签）
+    3. 洞察提取
+    4. 主题提取
+    5. 生成综合战略版报告
+    
+    Returns:
+        - task_id: 全自动分析任务 ID（可用于轮询进度）
+        - status: "started"
+    """
+    from sqlalchemy import select, func, and_
+    from celery import current_app
+    from app.models.product import Product
+    from app.models.review import Review
+    from app.models.task import Task, TaskType, TaskStatus
+    from app.worker import task_full_auto_analysis
+    
+    # ==========================================
+    # [预检查] Worker 健康状态检查
+    # ==========================================
+    try:
+        inspect = current_app.control.inspect()
+        registered = inspect.registered() or {}
+        
+        if not registered:
+            raise HTTPException(
+                status_code=503, 
+                detail="⚠️ Celery Worker 未运行，请先执行: docker restart voc-worker"
+            )
+        
+        # 检查必需任务是否已注册
+        all_tasks = set()
+        for worker_tasks in registered.values():
+            all_tasks.update(worker_tasks)
+        
+        if 'app.worker.task_full_auto_analysis' not in all_tasks:
+            raise HTTPException(
+                status_code=503, 
+                detail="⚠️ Worker 缺少 task_full_auto_analysis 任务，请执行: docker restart voc-worker 加载最新代码"
+            )
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.warning(f"Worker health check failed: {e}")
+        # 不阻断流程，继续执行（可能是 inspect 超时）
+    
+    # 获取产品
+    product_result = await db.execute(
+        select(Product).where(Product.asin == asin)
+    )
+    product = product_result.scalar_one_or_none()
+    
+    if not product:
+        raise HTTPException(status_code=404, detail="产品不存在")
+    
+    # 检查评论数量
+    review_count_result = await db.execute(
+        select(func.count(Review.id))
+        .where(
+            and_(
+                Review.product_id == product.id,
+                Review.is_deleted == False
+            )
+        )
+    )
+    review_count = review_count_result.scalar() or 0
+    
+    if review_count < 10:
+        raise HTTPException(
+            status_code=400, 
+            detail=f"数据量不足：当前仅有 {review_count} 条评论，需要至少 10 条才能进行分析"
+        )
+    
+    # 检查是否已有 AUTO_ANALYSIS 任务在运行
+    existing_task_result = await db.execute(
+        select(Task).where(
+            and_(
+                Task.product_id == product.id,
+                Task.task_type == TaskType.AUTO_ANALYSIS.value,
+                Task.status.in_([TaskStatus.PENDING.value, TaskStatus.PROCESSING.value])
+            )
+        )
+    )
+    existing_task = existing_task_result.scalar_one_or_none()
+    
+    if existing_task:
+        logger.info(f"[全自动分析] 产品 {asin} 已有运行中的任务: {existing_task.id}")
+        return {
+            "success": True,
+            "status": "already_running",
+            "message": f"分析任务已在运行中，进度: {existing_task.processed_items}/{existing_task.total_items}",
+            "task_id": str(existing_task.id),
+            "product_id": str(product.id),
+            "asin": asin,
+            "review_count": review_count
+        }
+    
+    # 删除旧的 AUTO_ANALYSIS 任务（如果存在）
+    await db.execute(
+        select(Task).where(
+            and_(
+                Task.product_id == product.id,
+                Task.task_type == TaskType.AUTO_ANALYSIS.value
+            )
+        )
+    )
+    # 创建新的全自动分析任务
+    from sqlalchemy import delete
+    await db.execute(
+        delete(Task).where(
+            and_(
+                Task.product_id == product.id,
+                Task.task_type == TaskType.AUTO_ANALYSIS.value
+            )
+        )
+    )
+    
+    new_task = Task(
+        product_id=product.id,
+        task_type=TaskType.AUTO_ANALYSIS.value,
+        status=TaskStatus.PENDING.value,
+        total_items=4,  # 4 个步骤：学习 → 触发提取 → 等待三任务并行 → 报告
+        processed_items=0
+    )
+    db.add(new_task)
+    await db.commit()
+    await db.refresh(new_task)
+    
+    # 触发 Celery 任务
+    celery_task = task_full_auto_analysis.delay(str(product.id), str(new_task.id))
+    
+    # 更新 Celery 任务 ID
+    new_task.celery_task_id = celery_task.id
+    await db.commit()
+    
+    logger.info(f"[全自动分析] 产品 {asin} 启动成功，任务 ID: {new_task.id}，评论数: {review_count}")
+    
+    return {
+        "success": True,
+        "status": "started",
+        "message": f"全自动分析已启动，共 {review_count} 条评论待处理...",
+        "task_id": str(new_task.id),
+        "product_id": str(product.id),
+        "asin": asin,
+        "review_count": review_count
+    }
+
+
+@products_router.get("/{asin}/auto-analysis-status")
+async def get_auto_analysis_status(
+    asin: str,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    🔍 获取全自动分析状态 (Get Auto Analysis Status)
+    
+    前端轮询此接口获取分析进度，判断何时可以跳转到详情页。
+    
+    Returns:
+        - status: pending/processing/completed/failed
+        - current_step: 当前步骤名称
+        - progress: 进度百分比
+        - report_id: 生成的报告 ID（如果已完成）
+    """
+    from sqlalchemy import select, and_, desc
+    from app.models.product import Product
+    from app.models.task import Task, TaskType, TaskStatus
+    from app.models.report import ProductReport
+    
+    # 获取产品
+    product_result = await db.execute(
+        select(Product).where(Product.asin == asin)
+    )
+    product = product_result.scalar_one_or_none()
+    
+    if not product:
+        raise HTTPException(status_code=404, detail="产品不存在")
+    
+    # 获取最新的 AUTO_ANALYSIS 任务
+    task_result = await db.execute(
+        select(Task)
+        .where(
+            and_(
+                Task.product_id == product.id,
+                Task.task_type == TaskType.AUTO_ANALYSIS.value
+            )
+        )
+        .order_by(desc(Task.created_at))
+        .limit(1)
+    )
+    task = task_result.scalar_one_or_none()
+    
+    if not task:
+        return {
+            "success": True,
+            "status": "not_started",
+            "message": "尚未启动全自动分析",
+            "product_id": str(product.id),
+            "asin": asin
+        }
+    
+    # 步骤名称映射（流式并行优化的4步流程）
+    # 翻译在 ingest 时就已经开始了！
+    step_names = {
+        0: "准备中",
+        1: "学习维度和标签（基于英文原文）",
+        2: "触发洞察+主题提取",
+        3: "翻译+洞察+主题（三任务并行中）",
+        4: "生成报告"
+    }
+    
+    current_step = step_names.get(task.processed_items, "处理中")
+    progress = (task.processed_items / task.total_items * 100) if task.total_items > 0 else 0
+    
+    response = {
+        "success": True,
+        "status": task.status,
+        "current_step": current_step,
+        "progress": round(progress, 1),
+        "processed_items": task.processed_items,
+        "total_items": task.total_items,
+        "task_id": str(task.id),
+        "product_id": str(product.id),
+        "asin": asin,
+        "error_message": task.error_message
+    }
+    
+    # 如果已完成，获取报告 ID
+    if task.status == TaskStatus.COMPLETED.value:
+        report_result = await db.execute(
+            select(ProductReport)
+            .where(ProductReport.product_id == product.id)
+            .order_by(desc(ProductReport.created_at))
+            .limit(1)
+        )
+        report = report_result.scalar_one_or_none()
+        if report:
+            response["report_id"] = str(report.id)
+            response["message"] = "分析完成！可以查看报告了"
+        else:
+            response["message"] = "分析完成"
+    elif task.status == TaskStatus.FAILED.value:
+        response["message"] = f"分析失败: {task.error_message or '未知错误'}"
+    else:
+        response["message"] = f"正在{current_step}..."
+    
+    return response
 
 
 @products_router.post("/{asin}/translate", response_model=IngestResponse)

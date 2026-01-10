@@ -16,7 +16,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import settings
 from app.db.session import init_db
 from app.api.reviews import router as reviews_router
-from app.api.reviews import products_router, tasks_router
+from app.api.reviews import products_router, tasks_router, system_router
 from app.api.analysis import router as analysis_router
 
 # Configure logging
@@ -105,6 +105,7 @@ app.include_router(reviews_router, prefix="/api/v1")
 app.include_router(products_router, prefix="/api/v1")
 app.include_router(tasks_router, prefix="/api/v1")
 app.include_router(analysis_router, prefix="/api/v1")
+app.include_router(system_router, prefix="/api/v1")  # Worker 健康检查
 
 
 # Error handlers

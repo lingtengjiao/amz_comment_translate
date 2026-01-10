@@ -89,6 +89,114 @@ BULLET_POINTS_SYSTEM_PROMPT = """你是一位专业的亚马逊产品描述翻�
 - 不要添加任何解释或注释"""
 
 
+# [NEW] 跨语言维度发现 Prompt (英文输入 → 中文维度输出)
+DIMENSION_DISCOVERY_RAW_PROMPT = """You are a senior product manager and user research expert. 
+Based on the following **English product information** and **English user review samples**, 
+build a core evaluation dimension model for this product.
+
+# Product Official Information (English)
+- **Product Title**: {product_title}
+- **Bullet Points**: 
+{bullet_points}
+
+# User Review Samples ({count} reviews, English Original)
+{reviews_text}
+
+# Task
+Extract 5-8 core evaluation dimensions. **Output dimension names and descriptions in Chinese**.
+
+# Requirements
+1. **Combine official positioning with user perspective**: Dimension names should use official terms when possible (from bullet points), but must cover actual user feedback.
+2. **Dimension names**: Use concise Chinese (e.g.: 外观设计、结构做工、材料质感、功能表现、玩法多样性、安全性、性价比).
+3. **Dimension definition**: One sentence describing what the dimension covers, to guide subsequent classification.
+4. **Mutual exclusivity**: Dimensions should not overlap, clear boundaries.
+5. **Coverage**: 
+   - Must cover major pain points and benefits from reviews
+   - Include dimensions emphasized in bullet points even if users are "silently satisfied"
+6. **Quantity control**: Extract 5-8 most core dimensions, no more.
+
+# Output Format (JSON Only, Chinese output)
+{{
+  "dimensions": [
+    {{ "name": "维度名称(中文)", "description": "该维度的具体定义(中文)" }},
+    ...
+  ]
+}}
+
+Output JSON only, no other text."""
+
+
+# [NEW] 跨语言5W标签发现 Prompt (英文输入 → 中文标签输出)
+CONTEXT_DISCOVERY_RAW_PROMPT = """You are a senior marketing expert and user researcher.
+Based on the following **English product information** and **English user review samples**,
+build a "5W User & Market Model" for this product.
+
+# Product Official Information (English)
+- **Product Title**: {product_title}
+- **Bullet Points**:
+{bullet_points}
+
+# User Review Samples ({count} buyer reviews, English Original)
+{reviews_text}
+
+# Task
+Synthesize official positioning and user feedback to identify 5 categories of core elements.
+Extract **Top 5-8 typical labels per category**. **Output all labels in Chinese**.
+
+1. **Who (人群)**: Who are the main users?
+   - Reference official positioning (e.g.: "Perfect for seniors")
+   - Combine with actual user feedback (e.g.: "bought for my mom")
+   - Roles: 老年人、新手妈妈、学生、宠物主
+   - Family: 给父母买的、送给妻子、孩子的礼物
+
+2. **Where (地点)**: Where is it used?
+   - Reference official positioning (e.g.: "for Home Office, Garage")
+   - Physical spaces: 卧室、办公室、厨房、车上、房车(RV)、户外露营
+
+3. **When (时刻)**: When is it used?
+   - Time points: 早上、睡前、深夜
+   - Triggers: 停电时、旅行时、运动后、节假日
+
+4. **Why (动机)**: What triggers the purchase? (Purchase Driver)
+   - Replacement: 旧的坏了、升级换代
+   - Gift: 生日礼物、圣诞礼物、乔迁送礼
+   - External: 被种草、看了评测、朋友推荐
+
+5. **What (任务)**: What specific task does the user try to accomplish? (Jobs to be Done)
+   - Focus on core uses from official promotion
+   - Note: Specific tasks, not product features
+   - Examples: 清理地毯上的宠物毛、缓解背痛、哄孩子睡觉、去除异味
+
+# Requirements
+1. **Label names in concise Chinese** (2-6 characters ideal).
+2. **Merge synonyms**: e.g., "妈妈", "老妈", "母亲" should be unified.
+3. **Consistent granularity**: Not too coarse ("家人") or too fine ("62岁的独居母亲").
+4. **Official info priority**: Include labels from official positioning even if not mentioned in reviews.
+5. **Provide brief description**: One sentence explaining the label for classification.
+
+# Output Format (JSON Only, Chinese output)
+{{
+  "who": [
+    {{ "name": "老年人", "description": "官方定位的核心用户群体" }},
+    {{ "name": "宠物主", "description": "养猫或养狗的用户" }}
+  ],
+  "where": [
+    {{ "name": "卧室", "description": "卧室/睡眠场景下使用" }}
+  ],
+  "when": [
+    {{ "name": "睡前", "description": "睡觉前使用" }}
+  ],
+  "why": [
+    {{ "name": "替代旧品", "description": "原有产品损坏需要更换" }}
+  ],
+  "what": [
+    {{ "name": "清理宠物毛", "description": "官方核心用途：清理家中的猫毛狗毛" }}
+  ]
+}}
+
+Output JSON only, no other text."""
+
+
 # [UPDATED] 维度发现 Prompt (加入产品信息版)
 DIMENSION_DISCOVERY_PROMPT = """你是一位资深的产品经理和用户研究专家。请基于以下**产品官方信息**和**用户评论样本**，构建该产品的核心评价维度模型。
 
@@ -704,6 +812,197 @@ class TranslationService:
         except Exception as e:
             logger.error(f"维度学习失败: {e}")
             return []
+
+    @retry(
+        stop=stop_after_attempt(2),
+        wait=wait_exponential(multiplier=1, min=2, max=10),
+        retry=retry_if_exception_type((Exception,)),
+        reraise=True
+    )
+    def learn_dimensions_from_raw(
+        self, 
+        raw_reviews: List[str],
+        product_title: str = "",
+        bullet_points: str = ""
+    ) -> List[dict]:
+        """
+        跨语言零样本学习：从英文原文评论直接学习产品维度（输出中文）。
+        
+        这是流式处理架构的核心方法：
+        - 不需要等待翻译完成
+        - 直接使用英文原文进行学习
+        - AI 输出中文维度名称和描述
+        
+        Args:
+            raw_reviews: 英文原文评论列表（来自 get_scientific_samples）
+            product_title: 产品英文标题
+            bullet_points: 产品英文五点描述
+            
+        Returns:
+            维度列表（中文），每个维度包含 name 和 description
+        """
+        if not self._check_client():
+            logger.error("Translation service not configured for raw dimension learning")
+            return []
+        
+        if not raw_reviews or len(raw_reviews) < 5:
+            logger.warning("样本数量不足（至少需要5条英文评论），无法有效学习维度")
+            return []
+        
+        # 限制样本量防止超 token
+        sample_texts = raw_reviews[:50]
+        combined_text = "\n---\n".join([f"Review {i+1}: {text}" for i, text in enumerate(sample_texts)])
+        
+        # 处理产品信息
+        title_text = product_title.strip() if product_title else "(Not provided)"
+        bullet_text = bullet_points.strip() if bullet_points else "(Not provided)"
+        
+        try:
+            prompt = DIMENSION_DISCOVERY_RAW_PROMPT.format(
+                product_title=title_text,
+                bullet_points=bullet_text,
+                count=len(sample_texts),
+                reviews_text=combined_text
+            )
+            
+            response = self.client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0.3,
+                max_tokens=2000,
+                timeout=90.0,
+            )
+            
+            result = response.choices[0].message.content.strip()
+            parsed = parse_json_safely(result)
+            
+            if not isinstance(parsed, dict) or "dimensions" not in parsed:
+                logger.warning(f"跨语言维度发现返回格式不正确: {type(parsed)}")
+                return []
+            
+            dimensions = parsed.get("dimensions", [])
+            
+            valid_dimensions = []
+            for dim in dimensions:
+                if isinstance(dim, dict) and dim.get("name"):
+                    valid_dimensions.append({
+                        "name": dim["name"].strip(),
+                        "description": (dim.get("description") or "").strip()
+                    })
+            
+            logger.info(f"[跨语言学习] 从 {len(sample_texts)} 条英文评论学习到 {len(valid_dimensions)} 个中文维度")
+            return valid_dimensions
+            
+        except Exception as e:
+            logger.error(f"跨语言维度学习失败: {e}")
+            return []
+
+    @retry(
+        stop=stop_after_attempt(2),
+        wait=wait_exponential(multiplier=1, min=2, max=10),
+        retry=retry_if_exception_type((Exception,)),
+        reraise=True
+    )
+    def learn_context_labels_from_raw(
+        self, 
+        raw_reviews: List[str],
+        product_title: str = "",
+        bullet_points: List[str] = None
+    ) -> dict:
+        """
+        跨语言零样本学习：从英文原文评论直接学习 5W 标签库（输出中文）。
+        
+        这是流式处理架构的核心方法：
+        - 不需要等待翻译完成
+        - 直接使用英文原文进行学习
+        - AI 输出中文标签名称和描述
+        
+        Args:
+            raw_reviews: 英文原文评论列表（来自 get_scientific_samples）
+            product_title: 产品英文标题
+            bullet_points: 产品英文五点描述列表
+            
+        Returns:
+            5W 标签字典（中文），格式：
+            {
+                "who": [{"name": "老年人", "description": "..."}, ...],
+                "where": [...],
+                "when": [...],
+                "why": [...],
+                "what": [...]
+            }
+        """
+        if not self._check_client():
+            logger.error("Translation service not configured for raw context learning")
+            return {}
+        
+        if not raw_reviews or len(raw_reviews) < 10:
+            logger.warning("样本数量不足（至少需要10条英文评论），无法有效学习 5W 标签")
+            return {}
+        
+        # 限制样本量防止超 token
+        sample_texts = raw_reviews[:50]
+        combined_reviews = "\n---\n".join([f"Review {i+1}: {text}" for i, text in enumerate(sample_texts)])
+        
+        # 格式化产品官方信息
+        formatted_title = product_title.strip() if product_title else "(Not provided)"
+        formatted_bullets = "(Not provided)"
+        if bullet_points and len(bullet_points) > 0:
+            formatted_bullets = "\n".join([f"  - {bp}" for bp in bullet_points if bp and bp.strip()])
+        
+        logger.info(f"[跨语言学习] 5W标签学习：{len(sample_texts)} 条英文评论 + 产品信息")
+        
+        try:
+            prompt = CONTEXT_DISCOVERY_RAW_PROMPT.format(
+                product_title=formatted_title,
+                bullet_points=formatted_bullets,
+                count=len(sample_texts),
+                reviews_text=combined_reviews
+            )
+            
+            response = self.client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0.3,
+                max_tokens=3000,
+                timeout=120.0,
+            )
+            
+            result = response.choices[0].message.content.strip()
+            parsed = parse_json_safely(result)
+            
+            if not isinstance(parsed, dict):
+                logger.warning(f"跨语言 5W 标签发现返回格式不正确: {type(parsed)}")
+                return {}
+            
+            valid_types = {"who", "where", "when", "why", "what"}
+            valid_result = {}
+            
+            for context_type in valid_types:
+                labels = parsed.get(context_type, [])
+                valid_labels = []
+                
+                for label in labels:
+                    if isinstance(label, dict) and label.get("name"):
+                        valid_labels.append({
+                            "name": label["name"].strip(),
+                            "description": (label.get("description") or "").strip()
+                        })
+                
+                if valid_labels:
+                    valid_result[context_type] = valid_labels
+            
+            total_labels = sum(len(v) for v in valid_result.values())
+            logger.info(f"[跨语言学习] 从英文评论学习到 {total_labels} 个中文 5W 标签（{len(valid_result)} 个类型）")
+            return valid_result
+            
+        except Exception as e:
+            logger.error(f"跨语言 5W 标签学习失败: {e}")
+            return {}
 
     @retry(
         stop=stop_after_attempt(2),

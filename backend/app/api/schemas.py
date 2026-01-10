@@ -72,6 +72,7 @@ class ReviewIngestRequest(BaseModel):
     price: Optional[str] = Field(None, description="Product price with currency")
     bullet_points: Optional[List[str]] = Field(None, description="Product bullet points list")
     reviews: List[ReviewRawData] = Field(..., description="List of reviews")
+    is_stream: bool = Field(False, description="是否为流式上传模式（每页上传一次）")
     
     model_config = ConfigDict(
         json_schema_extra={

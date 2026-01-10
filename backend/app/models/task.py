@@ -34,6 +34,7 @@ class TaskType(str, Enum):
     ANALYSIS = "analysis"
     THEMES = "themes"      # [NEW] 主题提取
     INSIGHTS = "insights"  # [NEW] 洞察提取
+    AUTO_ANALYSIS = "auto_analysis"  # [NEW] 全自动分析（采集完成后触发）
 
 
 # 每种任务的心跳超时时间（秒）
@@ -42,6 +43,7 @@ TASK_HEARTBEAT_TIMEOUT = {
     TaskType.THEMES.value: 60,         # 主题提取 1 分钟无心跳视为超时
     TaskType.INSIGHTS.value: 60,       # 洞察提取 1 分钟无心跳视为超时
     TaskType.ANALYSIS.value: 120,      # 分析任务 2 分钟无心跳视为超时
+    TaskType.AUTO_ANALYSIS.value: 600, # 全自动分析 10 分钟无心跳视为超时（包含多个子步骤）
 }
 
 

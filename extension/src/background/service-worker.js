@@ -638,11 +638,18 @@ async function getNextPageUrl(tabId) {
 
 /**
  * Collect reviews using real browser tab navigation
+ * 
+ * [UPDATED] 流式上传模式 (Stream Upload Mode)
+ * - 每采集一页，立即上传到后端
+ * - 后端接收后立即触发翻译
+ * - 用户可以"边采边看"翻译结果
  */
 async function collectReviewsWithTab(asin, stars, pagesPerStar, mediaType, speedMode, sendProgress) {
   const allReviews = [];
   const seenReviewIds = new Set();
   let originalTabId = null;
+  let totalUploaded = 0;  // [NEW] 累计上传计数
+  let scrapedProductInfo = null;  // [NEW] 暂存产品信息
   
   // 根据速度模式设置等待时间
   // ⚡ 极速模式：激进但不踩红线，依赖 DOM 变化检测而非固定等待
@@ -713,6 +720,55 @@ async function collectReviewsWithTab(asin, stars, pagesPerStar, mediaType, speed
       } catch (e) {
         console.log('[Collector] Could not switch back to original tab');
       }
+    }
+    
+    // [NEW] 🔥 流式模式：先访问产品页获取完整产品信息
+    console.log('[Collector] Fetching product info for stream mode...');
+    try {
+      const productPageUrl = `https://www.amazon.com/dp/${asin}`;
+      await chrome.tabs.update(collectorTabId, { url: productPageUrl });
+      await waitForTabLoad(collectorTabId, 30000);
+      await new Promise(r => setTimeout(r, timing.firstPageWait));
+      
+      const infoResults = await chrome.scripting.executeScript({
+        target: { tabId: collectorTabId },
+        func: () => {
+          const title = document.querySelector('#productTitle')?.textContent?.trim() ||
+                        document.querySelector('.product-title-word-break')?.textContent?.trim() ||
+                        document.title.split(':')[0].trim();
+          const imageElement = document.querySelector('#landingImage') ||
+                               document.querySelector('#imgBlkFront');
+          const imageUrl = imageElement?.src || null;
+          let averageRating = null;
+          const ratingEl = document.querySelector('#acrPopover .a-icon-alt');
+          if (ratingEl) {
+            const match = ratingEl.textContent?.match(/(\d+\.?\d*)/);
+            if (match) averageRating = parseFloat(match[1]);
+          }
+          let price = null;
+          const priceEl = document.querySelector('.a-price .a-offscreen');
+          if (priceEl) price = priceEl.textContent?.trim();
+          const bulletPoints = [];
+          document.querySelectorAll('#feature-bullets .a-list-item').forEach(el => {
+            const text = el.textContent?.trim();
+            if (text && text.length > 5 && !bulletPoints.includes(text)) bulletPoints.push(text);
+          });
+          const url = window.location.href;
+          let marketplace = 'US';
+          if (url.includes('.co.uk')) marketplace = 'UK';
+          else if (url.includes('.de')) marketplace = 'DE';
+          return { title, imageUrl, averageRating, price, bulletPoints, marketplace };
+        }
+      });
+      
+      if (infoResults[0]?.result) {
+        scrapedProductInfo = infoResults[0].result;
+        console.log('[Collector] ✅ Product info scraped:', scrapedProductInfo.title?.substring(0, 50));
+      }
+    } catch (e) {
+      console.warn('[Collector] Failed to scrape product info:', e.message);
+      // 使用默认信息，不阻塞采集
+      scrapedProductInfo = { title: `Product ${asin}`, marketplace: 'US' };
     }
 
     for (const star of stars) {
@@ -817,18 +873,46 @@ async function collectReviewsWithTab(asin, stars, pagesPerStar, mediaType, speed
           });
         }
 
-        // De-duplicate
+        // De-duplicate and collect new reviews for this page
         let newCount = 0;
+        const pageNewReviews = [];  // [NEW] 当前页的新评论（用于流式上传）
+        
         for (const review of reviews) {
           if (!seenReviewIds.has(review.review_id)) {
             seenReviewIds.add(review.review_id);
             review.rating = star; // Ensure rating matches the star filter
             allReviews.push(review);
+            pageNewReviews.push(review);  // [NEW] 记录新评论
             newCount++;
           }
         }
 
         console.log(`[Collector] Page ${page}: ${newCount} new, ${reviews.length - newCount} duplicates, total: ${allReviews.length}`);
+        
+        // [NEW] 🔥 流式上传：每页采集后立即上传新评论
+        if (pageNewReviews.length > 0) {
+          try {
+            const streamBatchData = {
+              asin: asin,
+              title: scrapedProductInfo?.title || "Unknown",
+              image_url: scrapedProductInfo?.imageUrl,
+              marketplace: scrapedProductInfo?.marketplace || 'US',
+              average_rating: scrapedProductInfo?.averageRating,
+              price: scrapedProductInfo?.price,
+              bullet_points: scrapedProductInfo?.bulletPoints,
+              reviews: pageNewReviews,  // ⚠️ 仅传输当前页的新评论
+              is_stream: true           // 标记为流式传输
+            };
+            
+            await uploadReviews(streamBatchData, 2);  // 重试次数降低，快速失败
+            totalUploaded += pageNewReviews.length;
+            console.log(`[Stream] ✅ 已上传第 ${page} 页，${pageNewReviews.length} 条新评论 (累计: ${totalUploaded})`);
+            
+          } catch (uploadErr) {
+            console.error(`[Stream] ❌ 上传失败 (page ${page}):`, uploadErr.message);
+            // 失败不阻塞采集，继续下一页
+          }
+        }
 
         // [FIXED] 在评论添加到 allReviews 后立即发送进度更新，确保 totalReviews 准确
         // 计算总体进度百分比
@@ -922,6 +1006,42 @@ async function collectReviewsWithTab(asin, stars, pagesPerStar, mediaType, speed
     console.log('[Collector] ========================================');
     console.log(`[Collector] ✅ Collection complete: ${allReviews.length} reviews`);
     console.log('[Collector] ========================================');
+    
+    // [NEW] 🚀 采集完成后触发全自动分析
+    if (allReviews.length >= 10) {
+      try {
+        console.log('[Collector] 🚀 Triggering auto analysis...');
+        const response = await fetch(`${API_BASE_URL}/products/${asin}/collection-complete`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          }
+        });
+        
+        if (response.ok) {
+          const result = await response.json();
+          console.log('[Collector] ✅ Auto analysis triggered:', result.status);
+          sendProgress({
+            star: 5,
+            page: 1,
+            pagesPerStar: 1,
+            totalReviews: allReviews.length,
+            progress: 100,
+            message: `采集完成！已触发自动分析，共 ${allReviews.length} 条评论`,
+            autoAnalysisStarted: true,
+            taskId: result.task_id
+          });
+        } else {
+          console.warn('[Collector] ⚠️ Auto analysis trigger failed:', response.status);
+        }
+      } catch (err) {
+        console.error('[Collector] ❌ Auto analysis trigger error:', err.message);
+        // 不阻塞采集完成
+      }
+    } else {
+      console.log(`[Collector] ⚠️ Only ${allReviews.length} reviews, skipping auto analysis (need >= 10)`);
+    }
+    
     return allReviews;
 
   } catch (error) {
@@ -990,48 +1110,26 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       ).then(async (reviews) => {
         console.log('[Background] Collection completed:', reviews.length, 'reviews');
         
-        // Upload to backend
-        const uploadData = {
-          asin,
-          title: productInfo.title,
-          image_url: productInfo.imageUrl,
-          marketplace: productInfo.marketplace || 'US',
-          average_rating: productInfo.averageRating,
-          price: productInfo.price,
-          bullet_points: productInfo.bulletPoints,
-          reviews
-        };
-
-        try {
-          const result = await uploadReviews(uploadData);
-          
-          // Notify content script of success
-          if (originTabId) {
-            chrome.tabs.sendMessage(originTabId, {
-              type: 'COLLECTION_COMPLETE',
-              success: true,
-              reviewCount: reviews.length,
-              result
-            }).catch((error) => {
-              // Ignore connection errors (tab might be closed or extension reloaded)
-              if (!error.message.includes('Receiving end') && !error.message.includes('Could not establish')) {
-                console.warn('[Background] Error sending completion:', error.message);
-              }
-            });
-          }
-        } catch (error) {
-          console.error('[Background] Upload error:', error);
-          if (originTabId) {
-            chrome.tabs.sendMessage(originTabId, {
-              type: 'COLLECTION_ERROR',
-              error: error.message
-            }).catch((error) => {
-              // Ignore connection errors
-              if (!error.message.includes('Receiving end') && !error.message.includes('Could not establish')) {
-                console.warn('[Background] Error sending error:', error.message);
-              }
-            });
-          }
+        // [UPDATED] 🔥 流式模式：数据已在采集过程中逐页上传
+        // 这里只需要发送完成通知，不需要再次上传全部数据
+        console.log('[Background] Stream mode: data already uploaded during collection');
+        
+        // 直接发送完成通知（数据已经流式上传完毕）
+        if (originTabId) {
+          chrome.tabs.sendMessage(originTabId, {
+            type: 'COLLECTION_COMPLETE',
+            success: true,
+            reviewCount: reviews.length,
+            result: { 
+              success: true, 
+              message: `流式采集完成: ${reviews.length} 条评论`,
+              reviews_received: reviews.length
+            }
+          }).catch((error) => {
+            if (!error.message.includes('Receiving end') && !error.message.includes('Could not establish')) {
+              console.warn('[Background] Error sending completion:', error.message);
+            }
+          });
         }
       }).catch((error) => {
         console.error('[Background] Collection error:', error);
@@ -1552,18 +1650,44 @@ async function collectReviewsWithTabAuto(asin, stars, pagesPerStar, mediaType, s
           console.error(`[AutoCollector] Page ${page} Error:`, err.message);
         }
         
-        // 去重
+        // 去重并收集新评论
         let newCount = 0;
+        const pageNewReviews = [];  // [NEW] 当前页的新评论
         for (const review of reviews) {
           if (!seenReviewIds.has(review.review_id)) {
             seenReviewIds.add(review.review_id);
             review.rating = star;
             allReviews.push(review);
+            pageNewReviews.push(review);  // [NEW] 加入当前页新评论列表
             newCount++;
           }
         }
         
         console.log(`[AutoCollector] Page ${page}: ${newCount} new, total: ${allReviews.length}`);
+        
+        // [NEW] 🔥 流式上传：每页采集后立即上传新评论
+        if (pageNewReviews.length > 0) {
+          try {
+            const streamBatchData = {
+              asin: asin,
+              title: scrapedProductInfo?.title || `Product ${asin}`,
+              image_url: scrapedProductInfo?.imageUrl,
+              marketplace: scrapedProductInfo?.marketplace || 'US',
+              average_rating: scrapedProductInfo?.averageRating,
+              price: scrapedProductInfo?.price,
+              bullet_points: scrapedProductInfo?.bulletPoints,
+              reviews: pageNewReviews,  // ⚠️ 仅传输当前页的新评论
+              is_stream: true           // 标记为流式传输
+            };
+            
+            await uploadReviews(streamBatchData, 2);  // 重试次数降低，快速失败
+            console.log(`[AutoCollector] [Stream] ✅ 已上传第 ${page} 页，${pageNewReviews.length} 条新评论`);
+            
+          } catch (uploadErr) {
+            console.error(`[AutoCollector] [Stream] ❌ 上传失败 (page ${page}):`, uploadErr.message);
+            // 失败不阻塞采集，继续下一页
+          }
+        }
         
         // 进度更新
         const starIndex = stars.indexOf(star);
@@ -1612,33 +1736,41 @@ async function collectReviewsWithTabAuto(asin, stars, pagesPerStar, mediaType, s
       autoCollectorTabId = null;
     }
 
-    console.log(`[AutoCollector] ✅ Collection complete: ${allReviews.length} reviews`);
+    console.log(`[AutoCollector] ✅ Collection complete: ${allReviews.length} reviews (已流式上传)`);
     
-    // 上传到后端
+    // [UPDATED] 数据已在采集过程中流式上传，无需再次上传
+    // 直接触发全自动分析
     if (allReviews.length > 0) {
-      const uploadData = {
+      console.log('[AutoCollector] 📊 流式上传统计:', {
         asin,
-        title: scrapedProductInfo?.title || `Product ${asin}`,
-        image_url: scrapedProductInfo?.imageUrl,
-        average_rating: scrapedProductInfo?.averageRating,
-        price: scrapedProductInfo?.price,
-        bullet_points: scrapedProductInfo?.bulletPoints,
-        marketplace: scrapedProductInfo?.marketplace || 'US',
-        reviews: allReviews
-      };
-
-      console.log('[AutoCollector] Uploading to backend with full product info:', {
-        asin,
-        title: uploadData.title,
-        hasImage: !!uploadData.image_url,
-        averageRating: uploadData.average_rating,
-        price: uploadData.price,
-        bulletPointsCount: uploadData.bullet_points?.length || 0,
-        reviewCount: allReviews.length
+        title: scrapedProductInfo?.title,
+        totalReviews: allReviews.length,
+        message: '数据已在采集过程中逐页上传，翻译任务已并行启动'
       });
       
-      await uploadReviews(uploadData);
-      console.log('[AutoCollector] ✅ Upload complete');
+      // 🚀 采集完成后触发全自动分析
+      if (allReviews.length >= 10) {
+        try {
+          console.log('[AutoCollector] 🚀 Triggering auto analysis...');
+          const response = await fetch(`${API_BASE_URL}/products/${asin}/collection-complete`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json'
+            }
+          });
+          
+          if (response.ok) {
+            const result = await response.json();
+            console.log('[AutoCollector] ✅ Auto analysis triggered:', result.status);
+          } else {
+            console.warn('[AutoCollector] ⚠️ Auto analysis trigger failed:', response.status);
+          }
+        } catch (err) {
+          console.error('[AutoCollector] ❌ Auto analysis trigger error:', err.message);
+        }
+      } else {
+        console.log(`[AutoCollector] ⚠️ Only ${allReviews.length} reviews, skipping auto analysis (need >= 10)`);
+      }
     }
     
     return allReviews;

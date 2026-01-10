@@ -13,10 +13,14 @@ from typing import Optional
 from celery import Celery
 from sqlalchemy import create_engine, select, update, and_, func
 from sqlalchemy.orm import sessionmaker
+import redis
 
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
+
+# Redis 客户端（用于分布式锁）
+redis_client = redis.from_url(settings.REDIS_URL, decode_responses=True)
 
 # Create Celery application
 celery_app = Celery(
@@ -38,11 +42,16 @@ celery_app.conf.update(
     worker_prefetch_multiplier=1,
     task_acks_late=True,
     task_routes={
-        # 四个独立的 AI 服务任务
-        "app.worker.task_translate_bullet_points": {"queue": "translation"},  # 五点翻译
-        "app.worker.task_process_reviews": {"queue": "translation"},           # 评论翻译
-        "app.worker.task_extract_insights": {"queue": "translation"},          # 洞察提取
-        "app.worker.task_extract_themes": {"queue": "translation"},            # 主题提取
+        # 翻译相关任务（高频、轻量）
+        "app.worker.task_translate_bullet_points": {"queue": "translation"},
+        "app.worker.task_process_reviews": {"queue": "translation"},
+        "app.worker.task_ingest_translation_only": {"queue": "translation"},  # 流式轻量翻译
+        
+        # 分析相关任务（低频、重量级）
+        "app.worker.task_extract_insights": {"queue": "analysis"},  # 洞察提取
+        "app.worker.task_extract_themes": {"queue": "analysis"},  # 主题提取
+        "app.worker.task_scientific_learning_and_analysis": {"queue": "analysis"},  # 科学学习+回填
+        "app.worker.task_full_auto_analysis": {"queue": "analysis"},  # 🔥 全自动分析（独立队列）
     },
 )
 
@@ -1067,6 +1076,759 @@ def task_extract_themes(self, product_id: str):
             task_record.status = TaskStatus.FAILED.value
             task_record.error_message = str(e)
             db.commit()
+        raise self.retry(exc=e)
+        
+    finally:
+        db.close()
+
+
+# ============== [NEW] 任务5: 流式轻量翻译 ==============
+
+@celery_app.task(bind=True, max_retries=2, default_retry_delay=30)
+def task_ingest_translation_only(self, product_id: str):
+    """
+    流式轻量翻译任务 (Stream Translation Only)
+    
+    数据入库后立即运行，只负责：
+    1. Title/BulletPoints 翻译
+    2. Review Text 翻译
+    
+    不负责：
+    - 维度提取
+    - 洞察分析
+    - 主题提取
+    
+    设计理念：让用户在前台"边采边看"翻译结果
+    
+    🔒 并发策略：使用 PostgreSQL 行级锁（SELECT FOR UPDATE SKIP LOCKED）
+       - 多个任务可以并发处理同一产品的不同评论
+       - 自动避免重复处理同一条评论
+       - 无需手动管理分布式锁
+    
+    Args:
+        product_id: 产品 UUID
+    """
+    from app.models.product import Product
+    from app.models.review import Review, TranslationStatus
+    from app.services.translation import translation_service
+    import json
+    
+    logger.info(f"[流式翻译] 开始处理产品 {product_id}")
+    
+    db = get_sync_db()
+    
+    try:
+        # 1. 获取产品信息
+        product_result = db.execute(
+            select(Product).where(Product.id == product_id)
+        )
+        product = product_result.scalar_one_or_none()
+        
+        if not product:
+            logger.error(f"[流式翻译] 产品 {product_id} 不存在")
+            return {"success": False, "error": "Product not found"}
+        
+        # 2. 翻译产品标题（如果未翻译）
+        if product.title and not product.title_translated:
+            try:
+                product.title_translated = translation_service.translate_product_title(product.title)
+                logger.info(f"[流式翻译] 标题翻译完成: {product.title_translated[:30]}...")
+            except Exception as e:
+                logger.warning(f"[流式翻译] 标题翻译失败: {e}")
+        
+        # 3. 翻译五点描述（如果未翻译）
+        if product.bullet_points and not product.bullet_points_translated:
+            try:
+                bullet_points = json.loads(product.bullet_points) if isinstance(product.bullet_points, str) else product.bullet_points
+                if bullet_points and len(bullet_points) > 0:
+                    translated_bullets = translation_service.translate_bullet_points(bullet_points)
+                    product.bullet_points_translated = json.dumps(translated_bullets, ensure_ascii=False)
+                    logger.info(f"[流式翻译] 五点翻译完成: {len(translated_bullets)} 条")
+            except Exception as e:
+                logger.warning(f"[流式翻译] 五点翻译失败: {e}")
+        
+        db.commit()
+        
+        # 4. 🔄 循环翻译所有待处理的评论（只翻译，不提取洞察）
+        # 使用循环处理所有待翻译评论，而不是只处理 100 条
+        translated_count = 0
+        failed_count = 0
+        batch_size = 20  # 🔥 每批处理 20 条（匹配流式插入的频率）
+        
+        while True:
+            # 🔒 使用 PostgreSQL 行级锁避免重复处理
+            # FOR UPDATE SKIP LOCKED: 跳过已被其他任务锁定的行
+            # 这样多个任务可以并发处理不同的评论
+            pending_result = db.execute(
+                select(Review)
+                .where(
+                    and_(
+                        Review.product_id == product_id,
+                        Review.translation_status.in_([
+                            TranslationStatus.PENDING.value,
+                            TranslationStatus.FAILED.value
+                        ]),
+                        Review.is_deleted == False
+                    )
+                )
+                .order_by(Review.created_at.desc())
+                .limit(batch_size)
+                .with_for_update(skip_locked=True)  # 🔥 关键：跳过已锁定的行
+            )
+            pending_reviews = pending_result.scalars().all()
+            
+            if not pending_reviews:
+                logger.info(f"[流式翻译] 没有更多待翻译的评论")
+                break
+            
+            logger.info(f"[流式翻译] 处理批次: {len(pending_reviews)} 条评论")
+            
+            for review in pending_reviews:
+                try:
+                    # 标记为处理中
+                    review.translation_status = TranslationStatus.PROCESSING.value
+                    db.commit()
+                    
+                    # 只做翻译，不提取洞察
+                    title_translated, body_translated, sentiment, _ = translation_service.translate_review(
+                        title=review.title_original,
+                        body=review.body_original,
+                        extract_insights=False  # 关闭洞察提取
+                    )
+                    
+                    if body_translated and body_translated.strip():
+                        review.title_translated = title_translated
+                        review.body_translated = body_translated
+                        review.sentiment = sentiment.value
+                        review.translation_status = TranslationStatus.COMPLETED.value
+                        translated_count += 1
+                    else:
+                        review.translation_status = TranslationStatus.FAILED.value
+                        failed_count += 1
+                    
+                    db.commit()
+                    
+                    # 控制速率
+                    time.sleep(0.1)
+                    
+                except Exception as e:
+                    logger.warning(f"[流式翻译] 评论 {review.id} 翻译失败: {e}")
+                    review.translation_status = TranslationStatus.FAILED.value
+                    db.commit()
+                    failed_count += 1
+            
+            # 如果这批处理的数量小于 batch_size，说明没有更多了
+            if len(pending_reviews) < batch_size:
+                break
+        
+        logger.info(f"[流式翻译] 完成: 翻译 {translated_count} 条, 失败 {failed_count} 条")
+        
+        return {
+            "success": True,
+            "product_id": product_id,
+            "translated_count": translated_count,
+            "failed_count": failed_count
+        }
+        
+    except Exception as e:
+        logger.error(f"[流式翻译] 产品 {product_id} 处理失败: {e}")
+        db.rollback()
+        raise self.retry(exc=e)
+        
+    finally:
+        db.close()
+        # 🔒 PostgreSQL 行级锁会在事务结束时自动释放
+
+
+# ============== [NEW] 任务6: 科学学习与全量回填 ==============
+
+@celery_app.task(bind=True, max_retries=1, default_retry_delay=60)
+def task_scientific_learning_and_analysis(self, product_id: str):
+    """
+    科学学习与全量回填任务 (Scientific Learning & Backfill)
+    
+    用户点击"开始分析"或采集完成后触发。
+    利用英文原文进行 Schema 学习，然后回填所有数据。
+    
+    流程：
+    1. 科学采样（基于英文原文，不等待翻译）
+    2. 跨语言零样本学习（维度 + 5W标签）
+    3. 全量洞察回填（对已翻译的评论提取洞察）
+    4. 全量主题回填（对已翻译的评论提取5W主题）
+    
+    Args:
+        product_id: 产品 UUID
+    """
+    from app.models.product import Product
+    from app.models.product_dimension import ProductDimension
+    from app.models.product_context_label import ProductContextLabel
+    from app.services.translation import translation_service
+    import json as json_lib
+    import asyncio
+    
+    logger.info(f"[科学学习] 开始处理产品 {product_id}")
+    
+    db = get_sync_db()
+    
+    try:
+        # === Step 0: 获取产品信息 ===
+        product_result = db.execute(
+            select(Product).where(Product.id == product_id)
+        )
+        product = product_result.scalar_one_or_none()
+        
+        if not product:
+            logger.error(f"[科学学习] 产品 {product_id} 不存在")
+            return {"success": False, "error": "Product not found"}
+        
+        # 解析产品信息
+        product_title = product.title or ""
+        bullet_points = []
+        if product.bullet_points:
+            try:
+                bullet_points = json_lib.loads(product.bullet_points) if isinstance(product.bullet_points, str) else product.bullet_points
+            except:
+                bullet_points = []
+        
+        # === Step 1: 科学采样（基于英文原文）===
+        logger.info(f"[科学学习] Step 1: 科学采样中...")
+        
+        # 需要同步方式执行异步方法
+        from app.services.review_service import ReviewService
+        from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
+        from sqlalchemy.orm import sessionmaker
+        from app.core.config import settings
+        from app.models.review import Review
+        
+        # 使用同步查询获取科学采样
+        sample_stmt = (
+            select(Review.body_original)
+            .where(
+                and_(
+                    Review.product_id == product_id,
+                    Review.body_original.isnot(None),
+                    Review.body_original != "",
+                    Review.is_deleted == False
+                )
+            )
+            .order_by(Review.helpful_votes.desc(), func.length(Review.body_original).desc())
+            .limit(50)
+        )
+        sample_result = db.execute(sample_stmt)
+        raw_samples = [r[0] for r in sample_result.all() if r[0] and r[0].strip()]
+        
+        if len(raw_samples) < 10:
+            logger.warning(f"[科学学习] 样本不足（{len(raw_samples)} 条），需要至少 10 条英文评论")
+            return {"success": False, "error": f"样本不足: {len(raw_samples)} 条，需要至少 10 条"}
+        
+        logger.info(f"[科学学习] 采样完成: {len(raw_samples)} 条高质量英文评论")
+        
+        # === Step 2: 跨语言零样本学习 ===
+        logger.info(f"[科学学习] Step 2: 跨语言零样本学习中...")
+        
+        # 2.1 学习维度（如果不存在）
+        dim_count_result = db.execute(
+            select(func.count(ProductDimension.id))
+            .where(ProductDimension.product_id == product_id)
+        )
+        dim_count = dim_count_result.scalar() or 0
+        
+        dimensions_learned = 0
+        if dim_count == 0:
+            logger.info(f"[科学学习] 学习产品维度中...")
+            dims = translation_service.learn_dimensions_from_raw(
+                raw_reviews=raw_samples,
+                product_title=product_title,
+                bullet_points="\n".join(bullet_points) if bullet_points else ""
+            )
+            
+            if dims:
+                for dim in dims:
+                    dimension = ProductDimension(
+                        product_id=product_id,
+                        name=dim["name"],
+                        description=dim.get("description", ""),
+                        is_ai_generated=True
+                    )
+                    db.add(dimension)
+                db.commit()
+                dimensions_learned = len(dims)
+                logger.info(f"[科学学习] 维度学习完成: {dimensions_learned} 个")
+        else:
+            logger.info(f"[科学学习] 产品已有 {dim_count} 个维度，跳过学习")
+        
+        # 2.2 学习5W标签（如果不存在）
+        label_count_result = db.execute(
+            select(func.count(ProductContextLabel.id))
+            .where(ProductContextLabel.product_id == product_id)
+        )
+        label_count = label_count_result.scalar() or 0
+        
+        labels_learned = 0
+        if label_count == 0:
+            logger.info(f"[科学学习] 学习5W标签库中...")
+            labels = translation_service.learn_context_labels_from_raw(
+                raw_reviews=raw_samples,
+                product_title=product_title,
+                bullet_points=bullet_points
+            )
+            
+            if labels:
+                for context_type in ["who", "where", "when", "why", "what"]:
+                    type_labels = labels.get(context_type, [])
+                    for item in type_labels:
+                        if isinstance(item, dict) and item.get("name"):
+                            label = ProductContextLabel(
+                                product_id=product_id,
+                                type=context_type,
+                                name=item["name"].strip(),
+                                description=item.get("description", "").strip() or None,
+                                count=0,
+                                is_ai_generated=True
+                            )
+                            db.add(label)
+                            labels_learned += 1
+                db.commit()
+                logger.info(f"[科学学习] 5W标签学习完成: {labels_learned} 个")
+        else:
+            logger.info(f"[科学学习] 产品已有 {label_count} 个5W标签，跳过学习")
+        
+        # === Step 3: 触发全量洞察回填 ===
+        logger.info(f"[科学学习] Step 3: 触发全量洞察回填...")
+        task_extract_insights.delay(product_id)
+        
+        # === Step 4: 触发全量主题回填 ===
+        logger.info(f"[科学学习] Step 4: 触发全量主题回填...")
+        task_extract_themes.delay(product_id)
+        
+        logger.info(f"[科学学习] 完成: 维度 +{dimensions_learned}, 标签 +{labels_learned}")
+        
+        return {
+            "success": True,
+            "product_id": product_id,
+            "samples_used": len(raw_samples),
+            "dimensions_learned": dimensions_learned,
+            "labels_learned": labels_learned,
+            "backfill_triggered": True
+        }
+        
+    except Exception as e:
+        logger.error(f"[科学学习] 产品 {product_id} 处理失败: {e}")
+        db.rollback()
+        raise self.retry(exc=e)
+        
+    finally:
+        db.close()
+
+
+# ============== [NEW] 任务7: 全自动分析（采集完成后触发）==============
+
+@celery_app.task(bind=True, max_retries=2, default_retry_delay=120)
+def task_full_auto_analysis(self, product_id: str, task_id: str):
+    """
+    🚀 全自动分析任务 (Full Auto Analysis Pipeline) - 流式并行优化版
+    
+    采集完成后自动触发，执行完整的分析流水线。
+    
+    ⭐ 核心优化：翻译在 ingest 时就已开始（流式上传边存边译）
+    
+    流式并行流程：
+    
+    [数据采集阶段 - 在此任务触发之前]
+    ─────────────────────────────────────────────────────────────
+    插入数据 → 立即触发翻译（task_ingest_translation_only）
+    插入数据 → 立即触发翻译
+    ...（持续进行中）
+    
+    [采集完成后触发此任务]
+    ─────────────────────────────────────────────────────────────
+    Step 1: 学习维度+5W标签（基于英文原文，不等翻译）
+                              ↓
+    Step 2: 触发洞察+主题提取（翻译此时已在进行中！）
+                              ↓
+    Step 3: 等待三任务并行完成
+            ├─ 翻译（已在进行，会先完成）
+            ├─ 洞察提取（边翻译边提取）
+            └─ 主题提取（边翻译边提取）
+                              ↓
+    Step 4: 生成综合战略版报告
+    
+    时间优化：
+    - 翻译在采集时就开始 → 不等待
+    - 学习基于英文原文 → 不依赖翻译
+    - 三任务并行执行 → 大幅减少等待时间
+    - 预计节省 50%+ 的总时间
+    
+    Args:
+        product_id: 产品 UUID
+        task_id: AUTO_ANALYSIS 任务 UUID（用于更新进度）
+    """
+    from app.models.product import Product
+    from app.models.review import Review, TranslationStatus
+    from app.models.task import Task, TaskStatus, TaskType
+    from app.models.insight import ReviewInsight
+    from app.models.theme_highlight import ReviewThemeHighlight
+    from app.models.report import ProductReport, ReportType, ReportStatus
+    from app.services.translation import translation_service
+    from datetime import datetime, timezone
+    import json as json_lib
+    
+    logger.info(f"[全自动分析] 🚀 开始处理产品 {product_id}，任务 {task_id}")
+    
+    db = get_sync_db()
+    
+    def update_task_progress(step: int, status: str = TaskStatus.PROCESSING.value, error: str = None):
+        """更新任务进度"""
+        try:
+            task_update = {
+                "processed_items": step,
+                "status": status,
+                "last_heartbeat": datetime.now(timezone.utc)
+            }
+            if error:
+                task_update["error_message"] = error
+            db.execute(
+                update(Task)
+                .where(Task.id == task_id)
+                .values(**task_update)
+            )
+            db.commit()
+        except Exception as e:
+            logger.error(f"[全自动分析] 更新任务进度失败: {e}")
+    
+    try:
+        # 获取产品信息
+        product_result = db.execute(
+            select(Product).where(Product.id == product_id)
+        )
+        product = product_result.scalar_one_or_none()
+        
+        if not product:
+            logger.error(f"[全自动分析] 产品 {product_id} 不存在")
+            update_task_progress(0, TaskStatus.FAILED.value, "产品不存在")
+            return {"success": False, "error": "Product not found"}
+        
+        # ==========================================
+        # Step 1: 科学学习（基于英文原文，不依赖翻译！）
+        # ==========================================
+        update_task_progress(1, TaskStatus.PROCESSING.value)
+        logger.info(f"[全自动分析] Step 1/3: 科学学习（基于英文原文）...")
+        
+        # 直接调用科学学习任务的逻辑（同步执行）
+        from app.models.product_dimension import ProductDimension
+        from app.models.product_context_label import ProductContextLabel
+        
+        # 解析产品信息
+        product_title = product.title or ""
+        bullet_points = []
+        if product.bullet_points:
+            try:
+                bullet_points = json_lib.loads(product.bullet_points) if isinstance(product.bullet_points, str) else product.bullet_points
+            except:
+                bullet_points = []
+        
+        # 科学采样（基于英文原文）
+        sample_stmt = (
+            select(Review.body_original)
+            .where(
+                and_(
+                    Review.product_id == product_id,
+                    Review.body_original.isnot(None),
+                    Review.body_original != "",
+                    Review.is_deleted == False
+                )
+            )
+            .order_by(Review.helpful_votes.desc(), func.length(Review.body_original).desc())
+            .limit(50)
+        )
+        sample_result = db.execute(sample_stmt)
+        raw_samples = [r[0] for r in sample_result.all() if r[0] and r[0].strip()]
+        
+        if len(raw_samples) >= 10:
+            # 学习维度
+            dim_count_result = db.execute(
+                select(func.count(ProductDimension.id))
+                .where(ProductDimension.product_id == product_id)
+            )
+            dim_count = dim_count_result.scalar() or 0
+            
+            if dim_count == 0:
+                logger.info(f"[全自动分析] 学习产品维度中...")
+                try:
+                    dims = translation_service.learn_dimensions_from_raw(
+                        raw_reviews=raw_samples,
+                        product_title=product_title,
+                        bullet_points="\n".join(bullet_points) if bullet_points else ""
+                    )
+                    if dims:
+                        for dim in dims:
+                            dimension = ProductDimension(
+                                product_id=product_id,
+                                name=dim["name"],
+                                description=dim.get("description", ""),
+                                is_ai_generated=True
+                            )
+                            db.add(dimension)
+                        db.commit()
+                        logger.info(f"[全自动分析] 维度学习完成: {len(dims)} 个")
+                except Exception as e:
+                    logger.error(f"[全自动分析] 维度学习失败: {e}")
+            
+            # 学习5W标签
+            label_count_result = db.execute(
+                select(func.count(ProductContextLabel.id))
+                .where(ProductContextLabel.product_id == product_id)
+            )
+            label_count = label_count_result.scalar() or 0
+            
+            if label_count == 0:
+                logger.info(f"[全自动分析] 学习5W标签库中...")
+                try:
+                    labels = translation_service.learn_context_labels_from_raw(
+                        raw_reviews=raw_samples,
+                        product_title=product_title,
+                        bullet_points=bullet_points
+                    )
+                    if labels:
+                        labels_saved = 0
+                        for context_type in ["who", "where", "when", "why", "what"]:
+                            type_labels = labels.get(context_type, [])
+                            for item in type_labels:
+                                if isinstance(item, dict) and item.get("name"):
+                                    label = ProductContextLabel(
+                                        product_id=product_id,
+                                        type=context_type,
+                                        name=item["name"].strip(),
+                                        description=item.get("description", "").strip() or None,
+                                        count=0,
+                                        is_ai_generated=True
+                                    )
+                                    db.add(label)
+                                    labels_saved += 1
+                        db.commit()
+                        logger.info(f"[全自动分析] 5W标签学习完成: {labels_saved} 个")
+                except Exception as e:
+                    logger.error(f"[全自动分析] 5W标签学习失败: {e}")
+        else:
+            logger.warning(f"[全自动分析] 样本不足（{len(raw_samples)} 条），跳过学习")
+        
+        # ==========================================
+        # Step 2: 触发洞察+主题提取
+        # 注意：翻译任务在 ingest 时就已经启动了！不需要在这里触发
+        # ==========================================
+        update_task_progress(2, TaskStatus.PROCESSING.value)
+        logger.info(f"[全自动分析] Step 2/4: 触发洞察+主题提取...")
+        
+        # 检查当前翻译进度（翻译在 ingest 时就已经开始了）
+        pending_result = db.execute(
+            select(func.count(Review.id))
+            .where(
+                and_(
+                    Review.product_id == product_id,
+                    Review.translation_status.in_([
+                        TranslationStatus.PENDING.value,
+                        TranslationStatus.PROCESSING.value
+                    ]),
+                    Review.is_deleted == False
+                )
+            )
+        )
+        pending_translation = pending_result.scalar() or 0
+        
+        translated_result = db.execute(
+            select(func.count(Review.id))
+            .where(
+                and_(
+                    Review.product_id == product_id,
+                    Review.translation_status == TranslationStatus.COMPLETED.value,
+                    Review.is_deleted == False
+                )
+            )
+        )
+        translated_count = translated_result.scalar() or 0
+        
+        logger.info(f"[全自动分析] 📊 当前翻译状态: 已翻译 {translated_count} 条, 待翻译 {pending_translation} 条")
+        logger.info(f"[全自动分析] 💡 翻译任务在 ingest 时就已启动，现在触发洞察+主题提取")
+        
+        # 触发洞察和主题提取（它们会处理已翻译的评论，边翻译边提取）
+        task_extract_insights.delay(product_id)
+        task_extract_themes.delay(product_id)
+        
+        # ==========================================
+        # Step 3: 等待三任务并行完成（翻译 + 洞察 + 主题）
+        # ==========================================
+        update_task_progress(3, TaskStatus.PROCESSING.value)
+        logger.info(f"[全自动分析] Step 3/4: 等待三任务并行完成（翻译+洞察+主题）...")
+        
+        # 并行等待所有任务完成（最多等 15 分钟）
+        max_wait_seconds = 900
+        wait_interval = 15
+        waited = 0
+        last_log_time = 0
+        
+        while waited < max_wait_seconds:
+            time.sleep(wait_interval)
+            waited += wait_interval
+            
+            # 检查翻译进度
+            pending_result = db.execute(
+                select(func.count(Review.id))
+                .where(
+                    and_(
+                        Review.product_id == product_id,
+                        Review.translation_status.in_([
+                            TranslationStatus.PENDING.value,
+                            TranslationStatus.PROCESSING.value
+                        ]),
+                        Review.is_deleted == False
+                    )
+                )
+            )
+            pending_translation = pending_result.scalar() or 0
+            
+            # 检查已翻译的评论数
+            translated_result = db.execute(
+                select(func.count(Review.id))
+                .where(
+                    and_(
+                        Review.product_id == product_id,
+                        Review.translation_status == TranslationStatus.COMPLETED.value,
+                        Review.is_deleted == False
+                    )
+                )
+            )
+            translated_count = translated_result.scalar() or 0
+            
+            # 检查洞察提取进度（已翻译但未提取洞察的评论）
+            no_insight_result = db.execute(
+                select(func.count(Review.id))
+                .where(
+                    and_(
+                        Review.product_id == product_id,
+                        Review.translation_status == TranslationStatus.COMPLETED.value,
+                        Review.is_deleted == False,
+                        ~Review.id.in_(
+                            select(ReviewInsight.review_id).where(ReviewInsight.review_id == Review.id)
+                        )
+                    )
+                )
+            )
+            pending_insights = no_insight_result.scalar() or 0
+            
+            # 检查主题提取进度（已翻译但未提取主题的评论）
+            no_theme_result = db.execute(
+                select(func.count(Review.id))
+                .where(
+                    and_(
+                        Review.product_id == product_id,
+                        Review.translation_status == TranslationStatus.COMPLETED.value,
+                        Review.is_deleted == False,
+                        ~Review.id.in_(
+                            select(ReviewThemeHighlight.review_id).where(ReviewThemeHighlight.review_id == Review.id)
+                        )
+                    )
+                )
+            )
+            pending_themes = no_theme_result.scalar() or 0
+            
+            # 每30秒打印一次进度
+            if waited - last_log_time >= 30:
+                logger.info(f"[全自动分析] 📊 并行进度 - 待翻译:{pending_translation} | 待洞察:{pending_insights} | 待主题:{pending_themes}")
+                last_log_time = waited
+            
+            # 检查是否全部完成
+            if pending_translation == 0 and pending_insights == 0 and pending_themes == 0:
+                logger.info(f"[全自动分析] ✅ 并行处理全部完成！已翻译:{translated_count}条")
+                break
+            
+            # 如果洞察或主题提取任务可能已结束但还有待处理的，重新触发
+            if pending_translation == 0 and waited % 60 == 0:
+                if pending_insights > 0:
+                    logger.info(f"[全自动分析] 重新触发洞察提取（还有{pending_insights}条待处理）")
+                    task_extract_insights.delay(product_id)
+                if pending_themes > 0:
+                    logger.info(f"[全自动分析] 重新触发主题提取（还有{pending_themes}条待处理）")
+                    task_extract_themes.delay(product_id)
+            
+            # 更新心跳
+            update_task_progress(3, TaskStatus.PROCESSING.value)
+        
+        if waited >= max_wait_seconds:
+            logger.warning(f"[全自动分析] 并行处理等待超时，继续生成报告")
+        
+        # ==========================================
+        # Step 4: 生成综合战略版报告
+        # ==========================================
+        update_task_progress(4, TaskStatus.PROCESSING.value)
+        logger.info(f"[全自动分析] Step 4/4: 生成综合报告...")
+        
+        try:
+            # 使用同步方式调用报告生成
+            # 由于 SummaryService 是异步的，需要使用 asyncio
+            import asyncio
+            from app.services.summary_service import SummaryService
+            
+            async def generate_report_async():
+                # 使用正确的导入：engine 和 async_session_maker
+                from app.db.session import async_session_maker
+                
+                async with async_session_maker() as async_db:
+                    summary_service = SummaryService(async_db)
+                    result = await summary_service.generate_report(
+                        product_id=product_id,
+                        report_type="comprehensive",  # 综合战略版
+                        min_reviews=10,
+                        save_to_db=True
+                    )
+                    await async_db.commit()  # 确保提交
+                    return result
+            
+            # 运行异步函数
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                report_result = loop.run_until_complete(generate_report_async())
+            finally:
+                loop.close()
+            
+            if report_result.get("success"):
+                report_id = report_result.get("report_id")
+                logger.info(f"[全自动分析] 综合报告生成成功，报告ID: {report_id}")
+                
+                # 更新任务记录，保存报告 ID
+                try:
+                    db.execute(
+                        update(Task)
+                        .where(Task.id == task_id)
+                        .values(error_message=f"report_id:{report_id}")  # 临时存储报告ID
+                    )
+                    db.commit()
+                except Exception as save_err:
+                    logger.warning(f"[全自动分析] 保存报告ID失败: {save_err}")
+            else:
+                logger.warning(f"[全自动分析] 综合报告生成失败: {report_result.get('error')}")
+                
+        except Exception as e:
+            logger.error(f"[全自动分析] 报告生成失败: {e}")
+            # 不因报告生成失败而中断整个任务
+        
+        # ==========================================
+        # 完成
+        # ==========================================
+        update_task_progress(4, TaskStatus.COMPLETED.value)
+        logger.info(f"[全自动分析] ✅ 产品 {product_id} 全自动分析完成！（流式并行优化版）")
+        
+        return {
+            "success": True,
+            "product_id": product_id,
+            "task_id": task_id,
+            "message": "全自动分析完成（并行优化）"
+        }
+        
+    except Exception as e:
+        logger.error(f"[全自动分析] 产品 {product_id} 处理失败: {e}")
+        update_task_progress(0, TaskStatus.FAILED.value, str(e))
+        db.rollback()
         raise self.retry(exc=e)
         
     finally:

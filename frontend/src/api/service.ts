@@ -952,6 +952,60 @@ export async function getComparisonPreview(productIds: string[]): Promise<{
   return response.json();
 }
 
+// ============== [NEW] 全自动分析 API ==============
+
+/**
+ * 触发采集完成后的全自动分析
+ * @param asin 产品 ASIN
+ * @returns 任务信息，包含 task_id 用于轮询状态
+ */
+export async function triggerAutoAnalysis(asin: string): Promise<{
+  success: boolean;
+  status: 'started' | 'already_running';
+  message: string;
+  task_id: string;
+  product_id: string;
+  asin: string;
+  review_count: number;
+}> {
+  const response = await fetch(`${API_BASE}/products/${asin}/collection-complete`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+  });
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    throw new ApiError(response.status, errorData.detail || response.statusText);
+  }
+  return response.json();
+}
+
+/**
+ * 获取全自动分析状态
+ * @param asin 产品 ASIN
+ * @returns 分析进度信息
+ */
+export async function getAutoAnalysisStatus(asin: string): Promise<{
+  success: boolean;
+  status: 'not_started' | 'pending' | 'processing' | 'completed' | 'failed';
+  current_step?: string;
+  progress?: number;
+  processed_items?: number;
+  total_items?: number;
+  task_id?: string;
+  product_id: string;
+  asin: string;
+  message?: string;
+  error_message?: string;
+  report_id?: string;
+}> {
+  const response = await fetch(`${API_BASE}/products/${asin}/auto-analysis-status`);
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    throw new ApiError(response.status, errorData.detail || response.statusText);
+  }
+  return response.json();
+}
+
 // ============== 导出服务对象 ==============
 
 const apiService = {
@@ -1024,6 +1078,10 @@ const apiService = {
   triggerAnalysis,
   deleteAnalysisProject,
   getComparisonPreview,
+  
+  // [NEW] 全自动分析（采集完成后触发）
+  triggerAutoAnalysis,
+  getAutoAnalysisStatus,
 };
 
 export default apiService;
