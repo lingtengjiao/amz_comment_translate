@@ -395,7 +395,9 @@ class SummaryService:
         product_id: UUID,
         report_type: str = ReportType.COMPREHENSIVE.value,
         min_reviews: int = 10,
-        save_to_db: bool = True
+        save_to_db: bool = True,
+        force_regenerate: bool = False,  # [NEW] 是否强制重新生成（忽略去重）
+        require_full_completion: bool = True  # [NEW] 是否要求洞察和主题100%完成
     ) -> dict:
         """
         核心入口：生成指定类型的结构化报告 (JSON)
@@ -405,6 +407,8 @@ class SummaryService:
             report_type: 报告类型 (使用 ReportType 枚举值)
             min_reviews: 最少评论数（默认 10）
             save_to_db: 是否存入数据库（默认 True）
+            force_regenerate: 是否强制重新生成（默认 False，会检查去重）
+            require_full_completion: 是否要求洞察和主题100%完成（默认 True）
             
         Returns:
             {
@@ -439,6 +443,37 @@ class SummaryService:
                     "error": f"报告类型 '{type_config.display_name}' 当前已禁用"
                 }
             
+            # [NEW] 0.5 检查去重：1小时内是否已有相同类型的报告
+            if not force_regenerate:
+                from datetime import timedelta
+                one_hour_ago = datetime.now() - timedelta(hours=1)
+                
+                existing_report_result = await self.db.execute(
+                    select(ProductReport)
+                    .where(
+                        and_(
+                            ProductReport.product_id == product_id,
+                            ProductReport.report_type == report_type,
+                            ProductReport.status == ReportStatus.COMPLETED.value,
+                            ProductReport.created_at >= one_hour_ago
+                        )
+                    )
+                    .order_by(ProductReport.created_at.desc())
+                    .limit(1)
+                )
+                existing_report = existing_report_result.scalar_one_or_none()
+                
+                if existing_report:
+                    logger.info(f"[去重] 产品 {product_id} 在1小时内已有 {report_type} 报告，跳过生成")
+                    return {
+                        "success": True,
+                        "report": existing_report.to_dict(),
+                        "stats": existing_report.analysis_data,
+                        "report_type_config": type_config.to_dict(),
+                        "error": None,
+                        "is_cached": True  # 标记为缓存结果
+                    }
+            
             # 1. 获取产品信息
             product = await self._get_product(product_id)
             if not product:
@@ -461,6 +496,68 @@ class SummaryService:
                     "report_type_config": type_config.to_dict(),
                     "error": f"数据量不足（当前 {total_reviews} 条，需要至少 {min_reviews} 条）。请先采集更多评论并完成翻译。"
                 }
+            
+            # [NEW] 2.5 检查洞察和主题是否100%完成
+            if require_full_completion:
+                from app.models.insight import ReviewInsight
+                from app.models.theme_highlight import ReviewThemeHighlight
+                
+                # 检查洞察完成度
+                insight_count_result = await self.db.execute(
+                    select(func.count(func.distinct(ReviewInsight.review_id)))
+                    .select_from(ReviewInsight)
+                    .join(Review, ReviewInsight.review_id == Review.id)
+                    .where(Review.product_id == product_id)
+                )
+                insight_count = insight_count_result.scalar() or 0
+                
+                # 检查主题完成度
+                theme_count_result = await self.db.execute(
+                    select(func.count(func.distinct(ReviewThemeHighlight.review_id)))
+                    .select_from(ReviewThemeHighlight)
+                    .join(Review, ReviewThemeHighlight.review_id == Review.id)
+                    .where(Review.product_id == product_id)
+                )
+                theme_count = theme_count_result.scalar() or 0
+                
+                # 计算完成度
+                insight_completion = insight_count / total_reviews if total_reviews > 0 else 0
+                theme_completion = theme_count / total_reviews if total_reviews > 0 else 0
+                
+                logger.info(f"[完成度检查] 洞察: {insight_count}/{total_reviews} ({insight_completion:.1%}), 主题: {theme_count}/{total_reviews} ({theme_completion:.1%})")
+                
+                # 要求100%完成（或允许少量误差，如95%）
+                COMPLETION_THRESHOLD = 0.95
+                
+                if insight_completion < COMPLETION_THRESHOLD:
+                    return {
+                        "success": False,
+                        "report": None,
+                        "stats": {
+                            "total_reviews": total_reviews,
+                            "insight_count": insight_count,
+                            "theme_count": theme_count,
+                            "insight_completion": f"{insight_completion:.1%}",
+                            "theme_completion": f"{theme_completion:.1%}"
+                        },
+                        "report_type_config": type_config.to_dict(),
+                        "error": f"洞察提取未完成（{insight_count}/{total_reviews}，{insight_completion:.1%}）。请等待洞察提取完成后再生成报告。"
+                    }
+                
+                if theme_completion < COMPLETION_THRESHOLD:
+                    return {
+                        "success": False,
+                        "report": None,
+                        "stats": {
+                            "total_reviews": total_reviews,
+                            "insight_count": insight_count,
+                            "theme_count": theme_count,
+                            "insight_completion": f"{insight_completion:.1%}",
+                            "theme_completion": f"{theme_completion:.1%}"
+                        },
+                        "report_type_config": type_config.to_dict(),
+                        "error": f"主题提取未完成（{theme_count}/{total_reviews}，{theme_completion:.1%}）。请等待主题提取完成后再生成报告。"
+                    }
             
             # 3. 聚合原始数据 (Raw Data) - ECharts 格式
             context_stats = await self._aggregate_5w_stats(product_id)

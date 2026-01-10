@@ -13,10 +13,39 @@
         <span class="logo-icon">📊</span>
         <span class="logo-text">VOC-Master</span>
       </div>
-      <span class="version">v1.0</span>
+      <span class="version">v1.1</span>
     </header>
 
     <main class="popup-content">
+      <!-- 登录界面 -->
+      <div id="login-view" class="state-view" style="display: none;">
+        <div class="icon-large">🔐</div>
+        <h2>用户登录</h2>
+        <form id="login-form" class="login-form">
+          <div class="form-group">
+            <input type="email" id="login-email" placeholder="邮箱" required>
+          </div>
+          <div class="form-group">
+            <input type="password" id="login-password" placeholder="密码" required>
+          </div>
+          <div id="login-error" class="error-message" style="display: none;"></div>
+          <button type="submit" class="btn btn-primary" id="login-btn">
+            <span>🔓</span>
+            登录
+          </button>
+        </form>
+        <p class="login-hint">使用 VOC-Master 账号登录</p>
+      </div>
+
+      <!-- 用户信息栏 -->
+      <div id="user-bar" class="user-bar" style="display: none;">
+        <div class="user-info">
+          <span class="user-avatar">👤</span>
+          <span class="user-name" id="user-name">--</span>
+        </div>
+        <button class="btn btn-small btn-logout" id="logout-btn">退出</button>
+      </div>
+
       <!-- Not on Amazon Page -->
       <div id="not-amazon" class="state-view" style="display: none;">
         <div class="icon-large">🌐</div>

@@ -30,6 +30,21 @@ const WS_BASE = (import.meta as unknown as { env: Record<string, string> }).env?
 
 // ============== 通用请求封装 ==============
 
+// Token 存储 key（与 AuthContext 保持一致）
+const TOKEN_KEY = 'voc_auth_token';
+
+// 获取认证头
+function getAuthHeaders(): Record<string, string> {
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+  };
+  const token = localStorage.getItem(TOKEN_KEY);
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`;
+  }
+  return headers;
+}
+
 class ApiError extends Error {
   constructor(public code: number, message: string) {
     super(message);
@@ -45,7 +60,7 @@ async function request<T>(
   
   const response = await fetch(url, {
     headers: {
-      'Content-Type': 'application/json',
+      ...getAuthHeaders(),
       ...options?.headers,
     },
     ...options,
@@ -390,9 +405,17 @@ import type {
 
 /**
  * 获取产品列表（兼容现有后端）
+ * @param myOnly 只显示我的项目
  */
-export async function getProducts(): Promise<ApiProductListResponse> {
-  const response = await fetch(`${API_BASE}/products`);
+export async function getProducts(myOnly = false): Promise<ApiProductListResponse> {
+  const params = new URLSearchParams();
+  if (myOnly) {
+    params.set('my_only', 'true');
+  }
+  const url = `${API_BASE}/products${params.toString() ? '?' + params.toString() : ''}`;
+  const response = await fetch(url, {
+    headers: getAuthHeaders(),
+  });
   if (!response.ok) {
     throw new ApiError(response.status, response.statusText);
   }
@@ -1082,7 +1105,74 @@ const apiService = {
   // [NEW] 全自动分析（采集完成后触发）
   triggerAutoAnalysis,
   getAutoAnalysisStatus,
+  
+  // [NEW] 用户项目管理
+  getMyProjects,
+  addToMyProjects,
+  removeFromMyProjects,
+  getProjectStatus,
+  toggleProjectFavorite,
 };
+
+// ============== 用户项目 API ==============
+
+interface UserProject {
+  id: string;
+  asin: string;
+  title: string | null;
+  image_url: string | null;
+  marketplace: string | null;
+  custom_alias: string | null;
+  notes: string | null;
+  is_favorite: boolean;
+  reviews_contributed: number;
+  total_reviews: number;
+  translated_reviews: number;
+  created_at: string | null;
+}
+
+interface UserProjectsResponse {
+  total: number;
+  projects: UserProject[];
+}
+
+async function getMyProjects(favoritesOnly = false): Promise<UserProjectsResponse> {
+  const params = new URLSearchParams();
+  if (favoritesOnly) {
+    params.set('favorites_only', 'true');
+  }
+  const result = await request<UserProjectsResponse>(`/user/projects?${params.toString()}`);
+  return result.data;
+}
+
+async function addToMyProjects(asin: string): Promise<{ success: boolean; message: string; project_id?: string }> {
+  const result = await request<{ success: boolean; message: string; project_id?: string }>(
+    `/user/projects/${asin}`,
+    { method: 'POST' }
+  );
+  return result.data;
+}
+
+async function removeFromMyProjects(asin: string): Promise<{ success: boolean; message: string }> {
+  const result = await request<{ success: boolean; message: string }>(
+    `/user/projects/${asin}`,
+    { method: 'DELETE' }
+  );
+  return result.data;
+}
+
+async function getProjectStatus(asin: string): Promise<{ is_my_project: boolean; [key: string]: unknown }> {
+  const result = await request<{ is_my_project: boolean; [key: string]: unknown }>(`/user/projects/${asin}`);
+  return result.data;
+}
+
+async function toggleProjectFavorite(asin: string): Promise<{ success: boolean; is_favorite: boolean }> {
+  const result = await request<{ success: boolean; is_favorite: boolean }>(
+    `/user/projects/${asin}/favorite`,
+    { method: 'POST' }
+  );
+  return result.data;
+}
 
 export default apiService;
 

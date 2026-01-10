@@ -17,6 +17,7 @@ if TYPE_CHECKING:
     from app.models.product_dimension import ProductDimension
     from app.models.product_context_label import ProductContextLabel
     from app.models.report import ProductReport
+    from app.models.user_project import UserProject
 
 
 class Product(Base):
@@ -94,6 +95,13 @@ class Product(Base):
     )
     reports: Mapped[List["ProductReport"]] = relationship(
         "ProductReport",
+        back_populates="product",
+        cascade="all, delete-orphan"
+    )
+    
+    # 用户-产品关联（多对多通过 UserProject）
+    user_projects: Mapped[List["UserProject"]] = relationship(
+        "UserProject",
         back_populates="product",
         cascade="all, delete-orphan"
     )

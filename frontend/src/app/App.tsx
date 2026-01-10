@@ -1,9 +1,12 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { lazy, Suspense } from 'react';
 import { ThemeProvider } from './contexts/ThemeContext';
+import { AuthProvider } from './contexts/AuthContext';
+import { ProtectedRoute } from './components/ProtectedRoute';
 import { Toaster } from './components/ui/sonner';
 
 // Lazy load route components
+const LoginPage = lazy(() => import('./components/LoginPage'));
 const TaskList = lazy(() => import('./components/TaskList').then(m => ({ default: m.TaskList })));
 const ReviewReader = lazy(() => import('./components/ReviewReader').then(m => ({ default: m.ReviewReader })));
 const ReportPage = lazy(() => import('./components/ReportPage').then(m => ({ default: m.ReportPage })));
@@ -24,21 +27,29 @@ function LoadingFallback() {
 
 export default function App() {
   return (
-    <ThemeProvider>
-      <BrowserRouter>
-        <Suspense fallback={<LoadingFallback />}>
-          <Routes>
-            <Route path="/" element={<TaskList />} />
-            <Route path="/analysis" element={<WorkbenchPage />} />
-            <Route path="/analysis/:projectId" element={<AnalysisResultPage />} />
-            <Route path="/reader/:taskId" element={<ReviewReader />} />
-            <Route path="/report/:asin" element={<ReportPage />} />
-            <Route path="/report/:asin/:reportId" element={<ReportPage />} />
-            <Route path="*" element={<Navigate to="/" replace />} />
-          </Routes>
-        </Suspense>
-      </BrowserRouter>
-      <Toaster position="top-center" richColors />
-    </ThemeProvider>
+    <AuthProvider>
+      <ThemeProvider>
+        <BrowserRouter>
+          <Suspense fallback={<LoadingFallback />}>
+            <Routes>
+              {/* 登录页 - 无需认证 */}
+              <Route path="/login" element={<LoginPage />} />
+              
+              {/* 受保护的路由 - 需要登录 */}
+              <Route path="/" element={<ProtectedRoute><TaskList /></ProtectedRoute>} />
+              <Route path="/analysis" element={<ProtectedRoute><WorkbenchPage /></ProtectedRoute>} />
+              <Route path="/analysis/:projectId" element={<ProtectedRoute><AnalysisResultPage /></ProtectedRoute>} />
+              <Route path="/reader/:taskId" element={<ProtectedRoute><ReviewReader /></ProtectedRoute>} />
+              <Route path="/report/:asin" element={<ProtectedRoute><ReportPage /></ProtectedRoute>} />
+              <Route path="/report/:asin/:reportId" element={<ProtectedRoute><ReportPage /></ProtectedRoute>} />
+              
+              {/* 默认重定向 */}
+              <Route path="*" element={<Navigate to="/" replace />} />
+            </Routes>
+          </Suspense>
+        </BrowserRouter>
+        <Toaster position="top-center" richColors />
+      </ThemeProvider>
+    </AuthProvider>
   );
 }

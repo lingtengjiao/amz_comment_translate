@@ -14,13 +14,23 @@ from sqlalchemy.orm import DeclarativeBase
 from app.core.config import settings
 
 
-# Create async engine with connection pooling
+# ============================================================================
+# 🔧 异步数据库引擎（FastAPI 专用）
+# ============================================================================
+# 配置说明：
+# - pool_size=50：基础连接池大小
+# - max_overflow=100：溢出连接数（总共 150 连接）
+# - FastAPI 主要处理 HTTP 请求，并发量比 Celery Worker 低
+# - PostgreSQL max_connections=500 足以支撑
+# ============================================================================
 engine = create_async_engine(
     settings.DATABASE_URL,
     echo=settings.DEBUG,
     pool_pre_ping=True,
-    pool_size=10,
-    max_overflow=20,
+    pool_size=50,         # 基础连接数（从 10 提升到 50）
+    max_overflow=100,     # 溢出连接数（从 20 提升到 100）
+    pool_timeout=30,      # 等待连接超时
+    pool_recycle=1800,    # 30 分钟回收连接
 )
 
 # Create async session factory

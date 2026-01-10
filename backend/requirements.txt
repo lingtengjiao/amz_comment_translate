@@ -15,6 +15,7 @@ greenlet==3.0.3
 # Celery & Redis for async tasks
 celery[redis]==5.3.6
 redis==5.0.1
+gevent==24.2.1  # Celery 协程池，支持高并发 I/O 密集任务
 
 # HTTP Client for Qwen API (OpenAI compatible)
 httpx==0.26.0
@@ -29,3 +30,9 @@ pandas==2.1.4
 
 # Utilities
 python-dotenv==1.0.0
+
+# Authentication
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+bcrypt==4.0.1
+email-validator==2.1.0

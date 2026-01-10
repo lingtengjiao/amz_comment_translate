@@ -10,6 +10,10 @@ from app.models.product_dimension import ProductDimension
 from app.models.product_context_label import ProductContextLabel, ContextType, CONTEXT_TYPE_CONFIG
 from app.models.report import ProductReport, ReportType, ReportStatus
 from app.models.analysis import AnalysisProject, AnalysisProjectItem, AnalysisType, AnalysisStatus
+# 用户系统模型
+from app.models.user import User
+from app.models.user_project import UserProject
+from app.models.analysis_lock import ProductAnalysisLock, LockStatus
 
 __all__ = [
     "Product", 
@@ -30,6 +34,11 @@ __all__ = [
     "AnalysisProject",
     "AnalysisProjectItem",
     "AnalysisType",
-    "AnalysisStatus"
+    "AnalysisStatus",
+    # User System Models
+    "User",
+    "UserProject",
+    "ProductAnalysisLock",
+    "LockStatus",
 ]
 

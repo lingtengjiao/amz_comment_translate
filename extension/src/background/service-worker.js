@@ -6,10 +6,125 @@
  * - API calls to backend
  * - State management
  * - Review collection using real browser tabs (bypasses anti-scraping)
+ * - User authentication (JWT token)
  */
 
 // Backend API configuration
 const API_BASE_URL = 'http://localhost:8000/api/v1';
+
+// ==========================================
+// 用户认证状态管理
+// ==========================================
+let authState = {
+  isLoggedIn: false,
+  token: null,
+  user: null
+};
+
+// 从 chrome.storage 恢复认证状态
+async function loadAuthState() {
+  try {
+    const result = await chrome.storage.local.get(['auth_token', 'auth_user']);
+    if (result.auth_token) {
+      authState.token = result.auth_token;
+      authState.user = result.auth_user;
+      authState.isLoggedIn = true;
+      console.log('[Auth] Restored auth state for:', authState.user?.email);
+    }
+  } catch (e) {
+    console.error('[Auth] Failed to load auth state:', e);
+  }
+}
+
+// 保存认证状态到 chrome.storage
+async function saveAuthState() {
+  try {
+    await chrome.storage.local.set({
+      auth_token: authState.token,
+      auth_user: authState.user
+    });
+  } catch (e) {
+    console.error('[Auth] Failed to save auth state:', e);
+  }
+}
+
+// 清除认证状态
+async function clearAuthState() {
+  authState = { isLoggedIn: false, token: null, user: null };
+  try {
+    await chrome.storage.local.remove(['auth_token', 'auth_user']);
+  } catch (e) {
+    console.error('[Auth] Failed to clear auth state:', e);
+  }
+}
+
+// 获取带认证头的 headers
+function getAuthHeaders() {
+  const headers = {
+    'Content-Type': 'application/json'
+  };
+  if (authState.token) {
+    headers['Authorization'] = `Bearer ${authState.token}`;
+  }
+  return headers;
+}
+
+// 用户登录
+async function login(email, password) {
+  try {
+    const response = await fetch(`${API_BASE_URL}/auth/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password })
+    });
+    
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.detail || '登录失败');
+    }
+    
+    const data = await response.json();
+    authState.isLoggedIn = true;
+    authState.token = data.access_token;
+    authState.user = data.user;
+    await saveAuthState();
+    
+    console.log('[Auth] Login success:', authState.user.email);
+    return { success: true, user: data.user };
+  } catch (error) {
+    console.error('[Auth] Login failed:', error.message);
+    return { success: false, error: error.message };
+  }
+}
+
+// 用户登出
+async function logout() {
+  await clearAuthState();
+  console.log('[Auth] Logged out');
+  return { success: true };
+}
+
+// 验证 Token
+async function verifyToken() {
+  if (!authState.token) return { valid: false };
+  
+  try {
+    const response = await fetch(`${API_BASE_URL}/auth/verify`, {
+      headers: getAuthHeaders()
+    });
+    const data = await response.json();
+    
+    if (!data.valid) {
+      await clearAuthState();
+    }
+    return data;
+  } catch (e) {
+    return { valid: false };
+  }
+}
+
+// 启动时恢复认证状态
+loadAuthState();
 
 // Star rating URL parameters
 const STAR_FILTERS = {
@@ -61,24 +176,33 @@ async function fetchWithTimeout(url, options, timeout = 30000) {
 
 /**
  * Send reviews to backend API with retry
+ * 
+ * [UPDATED] 使用新的高并发接口 /reviews/ingest/queue
+ * - 极快响应（<50ms）
+ * - 异步入库
+ * - 携带用户认证信息
  */
 async function uploadReviews(data, maxRetries = 3) {
   let lastError;
   
+  // 选择 API 端点：优先使用高并发队列接口
+  const useQueueAPI = true;  // 可配置切换
+  const endpoint = useQueueAPI 
+    ? `${API_BASE_URL}/reviews/ingest/queue`
+    : `${API_BASE_URL}/reviews/ingest`;
+  
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
-      console.log(`[Upload] Attempt ${attempt}/${maxRetries}...`);
+      console.log(`[Upload] Attempt ${attempt}/${maxRetries} to ${useQueueAPI ? 'queue' : 'direct'}...`);
       
       const response = await fetchWithTimeout(
-        `${API_BASE_URL}/reviews/ingest`,
+        endpoint,
         {
           method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
+          headers: getAuthHeaders(),  // [NEW] 添加认证头
           body: JSON.stringify(data)
         },
-        60000 // 60 second timeout for large uploads
+        useQueueAPI ? 15000 : 60000  // 队列模式超时更短
       );
 
       if (!response.ok) {
@@ -86,8 +210,9 @@ async function uploadReviews(data, maxRetries = 3) {
         throw new Error(`Upload failed: ${error}`);
       }
 
-      console.log(`[Upload] Success on attempt ${attempt}`);
-      return await response.json();
+      const result = await response.json();
+      console.log(`[Upload] Success on attempt ${attempt}`, useQueueAPI ? `(queued: ${result.batch_id})` : '');
+      return result;
     } catch (error) {
       console.error(`[Upload] Attempt ${attempt} failed:`, error.message);
       lastError = error;
@@ -1007,37 +1132,55 @@ async function collectReviewsWithTab(asin, stars, pagesPerStar, mediaType, speed
     console.log(`[Collector] ✅ Collection complete: ${allReviews.length} reviews`);
     console.log('[Collector] ========================================');
     
-    // [NEW] 🚀 采集完成后触发全自动分析
+    // [NEW] 🚀 采集完成后触发全自动分析（带重试机制）
     if (allReviews.length >= 10) {
-      try {
-        console.log('[Collector] 🚀 Triggering auto analysis...');
-        const response = await fetch(`${API_BASE_URL}/products/${asin}/collection-complete`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json'
+      // 等待队列消费完成后再触发（最多等待60秒，每5秒重试一次）
+      const triggerAutoAnalysis = async (maxRetries = 12, delay = 5000) => {
+        for (let attempt = 1; attempt <= maxRetries; attempt++) {
+          try {
+            console.log(`[Collector] 🚀 Triggering auto analysis (attempt ${attempt}/${maxRetries})...`);
+            const response = await fetch(`${API_BASE_URL}/products/${asin}/collection-complete`, {
+              method: 'POST',
+              headers: getAuthHeaders()
+            });
+            
+            if (response.ok) {
+              const result = await response.json();
+              console.log('[Collector] ✅ Auto analysis triggered:', result.status);
+              sendProgress({
+                star: 5,
+                page: 1,
+                pagesPerStar: 1,
+                totalReviews: allReviews.length,
+                progress: 100,
+                message: `采集完成！已触发自动分析，共 ${allReviews.length} 条评论`,
+                autoAnalysisStarted: true,
+                taskId: result.task_id
+              });
+              return true;
+            } else if (response.status === 404) {
+              // 产品尚未入库，等待后重试
+              console.log(`[Collector] ⏳ Product not ready yet, waiting ${delay/1000}s before retry...`);
+              if (attempt < maxRetries) {
+                await new Promise(r => setTimeout(r, delay));
+              }
+            } else {
+              console.warn('[Collector] ⚠️ Auto analysis trigger failed:', response.status);
+              return false;
+            }
+          } catch (err) {
+            console.error(`[Collector] ❌ Auto analysis trigger error (attempt ${attempt}):`, err.message);
+            if (attempt < maxRetries) {
+              await new Promise(r => setTimeout(r, delay));
+            }
           }
-        });
-        
-        if (response.ok) {
-          const result = await response.json();
-          console.log('[Collector] ✅ Auto analysis triggered:', result.status);
-          sendProgress({
-            star: 5,
-            page: 1,
-            pagesPerStar: 1,
-            totalReviews: allReviews.length,
-            progress: 100,
-            message: `采集完成！已触发自动分析，共 ${allReviews.length} 条评论`,
-            autoAnalysisStarted: true,
-            taskId: result.task_id
-          });
-        } else {
-          console.warn('[Collector] ⚠️ Auto analysis trigger failed:', response.status);
         }
-      } catch (err) {
-        console.error('[Collector] ❌ Auto analysis trigger error:', err.message);
-        // 不阻塞采集完成
-      }
+        console.error('[Collector] ❌ Auto analysis trigger failed after all retries');
+        return false;
+      };
+      
+      // 异步触发，不阻塞返回
+      triggerAutoAnalysis();
     } else {
       console.log(`[Collector] ⚠️ Only ${allReviews.length} reviews, skipping auto analysis (need >= 10)`);
     }
@@ -1207,6 +1350,35 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       };
       sendResponse({ success: true });
       break;
+    
+    // ==========================================
+    // 认证相关消息处理
+    // ==========================================
+    case 'AUTH_LOGIN':
+      login(message.email, message.password)
+        .then(result => sendResponse(result))
+        .catch(error => sendResponse({ success: false, error: error.message }));
+      return true;  // 保持异步通道
+    
+    case 'AUTH_LOGOUT':
+      logout()
+        .then(result => sendResponse(result))
+        .catch(error => sendResponse({ success: false, error: error.message }));
+      return true;
+    
+    case 'AUTH_GET_STATE':
+      sendResponse({
+        success: true,
+        isLoggedIn: authState.isLoggedIn,
+        user: authState.user
+      });
+      break;
+    
+    case 'AUTH_VERIFY':
+      verifyToken()
+        .then(result => sendResponse(result))
+        .catch(error => sendResponse({ valid: false, error: error.message }));
+      return true;
 
     default:
       sendResponse({ error: 'Unknown message type' });
@@ -1285,7 +1457,40 @@ chrome.runtime.onMessageExternal.addListener((message, sender, sendResponse) => 
       sendResponse({ 
         success: true, 
         version: chrome.runtime.getManifest().version,
+        extensionId: chrome.runtime.id,
         message: 'VOC-Master Extension is active' 
+      });
+      break;
+    
+    // ==========================================
+    // 网页认证消息处理
+    // ==========================================
+    case 'WEB_AUTH_LOGIN':
+      // 网页登录成功，同步到插件
+      console.log('[External] Web login received for:', message.user?.email);
+      authState.isLoggedIn = true;
+      authState.token = message.token;
+      authState.user = message.user;
+      saveAuthState().then(() => {
+        sendResponse({ success: true, message: 'Auth synced to extension' });
+      });
+      return true;  // 保持异步通道
+    
+    case 'WEB_AUTH_LOGOUT':
+      // 网页登出，同步到插件
+      console.log('[External] Web logout received');
+      clearAuthState().then(() => {
+        sendResponse({ success: true, message: 'Logged out from extension' });
+      });
+      return true;
+    
+    case 'GET_AUTH_STATE':
+      // 网页查询插件的登录状态
+      sendResponse({
+        success: true,
+        isLoggedIn: authState.isLoggedIn,
+        user: authState.user,
+        extensionId: chrome.runtime.id
       });
       break;
     
@@ -1748,26 +1953,44 @@ async function collectReviewsWithTabAuto(asin, stars, pagesPerStar, mediaType, s
         message: '数据已在采集过程中逐页上传，翻译任务已并行启动'
       });
       
-      // 🚀 采集完成后触发全自动分析
+      // 🚀 采集完成后触发全自动分析（带重试机制）
       if (allReviews.length >= 10) {
-        try {
-          console.log('[AutoCollector] 🚀 Triggering auto analysis...');
-          const response = await fetch(`${API_BASE_URL}/products/${asin}/collection-complete`, {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json'
+        // 等待队列消费完成后再触发（最多等待60秒，每5秒重试一次）
+        const triggerAutoAnalysisWithRetry = async (maxRetries = 12, delay = 5000) => {
+          for (let attempt = 1; attempt <= maxRetries; attempt++) {
+            try {
+              console.log(`[AutoCollector] 🚀 Triggering auto analysis (attempt ${attempt}/${maxRetries})...`);
+              const response = await fetch(`${API_BASE_URL}/products/${asin}/collection-complete`, {
+                method: 'POST',
+                headers: getAuthHeaders()
+              });
+              
+              if (response.ok) {
+                const result = await response.json();
+                console.log('[AutoCollector] ✅ Auto analysis triggered:', result.status);
+                return true;
+              } else if (response.status === 404) {
+                console.log(`[AutoCollector] ⏳ Product not ready yet, waiting ${delay/1000}s before retry...`);
+                if (attempt < maxRetries) {
+                  await new Promise(r => setTimeout(r, delay));
+                }
+              } else {
+                console.warn('[AutoCollector] ⚠️ Auto analysis trigger failed:', response.status);
+                return false;
+              }
+            } catch (err) {
+              console.error(`[AutoCollector] ❌ Auto analysis trigger error (attempt ${attempt}):`, err.message);
+              if (attempt < maxRetries) {
+                await new Promise(r => setTimeout(r, delay));
+              }
             }
-          });
-          
-          if (response.ok) {
-            const result = await response.json();
-            console.log('[AutoCollector] ✅ Auto analysis triggered:', result.status);
-          } else {
-            console.warn('[AutoCollector] ⚠️ Auto analysis trigger failed:', response.status);
           }
-        } catch (err) {
-          console.error('[AutoCollector] ❌ Auto analysis trigger error:', err.message);
-        }
+          console.error('[AutoCollector] ❌ Auto analysis trigger failed after all retries');
+          return false;
+        };
+        
+        // 异步触发，不阻塞返回
+        triggerAutoAnalysisWithRetry();
       } else {
         console.log(`[AutoCollector] ⚠️ Only ${allReviews.length} reviews, skipping auto analysis (need >= 10)`);
       }

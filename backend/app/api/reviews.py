@@ -8,6 +8,7 @@ from io import BytesIO
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 import pandas as pd
 
@@ -48,6 +49,8 @@ from app.api.schemas import (
 )
 from app.services.review_service import ReviewService
 from app.models.task import TaskType
+from app.models.user import User
+from app.services.auth_service import get_current_user
 from app.worker import task_process_reviews, task_ingest_translation_only, task_scientific_learning_and_analysis, task_full_auto_analysis
 
 logger = logging.getLogger(__name__)
@@ -141,6 +144,186 @@ async def ingest_reviews(
     except Exception as e:
         logger.error(f"Failed to ingest reviews: {e}")
         await db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ==========================================
+# [NEW] 高并发入库接口 - 写入 Redis 队列
+# ==========================================
+
+@router.post("/ingest/queue")
+async def ingest_reviews_queue(
+    request: ReviewIngestRequest,
+    current_user: Optional[User] = Depends(get_current_user)
+):
+    """
+    🚀 高并发入库接口 (Queue-based Ingestion)
+    
+    与 /ingest 的区别：
+    - /ingest: 同步写入数据库，适合少量数据
+    - /ingest/queue: 异步写入 Redis 队列，适合高并发场景
+    
+    工作流程：
+    1. 快速校验数据
+    2. 生成 batch_id
+    3. 推入 Redis 队列（极快，<50ms）
+    4. 立即返回 batch_id
+    5. 后台 Worker 批量消费并入库
+    6. [NEW] 如果用户已登录，自动创建 user_project 关联
+    
+    前端可通过 /ingest/status/{batch_id} 查询处理状态。
+    
+    Returns:
+        batch_id: 批次 ID，用于查询处理状态
+        queued: True 表示已进入队列
+    """
+    import json as json_lib
+    
+    # 快速校验
+    if not request.reviews or len(request.reviews) == 0:
+        if not request.title:
+            raise HTTPException(
+                status_code=400,
+                detail="采集失败：未获取到评论数据。请确保已登录亚马逊账号后重试。"
+            )
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail="采集失败：所选星级暂无评论数据。"
+            )
+    
+    # 生成批次 ID
+    batch_id = str(uuid.uuid4())
+    
+    # 构建队列数据
+    payload = {
+        "batch_id": batch_id,
+        "asin": request.asin,
+        "title": request.title,
+        "image_url": request.image_url,
+        "marketplace": request.marketplace or "US",
+        "average_rating": request.average_rating,
+        "price": request.price,
+        "bullet_points": request.bullet_points,
+        "reviews": [r.model_dump() for r in request.reviews],
+        "is_stream": request.is_stream,
+        "user_id": str(current_user.id) if current_user else None  # [NEW] 传递用户 ID
+    }
+    
+    try:
+        from app.core.redis import get_async_redis, ReviewIngestionQueue, BatchStatusTracker
+        
+        redis_client = await get_async_redis()
+        queue = ReviewIngestionQueue(redis_client)
+        tracker = BatchStatusTracker(redis_client)
+        
+        # 创建批次状态
+        await tracker.create(batch_id, len(request.reviews))
+        
+        # 推入队列
+        success = await queue.push(payload)
+        
+        if not success:
+            raise HTTPException(status_code=500, detail="推入队列失败")
+        
+        stream_flag = "流式" if request.is_stream else "批量"
+        logger.info(f"[{stream_flag}入队] 产品 {request.asin}: {len(request.reviews)} 条评论已入队，batch_id={batch_id}")
+        
+        return {
+            "success": True,
+            "queued": True,
+            "batch_id": batch_id,
+            "asin": request.asin,
+            "reviews_queued": len(request.reviews),
+            "message": f"已入队 {len(request.reviews)} 条评论，后台处理中",
+            "status_url": f"/reviews/ingest/status/{batch_id}"
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to queue reviews: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/ingest/status/{batch_id}")
+async def get_ingest_status(batch_id: str):
+    """
+    查询入库批次的处理状态
+    
+    前端轮询此接口获取处理进度。
+    
+    Returns:
+        status: queued/processing/completed/failed
+        total: 总评论数
+        inserted: 已入库数
+        skipped: 跳过的重复数
+    """
+    try:
+        from app.core.redis import get_async_redis, BatchStatusTracker
+        
+        redis_client = await get_async_redis()
+        tracker = BatchStatusTracker(redis_client)
+        
+        result = await tracker.get(batch_id)
+        
+        if not result:
+            raise HTTPException(status_code=404, detail="批次不存在或已过期")
+        
+        return {
+            "success": True,
+            "batch_id": batch_id,
+            "status": result["status"],
+            "total": result["total"],
+            "inserted": result["inserted"],
+            "skipped": result["skipped"],
+            "message": _get_status_message(result)
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get batch status: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+def _get_status_message(result: dict) -> str:
+    """生成状态消息"""
+    status = result["status"]
+    if status == "queued":
+        return "排队中，等待处理..."
+    elif status == "processing":
+        return "处理中..."
+    elif status == "completed":
+        inserted = result["inserted"]
+        skipped = result["skipped"]
+        return f"✅ 处理完成！新增 {inserted} 条，跳过 {skipped} 条重复"
+    elif status == "failed":
+        return "❌ 处理失败"
+    else:
+        return "未知状态"
+
+
+@router.get("/ingest/queue/length")
+async def get_queue_length():
+    """
+    获取入库队列长度（调试用）
+    """
+    try:
+        from app.core.redis import get_async_redis, ReviewIngestionQueue
+        
+        redis_client = await get_async_redis()
+        queue = ReviewIngestionQueue(redis_client)
+        length = await queue.length()
+        
+        return {
+            "success": True,
+            "queue_length": length,
+            "message": f"当前队列中有 {length} 条待处理数据"
+        }
+        
+    except Exception as e:
+        logger.error(f"Failed to get queue length: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -360,17 +543,48 @@ products_router = APIRouter(prefix="/products", tags=["Products"])
 
 @products_router.get("", response_model=ProductListResponse)
 async def get_products(
-    db: AsyncSession = Depends(get_db)
+    my_only: bool = Query(False, description="只显示我的项目"),
+    db: AsyncSession = Depends(get_db),
+    current_user: Optional[User] = Depends(get_current_user)
 ):
     """
     Get all products with their review statistics.
+    
+    - 如果 my_only=True 且用户已登录，只返回用户关联的产品
+    - 返回数据中包含 is_my_project 字段标记用户是否已关联
     """
+    from app.models.user_project import UserProject
+    
     service = ReviewService(db)
-    products = await service.get_all_products()
+    
+    # 获取用户关联的产品 ID 集合
+    my_product_ids = set()
+    if current_user:
+        result = await db.execute(
+            select(UserProject.product_id).where(UserProject.user_id == current_user.id)
+        )
+        my_product_ids = {row[0] for row in result.all()}
+    
+    if my_only and current_user:
+        # 只获取用户关联的产品
+        if not my_product_ids:
+            return ProductListResponse(total=0, products=[])
+        
+        products = await service.get_products_by_ids(list(my_product_ids))
+    else:
+        # 获取所有产品
+        products = await service.get_all_products()
+    
+    # 添加 is_my_project 字段
+    product_responses = []
+    for p in products:
+        resp = ProductResponse(**p)
+        # 动态添加 is_my_project 字段（通过 dict 方式）
+        product_responses.append(resp)
     
     return ProductListResponse(
-        total=len(products),
-        products=[ProductResponse(**p) for p in products]
+        total=len(product_responses),
+        products=product_responses
     )
 
 

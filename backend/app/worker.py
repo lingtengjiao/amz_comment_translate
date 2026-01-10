@@ -8,19 +8,183 @@ This module handles asynchronous processing of reviews:
 """
 import logging
 import time
+import random
 from typing import Optional
+from functools import wraps
 
 from celery import Celery
 from sqlalchemy import create_engine, select, update, and_, func
 from sqlalchemy.orm import sessionmaker
 import redis
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
-# Redis 客户端（用于分布式锁）
+# ============================================================================
+# 🚦 全局 API 限流器（防止 QPS 冲高导致账号被封）
+# ============================================================================
+
+class APIRateLimiter:
+    """
+    全局 API 限流器，防止瞬间 QPS 冲高
+    
+    策略：
+    - 使用 Redis 滑动窗口计数
+    - 最大 QPS = 25（千问 API 限制 20-30 QPS）
+    - 超过限制时，随机退避 0.1-0.5 秒
+    """
+    def __init__(self, redis_client, max_qps=25, window_seconds=1):
+        self.redis_client = redis_client
+        self.max_qps = max_qps
+        self.window_seconds = window_seconds
+        self.key_prefix = "api_rate_limit"
+    
+    def acquire(self, api_name="qwen"):
+        """
+        获取 API 调用许可
+        
+        Returns:
+            bool: True if allowed, False if rate limited
+        """
+        key = f"{self.key_prefix}:{api_name}"
+        current_time = time.time()
+        window_start = current_time - self.window_seconds
+        
+        # 清理过期计数
+        self.redis_client.zremrangebyscore(key, 0, window_start)
+        
+        # 检查当前窗口内的请求数
+        current_count = self.redis_client.zcard(key)
+        
+        if current_count >= self.max_qps:
+            # 超过限制，随机退避
+            backoff = random.uniform(0.1, 0.5)
+            logger.warning(f"[限流] API QPS 达到 {current_count}/{self.max_qps}，退避 {backoff:.2f}s")
+            time.sleep(backoff)
+            return False
+        
+        # 记录本次请求
+        self.redis_client.zadd(key, {str(current_time): current_time})
+        self.redis_client.expire(key, self.window_seconds * 2)  # 2 倍窗口时间过期
+        
+        return True
+    
+    def wait_and_acquire(self, api_name="qwen", max_retries=10):
+        """
+        等待直到获取到 API 调用许可
+        
+        Args:
+            api_name: API 名称
+            max_retries: 最大重试次数
+        """
+        for i in range(max_retries):
+            if self.acquire(api_name):
+                return True
+            time.sleep(random.uniform(0.05, 0.2))  # 短暂随机退避
+        
+        raise Exception(f"[限流] 无法获取 API 许可，已重试 {max_retries} 次")
+
+# Redis 客户端（用于分布式锁和限流）
 redis_client = redis.from_url(settings.REDIS_URL, decode_responses=True)
+
+# 全局限流器实例
+api_limiter = APIRateLimiter(redis_client, max_qps=25)
+
+def rate_limited_api(api_name="qwen"):
+    """
+    API 限流装饰器
+    
+    用法：
+        @rate_limited_api("qwen")
+        def call_qwen_api():
+            ...
+    """
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            # 等待获取 API 许可
+            api_limiter.wait_and_acquire(api_name)
+            
+            # 调用原函数
+            return func(*args, **kwargs)
+        
+        return wrapper
+    return decorator
+
+
+# ============================================================================
+# 🔥 标签映射 Redis 缓存（避免频繁查询 PostgreSQL）
+# ============================================================================
+
+class LabelCacheManager:
+    """
+    标签映射 Redis 缓存管理器
+    
+    优化点：
+    - 将热门产品的标签库常驻 Redis
+    - 避免 Worker 每次提取主题都查询标签表
+    - 缓存有效期 1 小时（标签库变化不频繁）
+    """
+    CACHE_PREFIX = "label_cache"
+    CACHE_TTL = 3600  # 1 小时
+    
+    def __init__(self, redis_client):
+        self.redis_client = redis_client
+    
+    def get_label_id_map(self, product_id: str) -> dict:
+        """
+        从缓存获取标签映射表
+        
+        Returns:
+            dict: {(theme_type, label_name): label_id} 或 None（缓存未命中）
+        """
+        cache_key = f"{self.CACHE_PREFIX}:{product_id}"
+        cached_data = self.redis_client.get(cache_key)
+        
+        if cached_data:
+            try:
+                import json
+                data = json.loads(cached_data)
+                # 重建 tuple key
+                return {(k.split("|")[0], k.split("|")[1]): v for k, v in data.items()}
+            except Exception as e:
+                logger.warning(f"[标签缓存] 解析缓存失败: {e}")
+                return None
+        
+        return None
+    
+    def set_label_id_map(self, product_id: str, label_id_map: dict):
+        """
+        将标签映射表存入缓存
+        
+        Args:
+            product_id: 产品 ID
+            label_id_map: {(theme_type, label_name): label_id}
+        """
+        if not label_id_map:
+            return
+        
+        cache_key = f"{self.CACHE_PREFIX}:{product_id}"
+        
+        try:
+            import json
+            # 将 tuple key 转换为字符串 key
+            data = {f"{k[0]}|{k[1]}": str(v) for k, v in label_id_map.items()}
+            self.redis_client.setex(cache_key, self.CACHE_TTL, json.dumps(data))
+            logger.info(f"[标签缓存] 已缓存 {len(label_id_map)} 个标签（产品: {product_id}）")
+        except Exception as e:
+            logger.warning(f"[标签缓存] 缓存写入失败: {e}")
+    
+    def invalidate(self, product_id: str):
+        """使缓存失效（标签库更新时调用）"""
+        cache_key = f"{self.CACHE_PREFIX}:{product_id}"
+        self.redis_client.delete(cache_key)
+        logger.info(f"[标签缓存] 已清除缓存（产品: {product_id}）")
+
+# 全局标签缓存管理器实例
+label_cache = LabelCacheManager(redis_client)
 
 # Create Celery application
 celery_app = Celery(
@@ -41,24 +205,95 @@ celery_app.conf.update(
     task_soft_time_limit=1500,  # 25 minutes soft limit (warning before hard kill)
     worker_prefetch_multiplier=1,
     task_acks_late=True,
+    # ============================================================================
+    # 🚀 5 队列 + 4 Worker 高吞吐架构（4核16G，支持 400 并发 API）
+    # ============================================================================
+    #
+    # 设计理念：
+    # - 快车道：入库 + 报告（秒级响应）
+    # - VIP 快车道：学习建模（新产品秒级启动）
+    # - 慢车道：翻译 + 分析（超高并发 AI 调用）
+    #
+    # ┌─────────────────────────────────────────────────────────────────────────┐
+    # │ Worker 1: 基础响应员 (Prefork, 4线程)                                   │
+    # │   Queue: ingestion, reports                                            │
+    # │   特点：纯 CPU + 磁盘，保证 API 永远不卡                                 │
+    # ├─────────────────────────────────────────────────────────────────────────┤
+    # │ Worker 2: VIP 建模员 (Gevent, 100协程)                                  │
+    # │   Queue: learning                                                       │
+    # │   特点：新产品秒级建模，独立快车道                                        │
+    # ├─────────────────────────────────────────────────────────────────────────┤
+    # │ Worker 3 & 4: AI 吞吐主力 (Gevent, 各150协程)                           │
+    # │   Queue: learning, translation, analysis                               │
+    # │   特点：300 并发 API，翻译/洞察/主题一起处理                             │
+    # │   learning 队列也监听，作为 VIP Worker 的备份                            │
+    # └─────────────────────────────────────────────────────────────────────────┘
+    #
+    # 总并发：4 + 100 + 300 = 404 并发！
+    #
     task_routes={
-        # 翻译相关任务（高频、轻量）
+        # ============== 快车道：入库 + 报告 (worker-base, Prefork) ==============
+        # 🏎️ 纯 CPU + 磁盘，保证 API 秒级响应
+        "app.worker.task_process_ingestion_queue": {"queue": "ingestion"},
+        "app.worker.task_check_pending_translations": {"queue": "ingestion"},
+        "app.worker.task_generate_report": {"queue": "reports"},
+        
+        # ============== VIP 快车道：学习建模 (worker-learning, Gevent) ==============
+        # 🌟 新产品秒级建模，独立进程不受干扰
+        "app.worker.task_full_auto_analysis": {"queue": "learning"},
+        "app.worker.task_scientific_learning_and_analysis": {"queue": "learning"},
+        
+        # ============== 慢车道：翻译 + 分析 (worker-heavy × 2, Gevent) ==============
+        # 🐢 翻译队列
         "app.worker.task_translate_bullet_points": {"queue": "translation"},
         "app.worker.task_process_reviews": {"queue": "translation"},
-        "app.worker.task_ingest_translation_only": {"queue": "translation"},  # 流式轻量翻译
+        "app.worker.task_ingest_translation_only": {"queue": "translation"},
         
-        # 分析相关任务（低频、重量级）
-        "app.worker.task_extract_insights": {"queue": "analysis"},  # 洞察提取
-        "app.worker.task_extract_themes": {"queue": "analysis"},  # 主题提取
-        "app.worker.task_scientific_learning_and_analysis": {"queue": "analysis"},  # 科学学习+回填
-        "app.worker.task_full_auto_analysis": {"queue": "analysis"},  # 🔥 全自动分析（独立队列）
+        # 🐢 分析队列（洞察 + 主题合并）
+        "app.worker.task_extract_insights": {"queue": "analysis"},
+        "app.worker.task_extract_themes": {"queue": "analysis"},
+    },
+    # Celery Beat 定时任务配置
+    beat_schedule={
+        # 每 5 秒消费一次入库队列
+        "process-ingestion-queue": {
+            "task": "app.worker.task_process_ingestion_queue",
+            "schedule": 5.0,
+        },
+        # 🔥 每 15 秒检查并触发待翻译任务（确保翻译持续进行）
+        "check-pending-translations": {
+            "task": "app.worker.task_check_pending_translations",
+            "schedule": 15.0,
+        },
     },
 )
 
-# Synchronous database connection for Celery worker
-# (Celery doesn't support async well, so we use sync SQLAlchemy)
+# ============================================================================
+# 🔧 同步数据库连接（Celery Worker 专用）
+# ============================================================================
+# Celery 使用 Gevent 协程，需要特殊的连接池配置
+# 
+# 策略说明：
+# - 使用 NullPool：每次操作创建新连接，适合高并发协程场景
+# - 避免连接池瓶颈：Gevent 150 协程 vs 默认 pool_size=5 会严重阻塞
+# - PostgreSQL max_connections=500 足以支撑
+# ============================================================================
+from sqlalchemy.pool import NullPool, QueuePool
+
 SYNC_DATABASE_URL = settings.DATABASE_URL.replace("+asyncpg", "")
-sync_engine = create_engine(SYNC_DATABASE_URL, echo=settings.DEBUG)
+
+# 🔥 高并发连接池配置（支持 400+ 并发 Worker）
+sync_engine = create_engine(
+    SYNC_DATABASE_URL,
+    echo=settings.DEBUG,
+    # 使用 QueuePool 配合大容量，比 NullPool 更高效
+    poolclass=QueuePool,
+    pool_size=100,        # 基础连接数
+    max_overflow=400,     # 溢出连接数（总共支持 500 连接）
+    pool_timeout=30,      # 等待连接超时
+    pool_pre_ping=True,   # 检测断开的连接
+    pool_recycle=1800,    # 30 分钟回收连接，防止数据库超时
+)
 SyncSession = sessionmaker(bind=sync_engine)
 
 
@@ -604,6 +839,11 @@ def task_extract_insights(self, product_id: str):
     from app.services.translation import translation_service
     from sqlalchemy import delete, exists
     
+    # 🚦 慢车道：启动随机延迟
+    startup_delay = random.uniform(0.2, 1.0)
+    logger.info(f"[洞察提取] 🐢 慢车道启动，延迟 {startup_delay:.2f}s")
+    time.sleep(startup_delay)
+    
     logger.info(f"Starting insight extraction for product {product_id}")
     
     db = get_sync_db()
@@ -696,7 +936,12 @@ def task_extract_insights(self, product_id: str):
         processed = 0
         insights_extracted = 0
         
+        # 🔥 批量入库优化（Bulk Insert）：减少磁盘 IO
+        BATCH_SIZE = 20  # 每 20 条评论批量提交一次
+        pending_insights = []  # 待提交的洞察列表
+        
         logger.info(f"Found {reviews_to_process} reviews remaining for insight extraction (total={total_translated}, already_done={already_processed})")
+        logger.info(f"[批量优化] 使用 BATCH_SIZE={BATCH_SIZE} 减少磁盘 IO")
         
         for review in reviews:
             try:
@@ -720,7 +965,7 @@ def task_extract_insights(self, product_id: str):
                             analysis=insight_data.get('analysis', ''),
                             dimension=insight_data.get('dimension')
                         )
-                        db.add(insight)
+                        pending_insights.append(insight)
                     
                     insights_extracted += len(insights)
                     logger.debug(f"Extracted {len(insights)} insights for review {review.id}")
@@ -733,25 +978,37 @@ def task_extract_insights(self, product_id: str):
                         quote="",
                         analysis=""
                     )
-                    db.add(empty_marker)
+                    pending_insights.append(empty_marker)
                     logger.debug(f"No insights found for review {review.id} (content too short), marked as processed")
                 
-                db.commit()
                 processed += 1
                 
-                # [FIX] 定期更新 Task 进度（每10条更新一次）
-                # processed_items = already_processed + 新处理的数量
-                if task_record and processed % 10 == 0:
-                    task_record.processed_items = already_processed + processed
-                    db.commit()
+                # 🔥 批量提交：每 BATCH_SIZE 条评论提交一次，减少磁盘反复折磨
+                if processed % BATCH_SIZE == 0:
+                    if pending_insights:
+                        db.add_all(pending_insights)
+                        db.commit()
+                        logger.info(f"[批量入库] 已提交 {len(pending_insights)} 条洞察（进度: {processed}/{reviews_to_process}）")
+                        pending_insights = []
+                    
+                    # 更新 Task 进度
+                    if task_record:
+                        task_record.processed_items = already_processed + processed
+                        db.commit()
                 
-                # Rate limiting
-                time.sleep(0.2)
+                # Rate limiting（限流器在 API 层已处理，这里只做基本延迟）
+                time.sleep(0.1)
                 
             except Exception as e:
                 logger.error(f"Failed to extract insights for review {review.id}: {e}")
-                db.rollback()
+                # 批量模式下，单条失败不回滚整个批次
                 continue
+        
+        # 🔥 提交剩余的待处理洞察
+        if pending_insights:
+            db.add_all(pending_insights)
+            db.commit()
+            logger.info(f"[批量入库] 最终提交 {len(pending_insights)} 条洞察")
         
         logger.info(f"Insight extraction completed: processed {processed} new reviews (total={total_translated}, now_done={already_processed + processed}), {insights_extracted} insights extracted")
         
@@ -804,6 +1061,11 @@ def task_extract_themes(self, product_id: str):
     from app.models.task import Task, TaskType, TaskStatus
     from app.services.translation import translation_service
     from sqlalchemy import delete, exists, func
+    
+    # 🚦 慢车道：启动随机延迟
+    startup_delay = random.uniform(0.2, 1.0)
+    logger.info(f"[主题提取] 🐢 慢车道启动，延迟 {startup_delay:.2f}s")
+    time.sleep(startup_delay)
     
     logger.info(f"Starting theme extraction for product {product_id}")
     
@@ -968,21 +1230,34 @@ def task_extract_themes(self, product_id: str):
             )
             logger.info(f"任务记录已创建: {task_record.id}")
         
-        # [NEW] 构建标签名到标签ID的映射表（用于关联 context_label_id）
-        label_id_map = {}  # key: (theme_type, label_name), value: context_label_id
-        if context_schema:
+        # 🔥 优先从 Redis 缓存获取标签映射表（避免频繁查 PostgreSQL）
+        label_id_map = label_cache.get_label_id_map(str(product_id))
+        
+        if label_id_map:
+            logger.info(f"[标签缓存] ✅ 命中缓存，共 {len(label_id_map)} 个标签")
+        elif context_schema:
+            # 缓存未命中，从数据库构建并缓存
+            label_id_map = {}
             for label in labels:
                 key = (label.type, label.name)
                 label_id_map[key] = label.id
-            logger.debug(f"构建标签映射表，共 {len(label_id_map)} 个标签")
+            
+            # 存入 Redis 缓存
+            label_cache.set_label_id_map(str(product_id), label_id_map)
+            logger.info(f"[标签缓存] ⚡ 已构建并缓存 {len(label_id_map)} 个标签")
+        else:
+            label_id_map = {}
+            logger.debug(f"无标签库，使用开放提取模式")
+        
+        # 🔥 批量入库优化（Bulk Insert）：减少磁盘 IO
+        BATCH_SIZE = 20  # 每 20 条评论批量提交一次
+        pending_themes = []  # 待提交的主题列表
+        logger.info(f"[批量优化] 使用 BATCH_SIZE={BATCH_SIZE} 减少磁盘 IO")
         
         for review in reviews:
             try:
                 # 对每条评论都执行主题提取（即使内容很短，结果可能为空）
-                # 先删除旧的主题数据
-                db.execute(
-                    delete(ReviewThemeHighlight).where(ReviewThemeHighlight.review_id == review.id)
-                )
+                # 🔥 批量模式：不再每条删除旧数据（因为只处理没有主题的评论）
                 
                 # [UPDATED] Extract themes with context schema (forced categorization)
                 themes = translation_service.extract_themes(
@@ -1023,7 +1298,7 @@ def task_extract_themes(self, product_id: str):
                                 context_label_id=context_label_id,   # 关联标签库ID
                                 items=[item]                         # 保留 items 用于向后兼容
                             )
-                            db.add(theme_highlight)
+                            pending_themes.append(theme_highlight)
                             themes_extracted += 1
                     
                     logger.debug(f"Extracted {themes_extracted} theme labels for review {review.id}")
@@ -1035,23 +1310,36 @@ def task_extract_themes(self, product_id: str):
                         label_name=None,
                         items=None
                     )
-                    db.add(empty_marker)
+                    pending_themes.append(empty_marker)
                     logger.debug(f"No themes found for review {review.id}, marked as processed")
                 
-                db.commit()
                 processed += 1
                 
-                # [NEW] 更新心跳（每处理一条评论）
-                if task_record:
-                    update_task_heartbeat(db, str(task_record.id), processed_items=processed)
+                # 🔥 批量提交：每 BATCH_SIZE 条评论提交一次
+                if processed % BATCH_SIZE == 0:
+                    if pending_themes:
+                        db.add_all(pending_themes)
+                        db.commit()
+                        logger.info(f"[批量入库] 已提交 {len(pending_themes)} 条主题（进度: {processed}/{total_reviews}）")
+                        pending_themes = []
+                    
+                    # 更新 Task 进度
+                    if task_record:
+                        update_task_heartbeat(db, str(task_record.id), processed_items=processed)
                 
-                # Rate limiting
-                time.sleep(0.2)
+                # Rate limiting（限流器在 API 层已处理）
+                time.sleep(0.1)
                 
             except Exception as e:
                 logger.error(f"Failed to extract themes for review {review.id}: {e}")
-                db.rollback()
+                # 批量模式下，单条失败不回滚整个批次
                 continue
+        
+        # 🔥 提交剩余的待处理主题
+        if pending_themes:
+            db.add_all(pending_themes)
+            db.commit()
+            logger.info(f"[批量入库] 最终提交 {len(pending_themes)} 条主题")
         
         logger.info(f"Theme extraction completed: {processed}/{total_reviews} reviews processed, {themes_extracted} theme entries created")
         
@@ -1112,6 +1400,11 @@ def task_ingest_translation_only(self, product_id: str):
     from app.models.review import Review, TranslationStatus
     from app.services.translation import translation_service
     import json
+    
+    # 🚦 慢车道：启动随机延迟（更大的延迟，避免瞬间冲高 QPS）
+    startup_delay = random.uniform(0.2, 1.0)
+    logger.info(f"[翻译任务] 🐢 慢车道启动，延迟 {startup_delay:.2f}s")
+    time.sleep(startup_delay)
     
     logger.info(f"[流式翻译] 开始处理产品 {product_id}")
     
@@ -1473,6 +1766,11 @@ def task_full_auto_analysis(self, product_id: str, task_id: str):
     from datetime import datetime, timezone
     import json as json_lib
     
+    # 🚦 VIP 快车道：启动随机延迟（避免 Worker 重启时瞬间冲高 QPS）
+    startup_delay = random.uniform(0.1, 0.5)
+    logger.info(f"[全自动分析] 🌟 VIP 快车道启动，延迟 {startup_delay:.2f}s（防止 QPS 冲高）")
+    time.sleep(startup_delay)
+    
     logger.info(f"[全自动分析] 🚀 开始处理产品 {product_id}，任务 {task_id}")
     
     db = get_sync_db()
@@ -1660,8 +1958,8 @@ def task_full_auto_analysis(self, product_id: str, task_id: str):
         update_task_progress(3, TaskStatus.PROCESSING.value)
         logger.info(f"[全自动分析] Step 3/4: 等待三任务并行完成（翻译+洞察+主题）...")
         
-        # 并行等待所有任务完成（最多等 15 分钟）
-        max_wait_seconds = 900
+        # 并行等待所有任务完成（最多等 30 分钟，从 15 分钟提升）
+        max_wait_seconds = 1800  # 🔥 从 900 秒（15 分钟）提升到 1800 秒（30 分钟）
         wait_interval = 15
         waited = 0
         last_log_time = 0
@@ -1741,12 +2039,18 @@ def task_full_auto_analysis(self, product_id: str, task_id: str):
                 logger.info(f"[全自动分析] ✅ 并行处理全部完成！已翻译:{translated_count}条")
                 break
             
-            # 如果洞察或主题提取任务可能已结束但还有待处理的，重新触发
-            if pending_translation == 0 and waited % 60 == 0:
-                if pending_insights > 0:
+            # [OPTIMIZED] 每 120 秒检查一次，只在进度停滞时重新触发
+            # 避免频繁触发导致任务堆积，影响其他用户
+            if waited % 120 == 0 and waited > 0:
+                # 翻译任务：只在有大量待翻译时触发
+                if pending_translation > 10:
+                    logger.info(f"[全自动分析] 🔄 重新触发翻译任务（还有{pending_translation}条待处理）")
+                    task_ingest_translation_only.delay(product_id)
+                # 洞察/主题：只触发一个，避免占用太多资源
+                if pending_insights > 10:
                     logger.info(f"[全自动分析] 重新触发洞察提取（还有{pending_insights}条待处理）")
                     task_extract_insights.delay(product_id)
-                if pending_themes > 0:
+                elif pending_themes > 10:  # 用 elif 避免同时触发
                     logger.info(f"[全自动分析] 重新触发主题提取（还有{pending_themes}条待处理）")
                     task_extract_themes.delay(product_id)
             
@@ -1754,7 +2058,19 @@ def task_full_auto_analysis(self, product_id: str, task_id: str):
             update_task_progress(3, TaskStatus.PROCESSING.value)
         
         if waited >= max_wait_seconds:
-            logger.warning(f"[全自动分析] 并行处理等待超时，继续生成报告")
+            # 🔥 优化：放宽完成度要求，从 95% 降到 85%
+            # 理由：85% 已足够生成高质量报告，剩余任务可异步继续
+            if pending_insights > translated_count * 0.15 or pending_themes > translated_count * 0.15:
+                logger.error(f"[全自动分析] ⚠️ 等待超时且完成度 <85%（洞察待处理:{pending_insights}, 主题待处理:{pending_themes}）")
+                update_task_progress(3, TaskStatus.FAILED.value, f"处理超时，洞察待处理:{pending_insights}，主题待处理:{pending_themes}")
+                return {
+                    "success": False,
+                    "product_id": product_id,
+                    "task_id": task_id,
+                    "error": f"并行处理超时且完成度不足85%，请稍后重试。洞察待处理:{pending_insights}，主题待处理:{pending_themes}"
+                }
+            else:
+                logger.warning(f"[全自动分析] 并行处理等待超时，但完成度达到85%以上，继续生成报告（洞察:{translated_count - pending_insights}/{translated_count}, 主题:{translated_count - pending_themes}/{translated_count}）")
         
         # ==========================================
         # Step 4: 生成综合战略版报告
@@ -1778,7 +2094,9 @@ def task_full_auto_analysis(self, product_id: str, task_id: str):
                         product_id=product_id,
                         report_type="comprehensive",  # 综合战略版
                         min_reviews=10,
-                        save_to_db=True
+                        save_to_db=True,
+                        force_regenerate=False,  # [NEW] 不强制重新生成，检查去重
+                        require_full_completion=True  # [NEW] 要求洞察和主题100%完成
                     )
                     await async_db.commit()  # 确保提交
                     return result
@@ -1831,5 +2149,193 @@ def task_full_auto_analysis(self, product_id: str, task_id: str):
         db.rollback()
         raise self.retry(exc=e)
         
+    finally:
+        db.close()
+
+
+# ============== [NEW] 任务8: 定时检查待翻译任务 ==============
+
+@celery_app.task(bind=True, max_retries=0)
+def task_check_pending_translations(self):
+    """
+    🔄 定时检查待翻译任务 (Periodic Translation Check)
+    
+    每 15 秒由 Celery Beat 触发，检查是否有待翻译的产品。
+    如果有，为每个产品触发 3 个并行翻译任务，充分利用多 Worker 并发。
+    
+    设计理念：
+    - 翻译任务使用行级锁（SKIP LOCKED），多任务可以安全并发
+    - 触发多个任务让 6 个 Worker 线程都有活干
+    - 避免翻译因行级锁竞争而提前结束
+    """
+    from app.models.product import Product
+    from app.models.review import Review, TranslationStatus
+    
+    db = get_sync_db()
+    
+    try:
+        # 查找有待翻译评论的产品（最多处理 5 个产品）
+        products_with_pending = db.execute(
+            select(Product.id, func.count(Review.id).label("pending_count"))
+            .join(Review, Review.product_id == Product.id)
+            .where(
+                and_(
+                    Review.translation_status.in_([
+                        TranslationStatus.PENDING.value,
+                        TranslationStatus.FAILED.value
+                    ]),
+                    Review.is_deleted == False
+                )
+            )
+            .group_by(Product.id)
+            .having(func.count(Review.id) > 0)
+            .order_by(func.count(Review.id).desc())
+            .limit(5)
+        )
+        
+        pending_products = products_with_pending.all()
+        
+        if not pending_products:
+            return {"triggered": 0, "message": "No pending translations"}
+        
+        triggered = 0
+        for product_id, pending_count in pending_products:
+            # 🔥 为每个产品触发多个翻译任务（充分利用并发）
+            # 根据待翻译数量决定触发几个任务
+            num_tasks = min(3, max(1, pending_count // 20))  # 每 20 条触发 1 个任务，最多 3 个
+            
+            for _ in range(num_tasks):
+                task_ingest_translation_only.delay(str(product_id))
+                triggered += 1
+            
+            logger.info(f"[翻译调度] 产品 {product_id} 待翻译 {pending_count} 条，触发 {num_tasks} 个翻译任务")
+        
+        return {
+            "triggered": triggered,
+            "products": len(pending_products),
+            "message": f"Triggered {triggered} translation tasks for {len(pending_products)} products"
+        }
+        
+    except Exception as e:
+        logger.error(f"[翻译调度] 检查失败: {e}")
+        return {"triggered": 0, "error": str(e)}
+        
+    finally:
+        db.close()
+
+
+# ============== [NEW] 任务9: 队列消费入库 ==============
+
+@celery_app.task(bind=True, max_retries=3, default_retry_delay=10)
+def task_process_ingestion_queue(self):
+    """
+    🚀 队列消费入库任务 (Ingestion Queue Consumer)
+    
+    从 Redis 队列批量消费评论数据，入库到 PostgreSQL。
+    
+    设计特点：
+    1. 高并发写入优化：API 层只写 Redis，本任务批量入库
+    2. 三层去重：Redis Set → 内存 Set → DB ON CONFLICT
+    3. 按 ASIN 分组处理，减少数据库查询
+    4. 入库成功后触发翻译任务
+    
+    调度方式：
+    - Celery Beat 每 5 秒触发一次
+    - 每次最多处理 100 条队列数据
+    
+    Returns:
+        处理结果统计
+    """
+    from app.core.redis import ReviewIngestionQueueSync, get_sync_redis
+    from app.services.ingestion_service import IngestionService
+    
+    logger.debug("[Ingestion] 开始消费队列...")
+    
+    redis_cli = get_sync_redis()
+    queue = ReviewIngestionQueueSync(redis_cli)
+    
+    # Step 1: 从队列批量取出数据
+    items = queue.pop_batch(count=100)
+    
+    if not items:
+        logger.debug("[Ingestion] 队列为空，跳过")
+        return {"processed": 0, "items": 0}
+    
+    logger.info(f"[Ingestion] 从队列取出 {len(items)} 条数据")
+    
+    db = get_sync_db()
+    
+    try:
+        # Step 2: 调用入库服务处理
+        service = IngestionService(db, redis_cli)
+        results = service.process_queue_items(items)
+        
+        # Step 3: 统计结果
+        total_inserted = sum(r.get("inserted", 0) for r in results.values())
+        total_skipped = sum(r.get("skipped", 0) for r in results.values())
+        
+        logger.info(
+            f"[Ingestion] 处理完成: {len(results)} 个产品, "
+            f"新增 {total_inserted} 条, 跳过 {total_skipped} 条"
+        )
+        
+        # Step 4: 为有新数据的产品触发翻译
+        for asin, result in results.items():
+            if result.get("inserted", 0) > 0:
+                # 获取 product_id
+                from app.models.product import Product
+                product_result = db.execute(
+                    select(Product).where(Product.asin == asin)
+                )
+                product = product_result.scalar_one_or_none()
+                
+                if product:
+                    # 触发流式翻译
+                    task_ingest_translation_only.delay(str(product.id))
+                    logger.info(f"[Ingestion] 产品 {asin} 已触发翻译任务")
+        
+        return {
+            "processed": len(items),
+            "products": len(results),
+            "inserted": total_inserted,
+            "skipped": total_skipped,
+            "details": results
+        }
+        
+    except Exception as e:
+        logger.error(f"[Ingestion] 处理失败: {e}")
+        db.rollback()
+        raise self.retry(exc=e)
+        
+    finally:
+        db.close()
+
+
+# ============== [NEW] 辅助函数：同步已有 review_id 到 Redis ==============
+
+@celery_app.task
+def task_sync_product_reviews_to_redis(asin: str):
+    """
+    将产品的已有 review_id 同步到 Redis
+    
+    用于：
+    1. Redis 重启后恢复去重数据
+    2. 手动触发同步
+    
+    Args:
+        asin: 产品 ASIN
+    """
+    from app.services.ingestion_service import IngestionService
+    
+    db = get_sync_db()
+    
+    try:
+        service = IngestionService(db)
+        service.sync_redis_from_db(asin)
+        logger.info(f"[Sync] 产品 {asin} 的 review_id 已同步到 Redis")
+        return {"success": True, "asin": asin}
+    except Exception as e:
+        logger.error(f"[Sync] 同步失败: {e}")
+        return {"success": False, "error": str(e)}
     finally:
         db.close()

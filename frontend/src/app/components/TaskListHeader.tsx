@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { GitCompare, Rocket } from 'lucide-react';
 import { BatchCollectorDialog } from './BatchCollectorDialog';
+import { UserMenu } from './UserMenu';
 
 export function TaskListHeader() {
   const navigate = useNavigate();
@@ -50,6 +51,9 @@ export function TaskListHeader() {
                 <GitCompare className="h-4 w-4" />
                 <span>对比分析</span>
               </button>
+              
+              {/* 用户菜单 */}
+              <UserMenu />
             </div>
           </div>
         </div>

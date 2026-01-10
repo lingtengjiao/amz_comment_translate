@@ -581,6 +581,80 @@ class ReviewService:
         
         return result
     
+    async def get_products_by_ids(self, product_ids: List) -> List[dict]:
+        """
+        Get products by their IDs with review statistics.
+        
+        Args:
+            product_ids: List of product UUIDs
+            
+        Returns:
+            List of product dicts with statistics
+        """
+        if not product_ids:
+            return []
+        
+        # Get products by IDs
+        products_result = await self.db.execute(
+            select(Product)
+            .where(Product.id.in_(product_ids))
+            .order_by(Product.updated_at.desc())
+        )
+        products = products_result.scalars().all()
+        
+        result = []
+        for product in products:
+            # Get review counts
+            total_result = await self.db.execute(
+                select(func.count(Review.id)).where(Review.product_id == product.id)
+            )
+            total_reviews = total_result.scalar() or 0
+            
+            translated_result = await self.db.execute(
+                select(func.count(Review.id)).where(
+                    and_(
+                        Review.product_id == product.id,
+                        Review.translation_status == TranslationStatus.COMPLETED.value
+                    )
+                )
+            )
+            translated_reviews = translated_result.scalar() or 0
+            
+            # Use real average rating from product page
+            if product.average_rating:
+                avg_rating = float(product.average_rating)
+            else:
+                avg_result = await self.db.execute(
+                    select(func.avg(Review.rating)).where(Review.product_id == product.id)
+                )
+                avg_rating = avg_result.scalar() or 0.0
+            
+            # Determine overall status
+            if total_reviews == 0:
+                status = TranslationStatus.PENDING
+            elif translated_reviews == total_reviews:
+                status = TranslationStatus.COMPLETED
+            elif translated_reviews > 0:
+                status = TranslationStatus.PROCESSING
+            else:
+                status = TranslationStatus.PENDING
+            
+            result.append({
+                "id": product.id,
+                "asin": product.asin,
+                "title": product.title,
+                "image_url": product.image_url,
+                "marketplace": product.marketplace,
+                "total_reviews": total_reviews,
+                "translated_reviews": translated_reviews,
+                "average_rating": round(float(avg_rating), 2),
+                "translation_status": status,
+                "created_at": product.created_at,
+                "updated_at": product.updated_at
+            })
+        
+        return result
+    
     async def get_product_stats(self, asin: str) -> Optional[dict]:
         """
         Get detailed statistics for a product.

@@ -1,5 +1,7 @@
 services:
-  # PostgreSQL Database
+  # ============================================================================
+  # 🗄️ PostgreSQL Database（优化配置：4GB shared_buffers）
+  # ============================================================================
   db-postgres:
     image: postgres:15-alpine
     container_name: voc-postgres
@@ -13,6 +15,22 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    # 🔥 PostgreSQL 高性能配置（16GB 服务器优化）
+    command: >
+      postgres
+      -c shared_buffers=4GB
+      -c work_mem=64MB
+      -c max_connections=500
+      -c effective_cache_size=8GB
+      -c maintenance_work_mem=512MB
+      -c checkpoint_completion_target=0.9
+      -c wal_buffers=64MB
+      -c random_page_cost=1.1
+    # 限制内存使用，确保不超过分配
+    deploy:
+      resources:
+        limits:
+          memory: 5G
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-vocmaster}"]
       interval: 10s
@@ -21,7 +39,9 @@ services:
     networks:
       - voc-network
 
-  # Redis for Celery Message Broker
+  # ============================================================================
+  # 🔴 Redis（2GB 内存限制，队列缓冲区）
+  # ============================================================================
   db-redis:
     image: redis:7-alpine
     container_name: voc-redis
@@ -30,6 +50,17 @@ services:
       - "6379:6379"
     volumes:
       - redis_data:/data
+    # 🔥 Redis 高性能配置
+    command: >
+      redis-server
+      --maxmemory 2gb
+      --maxmemory-policy allkeys-lru
+      --appendonly yes
+      --appendfsync everysec
+    deploy:
+      resources:
+        limits:
+          memory: 2G
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
@@ -38,7 +69,9 @@ services:
     networks:
       - voc-network
 
-  # FastAPI Backend
+  # ============================================================================
+  # 🚀 FastAPI Backend
+  # ============================================================================
   app-backend:
     build:
       context: ./backend
@@ -59,17 +92,60 @@ services:
         condition: service_healthy
     volumes:
       - ./backend:/app
+    deploy:
+      resources:
+        limits:
+          memory: 1G
     networks:
       - voc-network
 
-  # Celery Worker for Async Translation Tasks
-  app-worker:
+  # ============================================================================
+  # 🚀 Celery Workers（5 队列 + 4 Worker 高吞吐架构）
+  # ============================================================================
+  #
+  # 🎯 设计目标：4核16G 服务器，404 并发 API，支持百人同时采集
+  #
+  # 5 独立队列：
+  # ┌───────────────────────────────────────────────────────────────────┐
+  # │ 1. ingestion   - 入库（秒级响应）                                  │
+  # │ 2. reports     - 报告生成（秒级响应）                              │
+  # │ 3. learning    - 学习维度/5W（新产品秒级建模）                      │
+  # │ 4. translation - 翻译（高并发 AI API）                            │
+  # │ 5. analysis    - 洞察+主题（高并发 AI API）                        │
+  # └───────────────────────────────────────────────────────────────────┘
+  #
+  # 4 Worker 分工：
+  # ┌───────────────────────────────────────────────────────────────────┐
+  # │ Worker 1: 基础响应员 (Prefork, 4线程)                             │
+  # │   Queue: ingestion, reports, celery                              │
+  # │   特点：纯 CPU + 磁盘，保证 API 永远不卡                           │
+  # ├───────────────────────────────────────────────────────────────────┤
+  # │ Worker 2: VIP 建模员 (Gevent, 100协程)                            │
+  # │   Queue: learning                                                 │
+  # │   特点：新产品秒级建模，独立快车道                                  │
+  # ├───────────────────────────────────────────────────────────────────┤
+  # │ Worker 3 & 4: AI 吞吐主力 (Gevent, 各150协程)                     │
+  # │   Queue: learning, translation, analysis                         │
+  # │   特点：300 并发 API，翻译/洞察/主题一起处理                       │
+  # │   learning 也监听，作为 VIP Worker 的备份                          │
+  # └───────────────────────────────────────────────────────────────────┘
+  #
+  # 总并发：4 + 100 + 300 = 404 并发 API 请求！
+
+  # ==========================================================================
+  # Worker 1: 基础响应员 (Base Worker)
+  # ==========================================================================
+  # 队列：ingestion, reports, celery
+  # 模式：Prefork, 4 线程
+  # 职责：流式写入 + 报告组装，纯 CPU + 磁盘，保证 API 永远不卡
+  worker-base:
     build:
       context: ./backend
       dockerfile: Dockerfile
-    container_name: voc-worker
+    container_name: voc-worker-base
     restart: unless-stopped
-    command: celery -A app.worker worker --loglevel=info --concurrency=8 -Q translation,analysis,celery
+    # Beat 在这里运行
+    command: celery -A app.worker worker --beat --loglevel=info --concurrency=4 -Q ingestion,reports,celery -n base@%h
     environment:
       - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-vocmaster}:${POSTGRES_PASSWORD:-vocmaster123}@db-postgres:5432/${POSTGRES_DB:-vocmaster}
       - REDIS_URL=redis://db-redis:6379/0
@@ -82,8 +158,12 @@ services:
         condition: service_healthy
     volumes:
       - ./backend:/app
+    deploy:
+      resources:
+        limits:
+          memory: 1G
     healthcheck:
-      test: ["CMD-SHELL", "celery -A app.worker inspect ping -d celery@$$HOSTNAME || exit 1"]
+      test: ["CMD-SHELL", "celery -A app.worker inspect ping -d base@$$HOSTNAME || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -91,14 +171,131 @@ services:
     networks:
       - voc-network
 
+  # ==========================================================================
+  # Worker 2: VIP 建模员 (Vanguard/Learning)
+  # ==========================================================================
+  # 队列：learning, translation（优先 learning，闲时支援翻译）
+  # 模式：Gevent, 100 协程
+  # 职责：新产品秒级建模 + 闲时消化翻译队列
+  # 🔥 "专业分工 + 闲时支援"策略
+  worker-learning:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: voc-worker-learning
+    restart: unless-stopped
+    # 🔥 VIP 快车道：优先 learning，闲时支援 translation
+    # Celery 按队列顺序优先级处理：learning 优先于 translation
+    command: celery -A app.worker worker --loglevel=info --pool=gevent --concurrency=100 -Q learning,translation -n learning@%h
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-vocmaster}:${POSTGRES_PASSWORD:-vocmaster123}@db-postgres:5432/${POSTGRES_DB:-vocmaster}
+      - REDIS_URL=redis://db-redis:6379/0
+      - QWEN_API_KEY=${QWEN_API_KEY}
+      - QWEN_API_BASE=${QWEN_API_BASE:-https://dashscope.aliyuncs.com/compatible-mode/v1}
+    depends_on:
+      db-postgres:
+        condition: service_healthy
+      db-redis:
+        condition: service_healthy
+    volumes:
+      - ./backend:/app
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A app.worker inspect ping -d learning@$$HOSTNAME || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    networks:
+      - voc-network
+
+  # ==========================================================================
+  # Worker 3: AI 吞吐主力 1 号 (Heavy Lifter #1)
+  # ==========================================================================
+  # 队列：learning, translation, analysis
+  # 模式：Gevent, 150 协程
+  # 职责：高并发调用 LLM API，翻译/洞察/主题 + learning 备份
+  worker-heavy-1:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: voc-worker-heavy-1
+    restart: unless-stopped
+    # 🔥 超高并发：150 协程同时挂起 API 请求
+    command: celery -A app.worker worker --loglevel=info --pool=gevent --concurrency=150 -Q learning,translation,analysis -n heavy1@%h
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-vocmaster}:${POSTGRES_PASSWORD:-vocmaster123}@db-postgres:5432/${POSTGRES_DB:-vocmaster}
+      - REDIS_URL=redis://db-redis:6379/0
+      - QWEN_API_KEY=${QWEN_API_KEY}
+      - QWEN_API_BASE=${QWEN_API_BASE:-https://dashscope.aliyuncs.com/compatible-mode/v1}
+    depends_on:
+      db-postgres:
+        condition: service_healthy
+      db-redis:
+        condition: service_healthy
+    volumes:
+      - ./backend:/app
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A app.worker inspect ping -d heavy1@$$HOSTNAME || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    networks:
+      - voc-network
+
+  # ==========================================================================
+  # Worker 4: AI 吞吐主力 2 号 (Heavy Lifter #2)
+  # ==========================================================================
+  # 与 Worker 3 完全相同，分担负载
+  worker-heavy-2:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: voc-worker-heavy-2
+    restart: unless-stopped
+    command: celery -A app.worker worker --loglevel=info --pool=gevent --concurrency=150 -Q learning,translation,analysis -n heavy2@%h
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-vocmaster}:${POSTGRES_PASSWORD:-vocmaster123}@db-postgres:5432/${POSTGRES_DB:-vocmaster}
+      - REDIS_URL=redis://db-redis:6379/0
+      - QWEN_API_KEY=${QWEN_API_KEY}
+      - QWEN_API_BASE=${QWEN_API_BASE:-https://dashscope.aliyuncs.com/compatible-mode/v1}
+    depends_on:
+      db-postgres:
+        condition: service_healthy
+      db-redis:
+        condition: service_healthy
+    volumes:
+      - ./backend:/app
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A app.worker inspect ping -d heavy2@$$HOSTNAME || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    networks:
+      - voc-network
+
+  # ============================================================================
   # React Frontend
+  # ============================================================================
   app-frontend:
     build:
       context: ./frontend
       dockerfile: Dockerfile
     container_name: voc-frontend
     restart: unless-stopped
-    # 不直接暴露端口，通过 nginx 代理访问
     expose:
       - "80"
     depends_on:
@@ -106,14 +303,16 @@ services:
     networks:
       - voc-network
 
+  # ============================================================================
   # Nginx 反向代理
+  # ============================================================================
   nginx:
     image: nginx:alpine
     container_name: voc-nginx
     restart: unless-stopped
     ports:
-      - "80:80"      # 主入口
-      - "3000:80"    # 保持兼容旧端口
+      - "80:80"
+      - "3000:80"
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/conf.d/default.conf:ro
     depends_on:
@@ -129,4 +328,3 @@ volumes:
 networks:
   voc-network:
     driver: bridge
-

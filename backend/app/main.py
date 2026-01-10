@@ -18,6 +18,8 @@ from app.db.session import init_db
 from app.api.reviews import router as reviews_router
 from app.api.reviews import products_router, tasks_router, system_router
 from app.api.analysis import router as analysis_router
+from app.api.auth import router as auth_router
+from app.api.user_projects import router as user_projects_router
 
 # Configure logging
 logging.basicConfig(
@@ -101,6 +103,8 @@ async def health_check():
 
 
 # Include API routers
+app.include_router(auth_router, prefix="/api/v1")  # 认证接口
+app.include_router(user_projects_router, prefix="/api/v1")  # 用户项目接口
 app.include_router(reviews_router, prefix="/api/v1")
 app.include_router(products_router, prefix="/api/v1")
 app.include_router(tasks_router, prefix="/api/v1")

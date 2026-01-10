@@ -51,6 +51,9 @@ export function TaskList() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   
+  // 筛选：只显示我的项目
+  const [myOnly, setMyOnly] = useState(false);
+  
   // 对比分析项目
   const [analysisProjects, setAnalysisProjects] = useState<AnalysisProject[]>([]);
   const [loadingProjects, setLoadingProjects] = useState(true);
@@ -60,11 +63,11 @@ export function TaskList() {
   const [selectedProduct, setSelectedProduct] = useState<ApiProduct | null>(null);
   const [checkingDimensions, setCheckingDimensions] = useState(false);
 
-  const fetchTasks = useCallback(async () => {
+  const fetchTasks = useCallback(async (filterMyOnly = false) => {
     setLoading(true);
     setError(null);
     try {
-      const response = await apiService.getProducts();
+      const response = await apiService.getProducts(filterMyOnly);
       setProducts(response.products || []);
     } catch (err) {
       console.error('Failed to fetch tasks:', err);
@@ -88,9 +91,9 @@ export function TaskList() {
   }, []);
 
   useEffect(() => {
-    fetchTasks();
+    fetchTasks(myOnly);
     fetchAnalysisProjects();
-  }, [fetchTasks, fetchAnalysisProjects]);
+  }, [fetchTasks, fetchAnalysisProjects, myOnly]);
 
   // 检查是否有维度，如果没有则显示对话框
   const handleViewReviews = useCallback(async (productId: string) => {
@@ -168,13 +171,37 @@ export function TaskList() {
 
         {/* 产品任务区域 */}
         <section>
-          <h2 className="text-2xl font-bold text-gray-900 dark:text-gray-100 mb-6">
-            产品列表
-          </h2>
+          <div className="flex items-center justify-between mb-6">
+            <h2 className="text-2xl font-bold text-gray-900 dark:text-gray-100">
+              产品列表
+            </h2>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setMyOnly(false)}
+                className={`px-3 py-1.5 text-sm rounded-lg transition-colors ${
+                  !myOnly 
+                    ? 'bg-indigo-600 text-white' 
+                    : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                }`}
+              >
+                全部产品
+              </button>
+              <button
+                onClick={() => setMyOnly(true)}
+                className={`px-3 py-1.5 text-sm rounded-lg transition-colors ${
+                  myOnly 
+                    ? 'bg-indigo-600 text-white' 
+                    : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                }`}
+              >
+                ⭐ 我的项目
+              </button>
+            </div>
+          </div>
         {loading ? (
           <LoadingState />
         ) : error ? (
-          <ErrorState error={error} onRetry={fetchTasks} />
+          <ErrorState error={error} onRetry={() => fetchTasks(myOnly)} />
           ) : products.length === 0 ? (
           <EmptyState />
         ) : (
