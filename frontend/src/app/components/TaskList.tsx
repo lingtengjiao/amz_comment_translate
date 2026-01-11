@@ -95,7 +95,7 @@ export function TaskList() {
     fetchAnalysisProjects();
   }, [fetchTasks, fetchAnalysisProjects, myOnly]);
 
-  // 检查是否有维度，如果没有则显示对话框
+  // 检查任务进度，只有全部100%才直接进入，否则显示进度弹窗
   const handleViewReviews = useCallback(async (productId: string) => {
     const product = products.find(p => p.id === productId);
     if (!product) return;
@@ -109,21 +109,30 @@ export function TaskList() {
     setCheckingDimensions(true);
     
     try {
-      // 检查是否已有维度
-      const dimensionsResponse = await apiService.getDimensions(product.asin);
+      // 获取产品统计信息，包含任务进度
+      const statsResponse = await apiService.getProductStats(product.asin);
       
-      if (dimensionsResponse.total > 0) {
-        // 已有维度，直接进入
+      const activeTasks = statsResponse.active_tasks;
+      const translationProgress = activeTasks?.translation_progress || 0;
+      const insightsProgress = activeTasks?.insights_progress || 0;
+      const themesProgress = activeTasks?.themes_progress || 0;
+      
+      // 只有全部100%才直接进入
+      const allComplete = translationProgress >= 100 && insightsProgress >= 100 && themesProgress >= 100;
+      
+      if (allComplete) {
+        // 全部完成，直接进入
         navigate(`/reader/${product.asin}`);
       } else {
-        // 没有维度，显示设置对话框
+        // 其他情况都显示进度弹窗（包括满足70%条件的情况）
+        // 弹窗内部会根据进度自动判断是否显示"进入查看"按钮
         setSelectedProduct(product);
         setDimensionDialogOpen(true);
       }
     } catch (err) {
-      console.error('Failed to check dimensions:', err);
+      console.error('Failed to check progress:', err);
       // 检查失败时，仍然允许进入（兼容旧数据）
-      toast.warning('无法检查分析框架状态，将直接进入');
+      toast.warning('无法检查数据准备状态，将直接进入');
       navigate(`/reader/${product.asin}`);
     } finally {
       setCheckingDimensions(false);

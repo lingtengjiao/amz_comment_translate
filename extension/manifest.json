@@ -18,13 +18,18 @@
     "https://*.amazon.de/*",
     "https://*.amazon.fr/*",
     "https://*.amazon.co.jp/*",
-    "http://localhost:8000/*"
+    "http://localhost:8000/*",
+    "http://115.191.30.209:8000/*",
+    "http://115.191.30.209:3000/*",
+    "http://115.191.30.209/*"
   ],
   
   "externally_connectable": {
     "matches": [
       "http://localhost:*/*",
       "http://127.0.0.1:*/*",
+      "http://115.191.30.209:*/*",
+      "http://115.191.30.209/*",
       "https://*.voc-master.com/*"
     ]
   },

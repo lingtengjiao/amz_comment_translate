@@ -650,47 +650,36 @@ async def get_product_stats(
             # We don't trigger it here to avoid unnecessary processing
             # The worker.task_extract_themes will handle label generation automatically
     
-    # [NEW] 查询活跃任务状态
-    from app.models.task import Task, TaskType, TaskStatus as ModelTaskStatus
+    # [NEW] 直接用产品统计数据计算任务进度（更简单可靠）
     from app.api.schemas import ActiveTasksResponse, ActiveTaskStatus
     
     active_tasks = ActiveTasksResponse()
     
-    if product:
-        # 查询所有任务类型的当前状态
-        tasks_result = await db.execute(
-            select(Task).where(Task.product_id == product.id)
+    # stats 是字典，使用字典访问方式
+    product_data = stats.get("product", {})
+    total = product_data.get("total_reviews", 0)
+    
+    if total > 0:
+        # 翻译进度
+        trans_progress = int((product_data.get("translated_reviews", 0) / total) * 100)
+        active_tasks.translation_progress = min(100, trans_progress)
+        active_tasks.translation = ActiveTaskStatus.COMPLETED if trans_progress >= 100 else (
+            ActiveTaskStatus.PROCESSING if trans_progress > 0 else ActiveTaskStatus.IDLE
         )
-        tasks = tasks_result.scalars().all()
         
-        for task in tasks:
-            # 计算进度
-            progress = 0
-            if task.total_items > 0:
-                progress = min(100, int((task.processed_items / task.total_items) * 100))
-            
-            # 映射状态
-            if task.status == ModelTaskStatus.PROCESSING.value:
-                status = ActiveTaskStatus.PROCESSING
-            elif task.status == ModelTaskStatus.COMPLETED.value:
-                status = ActiveTaskStatus.COMPLETED
-            elif task.status == ModelTaskStatus.STOPPED.value:
-                status = ActiveTaskStatus.STOPPED
-            elif task.status == ModelTaskStatus.FAILED.value:
-                status = ActiveTaskStatus.FAILED
-            else:
-                status = ActiveTaskStatus.IDLE
-            
-            # 根据任务类型设置
-            if task.task_type == TaskType.TRANSLATION.value:
-                active_tasks.translation = status
-                active_tasks.translation_progress = progress
-            elif task.task_type == TaskType.INSIGHTS.value:
-                active_tasks.insights = status
-                active_tasks.insights_progress = progress
-            elif task.task_type == TaskType.THEMES.value:
-                active_tasks.themes = status
-                active_tasks.themes_progress = progress
+        # 洞察进度
+        insights_progress = int((product_data.get("reviews_with_insights", 0) / total) * 100)
+        active_tasks.insights_progress = min(100, insights_progress)
+        active_tasks.insights = ActiveTaskStatus.COMPLETED if insights_progress >= 100 else (
+            ActiveTaskStatus.PROCESSING if insights_progress > 0 else ActiveTaskStatus.IDLE
+        )
+        
+        # 主题进度
+        themes_progress = int((product_data.get("reviews_with_themes", 0) / total) * 100)
+        active_tasks.themes_progress = min(100, themes_progress)
+        active_tasks.themes = ActiveTaskStatus.COMPLETED if themes_progress >= 100 else (
+            ActiveTaskStatus.PROCESSING if themes_progress > 0 else ActiveTaskStatus.IDLE
+        )
     
     # 将 active_tasks 添加到返回结果
     stats_dict = stats.model_dump() if hasattr(stats, 'model_dump') else dict(stats)

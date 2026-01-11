@@ -1318,7 +1318,7 @@ export function ReviewReader() {
                 }
                 return null;
               })()}
-              {/* 提取洞察按钮 - 仅在未完成时显示 */}
+              {/* 提取洞察按钮 - 对应 insights */}
               {(() => {
                 const allAnalyzed = totalReviews > 0 && 
                                    translatedCount >= totalReviews && 
@@ -1341,7 +1341,7 @@ export function ReviewReader() {
                       variant="outline"
                       size="sm"
                       className="gap-2"
-                      title="单独提取洞察"
+                      title="提取洞察"
                     >
                       {isExtractingInsights ? (
                         <>
@@ -1359,7 +1359,7 @@ export function ReviewReader() {
                 }
                 return null;
               })()}
-              {/* 提取主题按钮 - 仅在未完成时显示 */}
+              {/* 完善洞察按钮 - 对应 themes */}
               {(() => {
                 const allAnalyzed = totalReviews > 0 && 
                                    translatedCount >= totalReviews && 
@@ -1382,17 +1382,17 @@ export function ReviewReader() {
                       variant="outline"
                       size="sm"
                       className="gap-2"
-                      title="单独提取主题"
+                      title="完善洞察"
                     >
                       {isExtractingThemes ? (
                         <>
                           <RefreshCw className="size-4 animate-spin" />
-                          提取中
+                          完善中
                         </>
                       ) : (
                         <>
                           <Tag className="size-4" />
-                          提取主题
+                          完善洞察
                         </>
                       )}
                     </Button>
@@ -1521,14 +1521,14 @@ export function ReviewReader() {
               setInsightsExpanded={setInsightsExpanded}
             />
             
-            {/* Theme Tag Bar - 5W 主题标签 */}
-            {highlightEnabled && (
+            {/* Theme Tag Bar - 5W 主题标签 - 已隐藏 */}
+            {/* {highlightEnabled && (
               <ThemeTagBar 
                 allTags={allTags}
                 activeThemes={activeThemes}
                 onToggleTheme={handleToggleTheme}
               />
-            )}
+            )} */}
           </div>
 
           {/* 双语对照 Tab */}

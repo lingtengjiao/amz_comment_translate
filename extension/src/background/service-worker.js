@@ -10,7 +10,7 @@
  */
 
 // Backend API configuration
-const API_BASE_URL = 'http://localhost:8000/api/v1';
+const API_BASE_URL = 'http://115.191.30.209:8000/api/v1';
 
 // ==========================================
 // 用户认证状态管理
@@ -1421,6 +1421,8 @@ chrome.runtime.onMessageExternal.addListener((message, sender, sendResponse) => 
   const allowedOrigins = [
     'http://localhost:',
     'http://127.0.0.1:',
+    'http://115.191.30.209:',
+    'http://115.191.30.209',
     'https://voc-master.com'
   ];
   

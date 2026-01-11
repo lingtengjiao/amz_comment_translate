@@ -181,7 +181,7 @@ export const ProductInfoCard = memo(function ProductInfoCard({ task, ratingStats
                   </span>
                 </div>
                 <div className="flex items-center justify-between">
-                  <span className="text-gray-500 dark:text-gray-500">已做洞察</span>
+                  <span className="text-gray-500 dark:text-gray-500">提取洞察</span>
                   <span className="text-purple-600 dark:text-purple-400">
                     {ratingStats.reviewsWithInsights} 条
                     <span className="text-gray-500 dark:text-gray-400 ml-1">
@@ -193,7 +193,7 @@ export const ProductInfoCard = memo(function ProductInfoCard({ task, ratingStats
                   </span>
                 </div>
                 <div className="flex items-center justify-between">
-                  <span className="text-gray-500 dark:text-gray-500">已提取主题</span>
+                  <span className="text-gray-500 dark:text-gray-500">完善洞察</span>
                   <span className="text-blue-600 dark:text-blue-400">
                     {ratingStats.reviewsWithThemes} 条
                     <span className="text-gray-500 dark:text-gray-400 ml-1">

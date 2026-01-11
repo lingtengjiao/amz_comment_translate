@@ -185,7 +185,7 @@ export const ProductReportDialog = memo(function ProductReportDialog({
                   <XCircle className="size-4 text-red-500 flex-shrink-0" />
                 )}
                 <span className={ratingStats.reviewsWithInsights > 0 ? 'text-gray-700 dark:text-gray-300' : 'text-red-600 dark:text-red-400'}>
-                  洞察提取: {ratingStats.reviewsWithInsights} 条评论
+                  洞察提取：{ratingStats.reviewsWithInsights} 条
                 </span>
               </div>
               <div className="flex items-center gap-2 text-sm">
@@ -195,14 +195,14 @@ export const ProductReportDialog = memo(function ProductReportDialog({
                   <XCircle className="size-4 text-red-500 flex-shrink-0" />
                 )}
                 <span className={ratingStats.reviewsWithThemes > 0 ? 'text-gray-700 dark:text-gray-300' : 'text-red-600 dark:text-red-400'}>
-                  主题提取: {ratingStats.reviewsWithThemes} 条评论
+                  完善洞察提取：{ratingStats.reviewsWithThemes} 条
                 </span>
               </div>
             </div>
             {!canGenerate && (
               <div className="mt-3 p-3 bg-amber-50 dark:bg-amber-900/20 rounded-lg border border-amber-200 dark:border-amber-800">
                 <p className="text-xs text-amber-700 dark:text-amber-400">
-                  ⚠️ 请先完成翻译、洞察提取和主题提取后才能生成报告
+                  ⚠️ 请先完成翻译、洞察提取和完善洞察提取后才能生成报告
                 </p>
               </div>
             )}

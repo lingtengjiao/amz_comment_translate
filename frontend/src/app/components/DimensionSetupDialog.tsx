@@ -1,8 +1,8 @@
 /**
- * 智能分析框架生成对话框
- * 首次进入产品详情前，需要先生成分析维度
+ * 数据准备对话框
+ * 显示翻译和AI洞察进度，等待条件满足后允许进入
  */
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import {
   Dialog,
   DialogContent,
@@ -13,7 +13,6 @@ import {
 import { Button } from './ui/button';
 import { Progress } from './ui/progress';
 import { apiService } from '@/api';
-import type { ProductDimension } from '@/api/types';
 import { toast } from 'sonner';
 
 interface DimensionSetupDialogProps {
@@ -25,8 +24,6 @@ interface DimensionSetupDialogProps {
   onComplete: () => void;
 }
 
-type SetupState = 'intro' | 'generating' | 'completed' | 'error';
-
 export function DimensionSetupDialog({
   open,
   onOpenChange,
@@ -35,199 +32,233 @@ export function DimensionSetupDialog({
   reviewCount,
   onComplete,
 }: DimensionSetupDialogProps) {
-  const [state, setState] = useState<SetupState>('intro');
-  const [progress, setProgress] = useState(0);
-  const [dimensions, setDimensions] = useState<ProductDimension[]>([]);
+  // 进度状态
+  const [translationProgress, setTranslationProgress] = useState(0);
+  const [insightsProgress, setInsightsProgress] = useState(0);
+  const [themesProgress, setThemesProgress] = useState(0);
+  const [isReady, setIsReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
-
-  // 重置状态当对话框打开时
-  useEffect(() => {
-    if (open) {
-      setState('intro');
-      setProgress(0);
-      setDimensions([]);
-      setError(null);
+  
+  // 轮询定时器
+  const pollingRef = useRef<NodeJS.Timeout | null>(null);
+  
+  // 计算 AI 洞察进度（取洞察和主题的最小值）
+  const aiInsightProgress = Math.min(insightsProgress, themesProgress);
+  
+  // 判断是否可以进入（翻译完成 + AI洞察>=70%）
+  const canEnter = translationProgress >= 100 && insightsProgress >= 70 && themesProgress >= 70;
+  
+  // 计算预估剩余时间
+  const getEstimatedTime = () => {
+    const transProgress = translationProgress || 0;
+    const aiProgress = aiInsightProgress || 0;
+    
+    // 如果翻译未完成
+    if (transProgress < 100) {
+      const remainingReviews = Math.ceil(reviewCount * (100 - transProgress) / 100);
+      const seconds = remainingReviews * 1; // 每条评论约1秒
+      return formatTime(seconds);
     }
-  }, [open]);
-
-  // 模拟进度动画
-  useEffect(() => {
-    if (state === 'generating') {
-      const interval = setInterval(() => {
-        setProgress((prev) => {
-          // 在到达 90% 前逐步增加，等待实际完成
-          if (prev < 90) {
-            return prev + Math.random() * 10;
-          }
-          return prev;
-        });
-      }, 500);
-      return () => clearInterval(interval);
-    }
-  }, [state]);
-
-  const handleGenerate = async () => {
-    setState('generating');
-    setProgress(5);
-    setError(null);
-
-    try {
-      const response = await apiService.generateDimensions(asin);
-      
-      if (response.success) {
-        setProgress(100);
-        setDimensions(response.dimensions);
-        setState('completed');
-        toast.success('分析框架生成成功！');
-      } else {
-        throw new Error(response.message || '生成失败');
-      }
-    } catch (err) {
-      console.error('Failed to generate dimensions:', err);
-      const message = err instanceof Error ? err.message : '生成分析框架失败';
-      setError(message);
-      setState('error');
-      toast.error(message);
+    
+    // 翻译已完成，检查AI洞察
+    if (aiProgress === 0) {
+      // AI任务还未开始，预估需要较长时间
+      const seconds = Math.ceil(reviewCount * 2); // 每条评论约2秒
+      return formatTime(seconds);
+    } else if (aiProgress < 70) {
+      // AI任务进行中但未达标
+      const remainingReviews = Math.ceil(reviewCount * (70 - aiProgress) / 100);
+      const seconds = remainingReviews * 2;
+      return formatTime(seconds);
+    } else {
+      return '即将完成';
     }
   };
-
-  const handleEnterProduct = () => {
+  
+  // 格式化时间显示
+  const formatTime = (seconds: number) => {
+    if (seconds <= 10) return '即将完成';
+    if (seconds <= 30) return '约 30 秒';
+    if (seconds <= 60) return '约 1 分钟';
+    if (seconds <= 120) return '约 1-2 分钟';
+    if (seconds <= 180) return '约 2-3 分钟';
+    if (seconds <= 300) return '约 3-5 分钟';
+    const minutes = Math.ceil(seconds / 60);
+    return `约 ${minutes} 分钟`;
+  };
+  
+  // 获取进度数据
+  const fetchProgress = useCallback(async () => {
+    try {
+      const response = await apiService.getProductStats(asin);
+      
+      if (response.active_tasks) {
+        const { translation_progress, insights_progress, themes_progress } = response.active_tasks;
+        
+        setTranslationProgress(translation_progress || 0);
+        setInsightsProgress(insights_progress || 0);
+        setThemesProgress(themes_progress || 0);
+        
+        // 检查是否满足条件（翻译完成 + AI洞察>=70%）
+        const ready = (
+          (translation_progress || 0) >= 100 &&
+          (insights_progress || 0) >= 70 &&
+          (themes_progress || 0) >= 70
+        );
+        
+        if (ready) {
+          setIsReady(true);
+          // 停止轮询
+          if (pollingRef.current) {
+            clearTimeout(pollingRef.current);
+            pollingRef.current = null;
+          }
+        }
+      }
+      
+      setError(null);
+    } catch (err) {
+      console.error('Failed to fetch progress:', err);
+      setError('获取进度失败，请稍后重试');
+    }
+  }, [asin]);
+  
+  // 开始轮询
+  useEffect(() => {
+    if (open && !isReady) {
+      // 立即获取一次
+      fetchProgress();
+      
+      // 每 3 秒轮询一次
+      const startPolling = () => {
+        pollingRef.current = setTimeout(async () => {
+          await fetchProgress();
+          if (!isReady) {
+            startPolling();
+          }
+        }, 3000);
+      };
+      
+      startPolling();
+      
+      return () => {
+        if (pollingRef.current) {
+          clearTimeout(pollingRef.current);
+          pollingRef.current = null;
+        }
+      };
+    }
+  }, [open, isReady, fetchProgress]);
+  
+  // 重置状态当对话框关闭时
+  useEffect(() => {
+    if (!open) {
+      // 关闭时清理轮询
+      if (pollingRef.current) {
+        clearTimeout(pollingRef.current);
+        pollingRef.current = null;
+      }
+    }
+  }, [open]);
+  
+  // 进入产品详情
+  const handleEnter = () => {
     onOpenChange(false);
     onComplete();
   };
-
-  const handleRetry = () => {
-    setState('intro');
-    setProgress(0);
-    setError(null);
+  
+  // 获取进度状态文案
+  const getStatusText = () => {
+    if (translationProgress < 100) {
+      return '正在翻译评论数据...';
+    } else if (aiInsightProgress < 80) {
+      return '正在进行AI洞察分析...';
+    } else {
+      return '数据准备完成！';
+    }
   };
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[500px]">
+      <DialogContent className="sm:max-w-[480px]">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
-            <span className="text-2xl">🧠</span>
-            智能分析框架
+            <span className="text-2xl">{isReady ? '✅' : '⏳'}</span>
+            {isReady ? '准备完成' : '数据准备中'}
           </DialogTitle>
-          <DialogDescription className="text-gray-500">
+          <DialogDescription className="text-gray-500 line-clamp-2">
             {productTitle}
           </DialogDescription>
         </DialogHeader>
 
-        <div className="py-4">
-          {/* 介绍状态 */}
-          {state === 'intro' && (
-            <div className="space-y-4">
-              <div className="bg-blue-50 border border-blue-100 rounded-lg p-4">
-                <h4 className="font-medium text-blue-900 mb-2">📊 首次分析需要建立分析框架</h4>
-                <p className="text-sm text-blue-800 mb-3">
-                  AI 会从 <span className="font-semibold">{reviewCount}</span> 条评论中学习，自动生成该产品的专属评价维度（如：外观设计、材质手感、性价比等）。
-                </p>
-                <p className="text-sm text-blue-700">
-                  这些维度将用于后续的评论洞察分析，让分析结果更加精准有针对性。
-                </p>
+        <div className="py-6">
+          {error ? (
+            // 错误状态
+            <div className="text-center py-4">
+              <div className="inline-flex items-center justify-center w-12 h-12 bg-red-100 rounded-full mb-3">
+                <span className="text-2xl">❌</span>
               </div>
-              
-              <div className="flex items-center gap-2 text-sm text-gray-500">
-                <span>⏱️</span>
-                <span>预计耗时：30-60秒</span>
-              </div>
-
-              <div className="flex justify-end gap-3 pt-2">
-                <Button variant="outline" onClick={() => onOpenChange(false)}>
-                  稍后再说
-                </Button>
-                <Button onClick={handleGenerate} className="bg-blue-600 hover:bg-blue-700">
-                  🚀 开始生成
-                </Button>
-              </div>
+              <p className="text-sm text-red-600">{error}</p>
             </div>
-          )}
-
-          {/* 生成中状态 */}
-          {state === 'generating' && (
-            <div className="space-y-6 py-4">
-              <div className="text-center">
-                <div className="inline-flex items-center justify-center w-16 h-16 bg-blue-100 rounded-full mb-4">
-                  <span className="text-3xl animate-pulse">🤖</span>
-                </div>
-                <h4 className="font-medium text-gray-900 mb-2">AI 正在分析评论...</h4>
-                <p className="text-sm text-gray-500">正在从评论中提炼产品的核心评价维度</p>
+          ) : (
+            // 始终显示进度条
+            <div className="space-y-6">
+              {/* 状态提示 */}
+              <div className="text-center mb-2">
+                <p className="text-sm text-gray-600">
+                  {isReady ? `${reviewCount} 条评论已分析完成` : getStatusText()}
+                </p>
               </div>
               
+              {/* 翻译进度 */}
               <div className="space-y-2">
-                <Progress value={progress} className="h-2" />
-                <p className="text-xs text-gray-400 text-center">
-                  {progress < 30 && '正在读取评论样本...'}
-                  {progress >= 30 && progress < 60 && '正在分析用户关注点...'}
-                  {progress >= 60 && progress < 90 && '正在生成维度定义...'}
-                  {progress >= 90 && '即将完成...'}
-                </p>
+                <div className="flex items-center justify-between text-sm">
+                  <span className="flex items-center gap-2 text-gray-700">
+                    <span>📝</span>
+                    <span>翻译中</span>
+                    {translationProgress >= 100 && <span className="text-green-500">✓</span>}
+                  </span>
+                  <span className="text-gray-500 font-medium">{Math.round(translationProgress)}%</span>
+                </div>
+                <Progress value={translationProgress} className="h-2" />
               </div>
+              
+              {/* AI洞察进度 */}
+              <div className="space-y-2">
+                <div className="flex items-center justify-between text-sm">
+                  <span className="flex items-center gap-2 text-gray-700">
+                    <span>🔍</span>
+                    <span>AI洞察中</span>
+                    {aiInsightProgress >= 70 && <span className="text-green-500">✓</span>}
+                  </span>
+                  <span className="text-gray-500 font-medium">{Math.round(aiInsightProgress)}%</span>
+                </div>
+                <Progress value={aiInsightProgress} className="h-2" />
+              </div>
+              
+              {/* 提示文案 - 仅在未完成时显示预估时间 */}
+              {!isReady && (
+                <div className="flex items-center justify-center gap-2 text-xs text-gray-400 pt-2">
+                  <span>⏱️</span>
+                  <span>预计还需 {getEstimatedTime()}</span>
+                </div>
+              )}
             </div>
           )}
+        </div>
 
-          {/* 完成状态 */}
-          {state === 'completed' && (
-            <div className="space-y-4">
-              <div className="text-center">
-                <div className="inline-flex items-center justify-center w-16 h-16 bg-green-100 rounded-full mb-4">
-                  <span className="text-3xl">✅</span>
-                </div>
-                <h4 className="font-medium text-gray-900 mb-2">分析框架生成完成！</h4>
-                <p className="text-sm text-gray-500">
-                  已为该产品生成 <span className="font-semibold text-green-600">{dimensions.length}</span> 个评价维度
-                </p>
-              </div>
-
-              {/* 显示生成的维度 */}
-              <div className="bg-gray-50 rounded-lg p-4 max-h-48 overflow-y-auto">
-                <div className="grid grid-cols-2 gap-2">
-                  {dimensions.map((dim, index) => (
-                    <div
-                      key={dim.id}
-                      className="flex items-center gap-2 bg-white px-3 py-2 rounded-md border border-gray-200"
-                    >
-                      <span className="text-blue-500 font-medium text-sm">{index + 1}.</span>
-                      <span className="text-sm text-gray-700 truncate">{dim.name}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              <div className="flex justify-end pt-2">
-                <Button onClick={handleEnterProduct} className="bg-green-600 hover:bg-green-700">
-                  进入产品分析 →
-                </Button>
-              </div>
-            </div>
-          )}
-
-          {/* 错误状态 */}
-          {state === 'error' && (
-            <div className="space-y-4">
-              <div className="text-center">
-                <div className="inline-flex items-center justify-center w-16 h-16 bg-red-100 rounded-full mb-4">
-                  <span className="text-3xl">❌</span>
-                </div>
-                <h4 className="font-medium text-gray-900 mb-2">生成失败</h4>
-                <p className="text-sm text-red-600">{error}</p>
-              </div>
-
-              <div className="flex justify-center gap-3 pt-2">
-                <Button variant="outline" onClick={() => onOpenChange(false)}>
-                  取消
-                </Button>
-                <Button onClick={handleRetry} className="bg-blue-600 hover:bg-blue-700">
-                  重试
-                </Button>
-              </div>
-            </div>
+        {/* 底部按钮 */}
+        <div className="flex justify-end gap-3 pt-2 border-t">
+          <Button variant="outline" onClick={() => onOpenChange(false)}>
+            稍后再看
+          </Button>
+          {isReady && (
+            <Button onClick={handleEnter} className="bg-green-600 hover:bg-green-700">
+              进入查看 →
+            </Button>
           )}
         </div>
       </DialogContent>
     </Dialog>
   );
 }
-
