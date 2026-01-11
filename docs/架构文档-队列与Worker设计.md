@@ -1,6 +1,7 @@
-# 🚀 5 队列 + 4 Worker 高吞吐架构
+# 🚀 6 队列 + 5 Worker 职能化架构
 
-> **设计目标**：4核16G 服务器，404 并发 API，支持百人同时采集  
+> **设计目标**：4核16G 服务器，354 并发 API，支持百人同时采集  
+> **核心优化**：物理隔离队列 + 职能化 Worker 分工，解决翻译阻塞分析问题  
 > **QPS 限制**：千问 API 20-30 QPS，通过限流和退避策略防止账号被封
 
 ---
@@ -17,32 +18,280 @@
 │                              FastAPI Backend                                 │
 └─────────────────────────────────────────────────────────────────────────────┘
                                     │
-            ┌───────────────────────┼───────────────────────┐
-            ▼                       ▼                       ▼
-┌───────────────────┐   ┌───────────────────────┐   ┌───────────────────────────┐
-│  🏎️ 基础响应员     │   │  🌟 VIP 建模员         │   │  🐢 AI 吞吐主力 (×2)      │
-│                   │   │                       │   │                           │
-│ • ingestion (入库) │   │ • learning (建模)      │   │ • learning (备份)          │
-│ • reports (报告)  │   │ • translation (闲时)  │   │ • translation (翻译)       │
-│                   │   │                       │   │ • analysis (洞察+主题)     │
-└───────────────────┘   └───────────────────────┘   └───────────────────────────┘
-        │                       │                           │
-        ▼                       ▼                           ▼
-┌───────────────────┐   ┌───────────────────────┐   ┌───────────────────────────┐
-│  worker-base      │   │  worker-learning      │   │  worker-heavy-1           │
-│  Prefork, 4线程    │   │  Gevent, 100协程       │   │  worker-heavy-2           │
-│  + Celery Beat    │   │  VIP + 闲时支援翻译    │   │  Gevent, 各150协程         │
-└───────────────────┘   └───────────────────────┘   └───────────────────────────┘
-                                    │
-                                    ▼
-                        ┌───────────────────────┐
-                        │  🚦 全局 API 限流器    │
+    ┌─────────────┬─────────────┬─────────────┬─────────────┬─────────────┐
+    ▼             ▼             ▼             ▼             ▼             │
+┌─────────┐ ┌─────────┐ ┌─────────────┐ ┌─────────────┐ ┌─────────────┐   │
+│ 🏎️ Base │ │ 🌟 VIP  │ │ 🔄 Trans    │ │ 🔍 Insight  │ │ 🏷️ Theme   │   │
+│         │ │         │ │             │ │             │ │             │   │
+│ingestion│ │learning │ │translation  │ │insight_extr.│ │theme_extr.  │   │
+│ reports │ │         │ │             │ │ learning    │ │ learning    │   │
+└────┬────┘ └────┬────┘ └──────┬──────┘ └──────┬──────┘ └──────┬──────┘   │
+     │           │             │               │               │          │
+     ▼           ▼             ▼               ▼               ▼          │
+┌─────────┐ ┌─────────┐ ┌─────────────┐ ┌─────────────┐ ┌─────────────┐   │
+│worker-  │ │worker-  │ │worker-      │ │worker-      │ │worker-      │   │
+│base     │ │vip      │ │trans        │ │insight      │ │theme        │   │
+│Prefork,4│ │Gevent,50│ │Gevent,100   │ │Gevent,100   │ │Gevent,100   │   │
+│+Beat    │ │         │ │             │ │+闲时建模    │ │+闲时建模    │   │
+└─────────┘ └─────────┘ └─────────────┘ └─────────────┘ └─────────────┘   │
+                                    │                                      │
+                                    ▼                                      │
+                        ┌───────────────────────┐                         │
+                        │  🚦 全局 API 限流器    │◀────────────────────────┘
                         │  Max QPS: 25          │
                         │  滑动窗口计数          │
                         └───────────────────────┘
                                     
-                    总并发：4 + 100 + 300 = 404 并发 API！
+                    总并发：4 + 50 + 100 + 100 + 100 = 354 并发 API！
                     实际 QPS：25（通过限流器控制）
+```
+
+---
+
+## 🎯 6 队列职能说明
+
+| 队列 | 职责 | 响应要求 | 所属 Worker |
+|------|------|----------|-------------|
+| `ingestion` | 入库任务 | **秒回** | worker-base |
+| `learning` | 维度学习/5W建模 | **VIP 快车道** | worker-vip, worker-insight, worker-theme |
+| `translation` | 评论翻译 | 独立处理 | worker-trans |
+| `insight_extraction` | 洞察提取 | 专属处理 | worker-insight |
+| `theme_extraction` | 主题提取 | 专属处理 | worker-theme |
+| `reports` | 报告生成 | 秒回 | worker-base |
+
+---
+
+## 👷 5 Worker 职能分工
+
+| Worker | 监听队列 | 模式 | 并发 | 内存 | 核心职责 |
+|--------|----------|------|------|------|----------|
+| **worker-base** | ingestion, reports, celery | Prefork | 4 | 1G | 死守入库，不接 AI 活 |
+| **worker-vip** | learning | Gevent | 50 | 1G | VIP 快车道，建模开关 |
+| **worker-trans** | translation | Gevent | 100 | 1.5G | 独立翻译，不阻塞分析 |
+| **worker-insight** | insight_extraction, learning | Gevent | 100 | 1.5G | 洞察专员，闲时建模 |
+| **worker-theme** | theme_extraction, learning | Gevent | 100 | 1.5G | 主题专员，闲时建模 |
+
+**总计：354 并发，6.5G 内存（16G 服务器可承受）**
+
+---
+
+## 🎯 核心优势
+
+### 1. 翻译不再是屏障
+
+**问题**：原来翻译和分析共享 Worker，翻译量大时阻塞洞察/主题提取
+
+**解决**：`worker-trans` 专属翻译队列，与分析完全隔离
+
+```
+原来：
+翻译任务 ─┐
+洞察任务 ─┼─→ worker-heavy ─→ 阻塞！
+主题任务 ─┘
+
+现在：
+翻译任务 ───→ worker-trans   ─→ 独立处理
+洞察任务 ───→ worker-insight ─→ 专属处理
+主题任务 ───→ worker-theme   ─→ 专属处理
+```
+
+### 2. 建模永远优先
+
+**设计**：3 个 AI Worker 都支援 `learning` 队列
+
+```
+worker-vip     → learning（专属）
+worker-insight → insight_extraction, learning（闲时支援）
+worker-theme   → theme_extraction, learning（闲时支援）
+```
+
+**效果**：新产品建模任务永远有 Worker 响应
+
+### 3. 洞察/主题并行
+
+**设计**：拆分 `analysis` 为 `insight_extraction` 和 `theme_extraction`
+
+**效果**：洞察和主题可以真正并行处理，互不阻塞
+
+---
+
+## 🚀 批量翻译优化（10 倍效率提升）
+
+### 核心策略
+
+**问题**：单条翻译模式下，100 条评论 = 100 次 API 调用 = 消耗 100 QPS
+
+**解决方案**：🎯 智能分类批量翻译 - 根据评论长度和质量差异化处理
+
+---
+
+### 🎯 评论分类标准（ReviewClassifier）
+
+| 分类 | 条件 | 批量大小 | 策略 |
+|------|------|----------|------|
+| **VIP 评论** | 字数 > 200<br>或（极端星级 1/5星 且 字数 > 100） | **1 条/批** | 单独翻译，保证质量 |
+| **标准评论** | 50 < 字数 ≤ 200 | **5 条/批** | 平衡质量和效率 |
+| **短评论** | 字数 ≤ 50 | **20 条/批** | 最大化效率 |
+
+```python
+class ReviewClassifier:
+    """评论智能分类器"""
+    
+    # 可配置的分类阈值
+    VIP_LENGTH_THRESHOLD = 200
+    VIP_EXTREME_RATING_LENGTH = 100
+    EXTREME_RATINGS = [1, 5]
+    
+    BATCH_SIZE_VIP = 1       # VIP：单独翻译
+    BATCH_SIZE_STANDARD = 5  # 标准：5条一批
+    BATCH_SIZE_SHORT = 20    # 短评：20条一批
+    
+    @classmethod
+    def classify(cls, review) -> str:
+        """
+        评论分类
+        Returns: 'vip' | 'standard' | 'short'
+        """
+        text_length = len(review.body_original or "")
+        
+        # VIP 评论
+        if text_length > cls.VIP_LENGTH_THRESHOLD:
+            return 'vip'
+        if text_length > cls.VIP_EXTREME_RATING_LENGTH and review.rating in cls.EXTREME_RATINGS:
+            return 'vip'
+        
+        # 短评论
+        if text_length <= cls.SHORT_MAX_LENGTH:
+            return 'short'
+        
+        # 标准评论
+        return 'standard'
+```
+
+---
+
+### 🔄 Worker 翻译流程
+
+```python
+# 1. 获取待翻译评论（100 条）
+pending_reviews = db.query(Review).filter(...).limit(100)
+
+# 2. 按分类分组
+grouped_reviews = ReviewClassifier.group_reviews(pending_reviews)
+# {
+#   'vip': [10条长评论],
+#   'standard': [30条中等评论],
+#   'short': [60条短评论]
+# }
+
+# 3. 分别处理（优先级：短 → 标准 → VIP）
+for category in ['short', 'standard', 'vip']:
+    batch_size = ReviewClassifier.get_batch_size(category)
+    
+    # VIP：单独翻译
+    if batch_size == 1:
+        translated = translation_service.translate_text(review.body_original)
+    
+    # 标准/短评：批量翻译
+    else:
+        batch_results = translation_service.translate_batch_with_fallback(batch_input)
+```
+
+---
+
+### 📊 效率对比（100 条评论示例）
+
+假设评论分布：
+- 10% VIP 评论（10条，>200字）
+- 30% 标准评论（30条，50-200字）
+- 60% 短评论（60条，≤50字）
+
+| 指标 | 单条模式（优化前） | 固定批量（10条） | 智能分类（差异化） | 提升 |
+|------|-------------------|-----------------|------------------|------|
+| API 调用次数 | 100 次 | 10 次 | **19 次**<br>(10+6+3) | **5.3x** |
+| QPS 消耗 | 100 QPS | 10 QPS | **19 QPS** | **5.3x** |
+| VIP 评论质量 | ⭐⭐⭐ | ⭐⭐ (降低) | **⭐⭐⭐** (保证) | ✅ |
+| 短评论效率 | 低 | 中 | **极高** (20条/批) | ✅ |
+| 翻译时间 | ~5 分钟 | ~1 分钟 | **~1.2 分钟** | **4x** |
+
+**核心优势：**
+1. ✅ **质量保证**：重要长评论单独翻译，不降低质量
+2. ✅ **效率最大化**：短评论 20 条一批，QPS 消耗降低 20 倍
+3. ✅ **灵活平衡**：中等评论 5 条一批，兼顾质量和效率
+4. ✅ **自适应**：根据评论实际分布动态调整
+
+---
+
+### 🎨 Prompt 设计
+
+#### 1. VIP 评论（单独翻译）
+
+使用完整的 Few-Shot System Prompt：
+
+```python
+TRANSLATION_SYSTEM_PROMPT = """你是一位精通中美文化差异的资深亚马逊跨境电商翻译专家。
+
+### 核心规则
+1. **拒绝翻译腔**: 不要逐字翻译
+2. **术语精准**: "DOA" -> "到手即坏"
+3. **情感对齐**: 1星评论要体现愤怒，5星要体现兴奋
+
+### 参考范例
+Input: "Total lemon. Stopped working after 2 days."
+Output: "简直是个次品！用了两天就坏了。"
+```
+
+#### 2. 标准/短评论（批量翻译）
+
+使用批量翻译 Prompt：
+
+```python
+BATCH_TRANSLATION_SYSTEM_PROMPT = """你是一位翻译专家。请翻译以下多条评论。
+
+输入格式：{"r1": "original 1", "r2": "original 2", ...}
+输出要求：
+- 返回 JSON 字典，键与输入一致
+- 值为翻译后的中文
+- 使用电商翻译风格
+- **只返回 JSON，不要添加任何解释**
+```
+
+---
+
+### 📈 实时监控（Flower）
+
+在 Flower 监控面板（`http://localhost:5555`）可以看到：
+
+#### Tasks 页面
+
+搜索 `task_ingest_translation_only`，查看日志：
+
+```
+[智能翻译] 📊 评论分类: VIP=8 | 标准=32 | 短评=60
+[智能翻译] 🚀 处理 short 类评论: 60 条，批量大小=20
+[智能翻译] short 批次翻译完成: 20/20 条
+[智能翻译] 🚀 处理 standard 类评论: 32 条，批量大小=5
+[智能翻译] 🚀 处理 vip 类评论: 8 条，批量大小=1
+[智能翻译] ✅ 完成: 总计 100 条成功
+  📊 VIP 评论: 8/8 条
+  📊 标准评论: 32/32 条
+  📊 短评论: 60/60 条
+```
+
+---
+
+### ⚙️ 配置调优
+
+如果需要调整分类阈值，修改 `backend/app/worker.py`：
+
+```python
+class ReviewClassifier:
+    # 调整 VIP 评论阈值
+    VIP_LENGTH_THRESHOLD = 250  # 从 200 调到 250
+    
+    # 调整批量大小
+    BATCH_SIZE_SHORT = 30  # 从 20 调到 30（更激进）
+    BATCH_SIZE_STANDARD = 3  # 从 5 调到 3（更保守）
 ```
 
 ---

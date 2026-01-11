@@ -383,7 +383,7 @@ class AnalysisService:
                 for attempt in range(max_retries):
                     try:
                         response = await client.chat.completions.create(
-                            model=settings.QWEN_MODEL,
+                            model=settings.QWEN_ANALYSIS_MODEL,
                             messages=[
                                 {"role": "system", "content": "输出纯JSON，简体中文。"},
                                 {"role": "user", "content": prompt}
@@ -492,7 +492,7 @@ class AnalysisService:
                     try:
                         logger.info(f"生成维度洞察批次 [{batch_name}]: {dimensions}")
                         response = await client.chat.completions.create(
-                            model=settings.QWEN_MODEL,
+                            model=settings.QWEN_ANALYSIS_MODEL,
                             messages=[
                                 {"role": "system", "content": "输出纯JSON，简体中文。"},
                                 {"role": "user", "content": batch_prompt}
@@ -548,7 +548,7 @@ class AnalysisService:
                 for attempt in range(max_retries):
                     try:
                         response = await client.chat.completions.create(
-                            model=settings.QWEN_MODEL,
+                            model=settings.QWEN_ANALYSIS_MODEL,
                             messages=[
                                 {"role": "system", "content": "输出纯JSON，简体中文。"},
                                 {"role": "user", "content": prompt}

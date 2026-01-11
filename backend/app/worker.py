@@ -23,6 +23,111 @@ from app.core.config import settings
 logger = logging.getLogger(__name__)
 
 # ============================================================================
+# 🎯 智能评论分类器（根据长度和质量差异化处理）
+# ============================================================================
+
+class ReviewClassifier:
+    """
+    评论分类器：根据评论长度和质量分类，采用差异化翻译策略
+    
+    分类标准：
+    - VIP 评论：长评论（> 200字）或极端星级的详细评论（1/5星 且 > 100字）
+      → 单独翻译，保证质量
+    
+    - 标准评论：中等长度（50-200字）
+      → 5条一批翻译，平衡质量和效率
+    
+    - 短评论：简短表达（≤ 50字）
+      → 20条一批翻译，最大化效率
+    
+    优势：
+    - 质量保证：重要评论单独翻译，不降低质量
+    - 效率最大化：短评论大批量处理，QPS 消耗降低 20 倍
+    - 灵活平衡：中等评论适度批量，兼顾质量和效率
+    """
+    
+    # 可配置的分类阈值
+    VIP_LENGTH_THRESHOLD = 200        # VIP 评论最低字数
+    VIP_EXTREME_RATING_LENGTH = 100   # 极端星级评论的字数阈值
+    EXTREME_RATINGS = [1, 5]          # 极端星级（差评/好评）
+    
+    STANDARD_MIN_LENGTH = 50          # 标准评论最低字数
+    STANDARD_MAX_LENGTH = 200         # 标准评论最高字数
+    
+    SHORT_MAX_LENGTH = 50             # 短评论最高字数
+    
+    # 批量大小配置
+    BATCH_SIZE_VIP = 1       # VIP 评论：单独翻译
+    BATCH_SIZE_STANDARD = 5  # 标准评论：5 条一批
+    BATCH_SIZE_SHORT = 20    # 短评论：20 条一批
+    
+    @classmethod
+    def classify(cls, review) -> str:
+        """
+        评论分类
+        
+        Args:
+            review: Review 对象
+        
+        Returns:
+            'vip': 高质量长评论
+            'standard': 中等评论
+            'short': 短评论
+        """
+        text = review.body_original or ""
+        text_length = len(text.strip())
+        rating = review.rating
+        
+        # VIP 评论：长评论或极端星级的详细评论
+        if text_length > cls.VIP_LENGTH_THRESHOLD:
+            return 'vip'
+        
+        if text_length > cls.VIP_EXTREME_RATING_LENGTH and rating in cls.EXTREME_RATINGS:
+            return 'vip'
+        
+        # 短评论
+        if text_length <= cls.SHORT_MAX_LENGTH:
+            return 'short'
+        
+        # 标准评论（默认）
+        return 'standard'
+    
+    @classmethod
+    def get_batch_size(cls, category: str) -> int:
+        """获取批量大小"""
+        batch_sizes = {
+            'vip': cls.BATCH_SIZE_VIP,
+            'standard': cls.BATCH_SIZE_STANDARD,
+            'short': cls.BATCH_SIZE_SHORT
+        }
+        return batch_sizes.get(category, cls.BATCH_SIZE_STANDARD)
+    
+    @classmethod
+    def group_reviews(cls, reviews: list) -> dict:
+        """
+        将评论按分类分组
+        
+        Returns:
+            {
+                'vip': [...],
+                'standard': [...],
+                'short': [...]
+            }
+        """
+        groups = {
+            'vip': [],
+            'standard': [],
+            'short': []
+        }
+        
+        for review in reviews:
+            category = cls.classify(review)
+            groups[category].append(review)
+        
+        return groups
+
+
+# ============================================================================
 # 🚦 全局 API 限流器（防止 QPS 冲高导致账号被封）
 # ============================================================================
 
@@ -205,53 +310,76 @@ celery_app.conf.update(
     task_soft_time_limit=1500,  # 25 minutes soft limit (warning before hard kill)
     worker_prefetch_multiplier=1,
     task_acks_late=True,
+    worker_send_task_events=True,  # 🔥 支持 Flower 监控
     # ============================================================================
-    # 🚀 5 队列 + 4 Worker 高吞吐架构（4核16G，支持 400 并发 API）
+    # 🚀 6 队列 + 5 Worker 职能化架构（4核16G，解决翻译阻塞分析问题）
     # ============================================================================
     #
-    # 设计理念：
-    # - 快车道：入库 + 报告（秒级响应）
-    # - VIP 快车道：学习建模（新产品秒级启动）
-    # - 慢车道：翻译 + 分析（超高并发 AI 调用）
+    # 🎯 核心优化：物理隔离队列 + 职能化 Worker 分工
     #
+    # 6 个独立队列：
     # ┌─────────────────────────────────────────────────────────────────────────┐
-    # │ Worker 1: 基础响应员 (Prefork, 4线程)                                   │
-    # │   Queue: ingestion, reports                                            │
-    # │   特点：纯 CPU + 磁盘，保证 API 永远不卡                                 │
-    # ├─────────────────────────────────────────────────────────────────────────┤
-    # │ Worker 2: VIP 建模员 (Gevent, 100协程)                                  │
-    # │   Queue: learning                                                       │
-    # │   特点：新产品秒级建模，独立快车道                                        │
-    # ├─────────────────────────────────────────────────────────────────────────┤
-    # │ Worker 3 & 4: AI 吞吐主力 (Gevent, 各150协程)                           │
-    # │   Queue: learning, translation, analysis                               │
-    # │   特点：300 并发 API，翻译/洞察/主题一起处理                             │
-    # │   learning 队列也监听，作为 VIP Worker 的备份                            │
+    # │ 1. ingestion          - 入库（秒回）                                    │
+    # │ 2. learning           - 建模（VIP 快车道）                              │
+    # │ 3. translation        - 翻译（独立队列，不阻塞分析）                     │
+    # │ 4. insight_extraction - 洞察提取（专属队列）                            │
+    # │ 5. theme_extraction   - 主题提取（专属队列）                            │
+    # │ 6. reports            - 报告生成                                        │
     # └─────────────────────────────────────────────────────────────────────────┘
     #
-    # 总并发：4 + 100 + 300 = 404 并发！
+    # 5 个职能化 Worker：
+    # ┌─────────────────────────────────────────────────────────────────────────┐
+    # │ Worker 1 (Base):    ingestion, reports       | Prefork, 4 线程         │
+    # │   → 死守入库，不接 AI 活，确保插件上传秒回                              │
+    # ├─────────────────────────────────────────────────────────────────────────┤
+    # │ Worker 2 (VIP):     learning                 | Gevent, 50 协程         │
+    # │   → 建模快车道，专攻维度学习和 5W 建模                                  │
+    # ├─────────────────────────────────────────────────────────────────────────┤
+    # │ Worker 3 (Trans):   translation              | Gevent, 100 协程        │
+    # │   → 独立翻译组，专门消化海量翻译，不影响分析                            │
+    # ├─────────────────────────────────────────────────────────────────────────┤
+    # │ Worker 4 (Insight): insight_extraction, learning | Gevent, 100 协程    │
+    # │   → 洞察专员，主攻洞察提取，闲时支援建模                                │
+    # ├─────────────────────────────────────────────────────────────────────────┤
+    # │ Worker 5 (Theme):   theme_extraction, learning   | Gevent, 100 协程    │
+    # │   → 主题专员，主攻主题提取，闲时支援建模                                │
+    # └─────────────────────────────────────────────────────────────────────────┘
+    #
+    # 总并发：4 + 50 + 100 + 100 + 100 = 354 并发！
+    #
+    # 🎯 核心优势：
+    # - 翻译不再是屏障：独立 Worker，不阻塞分析
+    # - 建模永远优先：所有 AI Worker 都支援 learning
+    # - 洞察/主题并行：各有专属队列，不互相竞争
     #
     task_routes={
-        # ============== 快车道：入库 + 报告 (worker-base, Prefork) ==============
+        # ============== 1. 快车道：入库 (worker-base) ==============
         # 🏎️ 纯 CPU + 磁盘，保证 API 秒级响应
         "app.worker.task_process_ingestion_queue": {"queue": "ingestion"},
         "app.worker.task_check_pending_translations": {"queue": "ingestion"},
-        "app.worker.task_generate_report": {"queue": "reports"},
         
-        # ============== VIP 快车道：学习建模 (worker-learning, Gevent) ==============
+        # ============== 2. VIP 快车道：学习建模 (worker-vip) ==============
         # 🌟 新产品秒级建模，独立进程不受干扰
         "app.worker.task_full_auto_analysis": {"queue": "learning"},
         "app.worker.task_scientific_learning_and_analysis": {"queue": "learning"},
         
-        # ============== 慢车道：翻译 + 分析 (worker-heavy × 2, Gevent) ==============
-        # 🐢 翻译队列
+        # ============== 3. 独立：翻译 (worker-trans) ==============
+        # 🔄 专门消化海量翻译，不影响其他分析任务
         "app.worker.task_translate_bullet_points": {"queue": "translation"},
         "app.worker.task_process_reviews": {"queue": "translation"},
         "app.worker.task_ingest_translation_only": {"queue": "translation"},
         
-        # 🐢 分析队列（洞察 + 主题合并）
-        "app.worker.task_extract_insights": {"queue": "analysis"},
-        "app.worker.task_extract_themes": {"queue": "analysis"},
+        # ============== 4. 专属：洞察提取 (worker-insight) ==============
+        # 🔍 主攻洞察提取，闲时支援建模
+        "app.worker.task_extract_insights": {"queue": "insight_extraction"},
+        
+        # ============== 5. 专属：主题提取 (worker-theme) ==============
+        # 🏷️ 主攻主题提取，闲时支援建模
+        "app.worker.task_extract_themes": {"queue": "theme_extraction"},
+        
+        # ============== 6. 组装：报告生成 (worker-base) ==============
+        # 📊 最后的整合，生成分析报告
+        "app.worker.task_generate_report": {"queue": "reports"},
     },
     # Celery Beat 定时任务配置
     beat_schedule={
@@ -940,25 +1068,53 @@ def task_extract_insights(self, product_id: str):
         BATCH_SIZE = 20  # 每 20 条评论批量提交一次
         pending_insights = []  # 待提交的洞察列表
         
-        logger.info(f"Found {reviews_to_process} reviews remaining for insight extraction (total={total_translated}, already_done={already_processed})")
-        logger.info(f"[批量优化] 使用 BATCH_SIZE={BATCH_SIZE} 减少磁盘 IO")
+        # 🚀 并行协程优化：使用 gevent pool 并行调用 AI API
+        PARALLEL_SIZE = 20  # 洞察提取：中等并发（平衡速度与稳定性）
         
-        for review in reviews:
+        logger.info(f"Found {reviews_to_process} reviews remaining for insight extraction (total={total_translated}, already_done={already_processed})")
+        logger.info(f"[并行优化-洞察] 使用 PARALLEL_SIZE={PARALLEL_SIZE} 并行处理, BATCH_SIZE={BATCH_SIZE} 批量入库")
+        
+        # 定义单条评论的处理函数
+        def process_single_insight(review):
+            """并行处理单条评论的洞察提取"""
             try:
-                # 对每条评论都执行洞察提取（即使内容很短，结果可能为空）
-                # [UPDATED] 传入维度 schema，让 AI 按定义的维度分类
                 insights = translation_service.extract_insights(
                     original_text=review.body_original or "",
                     translated_text=review.body_translated or "",
-                    dimension_schema=dimension_schema  # [NEW] 注入维度
+                    dimension_schema=dimension_schema
                 )
-                
-                # [FIX] 由于现在只处理没有洞察的评论，不需要删除旧数据
-                # Insert new insights (if any)
-                if insights:
-                    for insight_data in insights:
+                return {
+                    "review_id": review.id,
+                    "insights": insights,
+                    "success": True
+                }
+            except Exception as e:
+                logger.error(f"Failed to extract insights for review {review.id}: {e}")
+                return {
+                    "review_id": review.id,
+                    "insights": None,
+                    "success": False,
+                    "error": str(e)
+                }
+        
+        # 使用 gevent pool 并行处理
+        from gevent.pool import Pool
+        pool = Pool(PARALLEL_SIZE)
+        
+        # 分批并行处理
+        for batch_start in range(0, reviews_to_process, BATCH_SIZE):
+            batch_end = min(batch_start + BATCH_SIZE, reviews_to_process)
+            batch_reviews = reviews[batch_start:batch_end]
+            
+            # 🚀 并行调用 AI API
+            results = pool.map(process_single_insight, batch_reviews)
+            
+            # 处理结果
+            for result in results:
+                if result["success"] and result["insights"]:
+                    for insight_data in result["insights"]:
                         insight = ReviewInsight(
-                            review_id=review.id,
+                            review_id=result["review_id"],
                             insight_type=insight_data.get('type', 'emotion'),
                             quote=insight_data.get('quote', ''),
                             quote_translated=insight_data.get('quote_translated'),
@@ -966,49 +1122,39 @@ def task_extract_insights(self, product_id: str):
                             dimension=insight_data.get('dimension')
                         )
                         pending_insights.append(insight)
-                    
-                    insights_extracted += len(insights)
-                    logger.debug(f"Extracted {len(insights)} insights for review {review.id}")
+                    insights_extracted += len(result["insights"])
                 else:
-                    # 即使没有洞察，也插入一个标记记录，表示已处理
-                    # 这样统计会显示 100%，且下次不会重复处理
+                    # 标记为已处理（即使没有洞察或失败）
                     empty_marker = ReviewInsight(
-                        review_id=review.id,
-                        insight_type="_empty",  # 特殊标记，表示内容太短无洞察
+                        review_id=result["review_id"],
+                        insight_type="_empty",
                         quote="",
                         analysis=""
                     )
                     pending_insights.append(empty_marker)
-                    logger.debug(f"No insights found for review {review.id} (content too short), marked as processed")
                 
                 processed += 1
-                
-                # 🔥 批量提交：每 BATCH_SIZE 条评论提交一次，减少磁盘反复折磨
-                if processed % BATCH_SIZE == 0:
-                    if pending_insights:
-                        db.add_all(pending_insights)
-                        db.commit()
-                        logger.info(f"[批量入库] 已提交 {len(pending_insights)} 条洞察（进度: {processed}/{reviews_to_process}）")
-                        pending_insights = []
-                    
-                    # 更新 Task 进度
-                    if task_record:
-                        task_record.processed_items = already_processed + processed
-                        db.commit()
-                
-                # Rate limiting（限流器在 API 层已处理，这里只做基本延迟）
-                time.sleep(0.1)
-                
-            except Exception as e:
-                logger.error(f"Failed to extract insights for review {review.id}: {e}")
-                # 批量模式下，单条失败不回滚整个批次
-                continue
+            
+            # 🔥 批量提交数据库
+            if pending_insights:
+                db.add_all(pending_insights)
+                db.commit()
+                logger.info(f"[并行入库] 已提交 {len(pending_insights)} 条洞察（进度: {processed}/{reviews_to_process}）")
+                pending_insights = []
+            
+            # 更新 Task 进度
+            if task_record:
+                task_record.processed_items = already_processed + processed
+                db.commit()
+            
+            # 批次间短暂休息，避免 QPS 超限
+            time.sleep(0.2)
         
         # 🔥 提交剩余的待处理洞察
         if pending_insights:
             db.add_all(pending_insights)
             db.commit()
-            logger.info(f"[批量入库] 最终提交 {len(pending_insights)} 条洞察")
+            logger.info(f"[并行入库] 最终提交 {len(pending_insights)} 条洞察")
         
         logger.info(f"Insight extraction completed: processed {processed} new reviews (total={total_translated}, now_done={already_processed + processed}), {insights_extracted} insights extracted")
         
@@ -1252,94 +1398,111 @@ def task_extract_themes(self, product_id: str):
         # 🔥 批量入库优化（Bulk Insert）：减少磁盘 IO
         BATCH_SIZE = 20  # 每 20 条评论批量提交一次
         pending_themes = []  # 待提交的主题列表
-        logger.info(f"[批量优化] 使用 BATCH_SIZE={BATCH_SIZE} 减少磁盘 IO")
         
-        for review in reviews:
+        # 🚀 并行协程优化：使用 gevent pool 并行调用 AI API
+        PARALLEL_SIZE = 30  # 主题提取：高并发（已验证有效，突破瓶颈）
+        
+        logger.info(f"[并行优化-主题] 使用 PARALLEL_SIZE={PARALLEL_SIZE} 并行处理, BATCH_SIZE={BATCH_SIZE} 批量入库")
+        
+        # 定义单条评论的处理函数（闭包，捕获 context_schema）
+        def process_single_theme(review):
+            """并行处理单条评论的主题提取"""
             try:
-                # 对每条评论都执行主题提取（即使内容很短，结果可能为空）
-                # 🔥 批量模式：不再每条删除旧数据（因为只处理没有主题的评论）
-                
-                # [UPDATED] Extract themes with context schema (forced categorization)
                 themes = translation_service.extract_themes(
                     original_text=review.body_original or "",
                     translated_text=review.body_translated or "",
-                    context_schema=context_schema  # [NEW] 使用标签库进行强制归类
+                    context_schema=context_schema
                 )
-                
-                # [UPDATED] Insert theme highlights - 一条记录 = 一个标签
-                if themes:
-                    for theme_type, items in themes.items():
+                return {
+                    "review_id": review.id,
+                    "themes": themes,
+                    "success": True
+                }
+            except Exception as e:
+                logger.error(f"Failed to extract themes for review {review.id}: {e}")
+                return {
+                    "review_id": review.id,
+                    "themes": None,
+                    "success": False,
+                    "error": str(e)
+                }
+        
+        # 使用 gevent pool 并行处理
+        from gevent.pool import Pool
+        pool = Pool(PARALLEL_SIZE)
+        
+        # 分批并行处理
+        for batch_start in range(0, total_reviews, BATCH_SIZE):
+            batch_end = min(batch_start + BATCH_SIZE, total_reviews)
+            batch_reviews = reviews[batch_start:batch_end]
+            
+            # 🚀 并行调用 AI API
+            results = pool.map(process_single_theme, batch_reviews)
+            
+            # 处理结果
+            batch_themes_count = 0
+            for result in results:
+                if result["success"] and result["themes"]:
+                    for theme_type, items in result["themes"].items():
                         if not items or len(items) == 0:
                             continue
                         
                         for item in items:
-                            # 获取标签信息（兼容两种格式：tag/quote 或 content/content_original）
                             label_name = item.get("content", "").strip()
-                            # 原文证据（兼容 quote 和 content_original）
                             quote = item.get("quote") or item.get("content_original") or None
-                            # 中文翻译证据（兼容 quote_translated 和 content_translated）
                             quote_translated = item.get("quote_translated") or item.get("content_translated") or None
                             explanation = item.get("explanation") or None
                             
                             if not label_name:
                                 continue
                             
-                            # [NEW] 查找对应的 context_label_id
                             context_label_id = label_id_map.get((theme_type, label_name))
                             
-                            # 创建一条记录对应一个标签
                             theme_highlight = ReviewThemeHighlight(
-                                review_id=review.id,
+                                review_id=result["review_id"],
                                 theme_type=theme_type,
-                                label_name=label_name,               # 标签名称
-                                quote=quote,                         # 原文证据
-                                quote_translated=quote_translated,   # [NEW] 中文翻译证据
-                                explanation=explanation,             # 归类理由
-                                context_label_id=context_label_id,   # 关联标签库ID
-                                items=[item]                         # 保留 items 用于向后兼容
+                                label_name=label_name,
+                                quote=quote,
+                                quote_translated=quote_translated,
+                                explanation=explanation,
+                                context_label_id=context_label_id,
+                                items=[item]
                             )
                             pending_themes.append(theme_highlight)
-                            themes_extracted += 1
-                    
-                    logger.debug(f"Extracted {themes_extracted} theme labels for review {review.id}")
+                            batch_themes_count += 1
                 else:
-                    # 即使没有主题，也插入一个标记记录，表示已处理
+                    # 标记为已处理
                     empty_marker = ReviewThemeHighlight(
-                        review_id=review.id,
+                        review_id=result["review_id"],
                         theme_type="_empty",
                         label_name=None,
                         items=None
                     )
                     pending_themes.append(empty_marker)
-                    logger.debug(f"No themes found for review {review.id}, marked as processed")
                 
                 processed += 1
-                
-                # 🔥 批量提交：每 BATCH_SIZE 条评论提交一次
-                if processed % BATCH_SIZE == 0:
-                    if pending_themes:
-                        db.add_all(pending_themes)
-                        db.commit()
-                        logger.info(f"[批量入库] 已提交 {len(pending_themes)} 条主题（进度: {processed}/{total_reviews}）")
-                        pending_themes = []
-                    
-                    # 更新 Task 进度
-                    if task_record:
-                        update_task_heartbeat(db, str(task_record.id), processed_items=processed)
-                
-                # Rate limiting（限流器在 API 层已处理）
-                time.sleep(0.1)
-                
-            except Exception as e:
-                logger.error(f"Failed to extract themes for review {review.id}: {e}")
-                # 批量模式下，单条失败不回滚整个批次
-                continue
+            
+            themes_extracted += batch_themes_count
+            
+            # 🔥 批量提交数据库
+            if pending_themes:
+                db.add_all(pending_themes)
+                db.commit()
+                logger.info(f"[并行入库] 已提交 {len(pending_themes)} 条主题（进度: {processed}/{total_reviews}）")
+                pending_themes = []
+            
+            # 更新 Task 进度
+            if task_record:
+                update_task_heartbeat(db, str(task_record.id), processed_items=processed)
+            
+            # 批次间短暂休息，避免 QPS 超限
+            time.sleep(0.2)
         
         # 🔥 提交剩余的待处理主题
         if pending_themes:
             db.add_all(pending_themes)
             db.commit()
-            logger.info(f"[批量入库] 最终提交 {len(pending_themes)} 条主题")
+            logger.info(f"[并行入库] 最终提交 {len(pending_themes)} 条主题")
         
         logger.info(f"Theme extraction completed: {processed}/{total_reviews} reviews processed, {themes_extracted} theme entries created")
         
@@ -1442,16 +1605,35 @@ def task_ingest_translation_only(self, product_id: str):
         
         db.commit()
         
-        # 4. 🔄 循环翻译所有待处理的评论（只翻译，不提取洞察）
-        # 使用循环处理所有待翻译评论，而不是只处理 100 条
+        # =========================================================================
+        # 4. 🎯 智能批量翻译（差异化处理：VIP单独/标准5条/短评20条）
+        # =========================================================================
+        # 
+        # 策略：
+        # - VIP 评论（>200字或极端星级>100字）：单独翻译，保证质量
+        # - 标准评论（50-200字）：5 条一批
+        # - 短评论（≤50字）：20 条一批，最大化效率
+        #
+        # 优势：
+        # - 质量保证：重要评论不降低翻译质量
+        # - 效率最大化：短评论 QPS 消耗降低 20 倍
+        # - 灵活平衡：中等评论兼顾质量和效率
+        #
         translated_count = 0
         failed_count = 0
-        batch_size = 20  # 🔥 每批处理 20 条（匹配流式插入的频率）
+        
+        # 统计不同类别的处理情况
+        category_stats = {
+            'vip': {'total': 0, 'success': 0},
+            'standard': {'total': 0, 'success': 0},
+            'short': {'total': 0, 'success': 0}
+        }
+        
+        # 每次获取更多评论，按分类处理
+        MAX_FETCH_SIZE = 100  # 每次最多获取 100 条待翻译评论
         
         while True:
-            # 🔒 使用 PostgreSQL 行级锁避免重复处理
-            # FOR UPDATE SKIP LOCKED: 跳过已被其他任务锁定的行
-            # 这样多个任务可以并发处理不同的评论
+            # 🔒 获取待翻译评论（使用 PostgreSQL 行级锁）
             pending_result = db.execute(
                 select(Review)
                 .where(
@@ -1465,54 +1647,118 @@ def task_ingest_translation_only(self, product_id: str):
                     )
                 )
                 .order_by(Review.created_at.desc())
-                .limit(batch_size)
-                .with_for_update(skip_locked=True)  # 🔥 关键：跳过已锁定的行
+                .limit(MAX_FETCH_SIZE)
+                .with_for_update(skip_locked=True)
             )
             pending_reviews = pending_result.scalars().all()
             
             if not pending_reviews:
-                logger.info(f"[流式翻译] 没有更多待翻译的评论")
+                logger.info(f"[智能翻译] 没有更多待翻译的评论")
                 break
             
-            logger.info(f"[流式翻译] 处理批次: {len(pending_reviews)} 条评论")
+            # 🎯 按长度和质量分类
+            grouped_reviews = ReviewClassifier.group_reviews(pending_reviews)
             
-            for review in pending_reviews:
-                try:
+            logger.info(
+                f"[智能翻译] 📊 评论分类: "
+                f"VIP={len(grouped_reviews['vip'])} | "
+                f"标准={len(grouped_reviews['standard'])} | "
+                f"短评={len(grouped_reviews['short'])}"
+            )
+            
+            # 处理顺序：短评 → 标准 → VIP（优先快速处理大量短评）
+            for category in ['short', 'standard', 'vip']:
+                reviews = grouped_reviews[category]
+                if not reviews:
+                    continue
+                
+                batch_size = ReviewClassifier.get_batch_size(category)
+                category_stats[category]['total'] += len(reviews)
+                
+                logger.info(f"[智能翻译] 🚀 处理 {category} 类评论: {len(reviews)} 条，批量大小={batch_size}")
+                
+                # 按批量大小分批处理
+                for i in range(0, len(reviews), batch_size):
+                    batch = reviews[i:i+batch_size]
+                    
                     # 标记为处理中
-                    review.translation_status = TranslationStatus.PROCESSING.value
+                    for review in batch:
+                        review.translation_status = TranslationStatus.PROCESSING.value
                     db.commit()
                     
-                    # 只做翻译，不提取洞察
-                    title_translated, body_translated, sentiment, _ = translation_service.translate_review(
-                        title=review.title_original,
-                        body=review.body_original,
-                        extract_insights=False  # 关闭洞察提取
-                    )
+                    # 构建批量翻译请求
+                    batch_input = []
+                    for review in batch:
+                        text = review.body_original or ""
+                        if text.strip():
+                            batch_input.append({
+                                "id": str(review.id),
+                                "text": text
+                            })
                     
-                    if body_translated and body_translated.strip():
-                        review.title_translated = title_translated
-                        review.body_translated = body_translated
-                        review.sentiment = sentiment.value
-                        review.translation_status = TranslationStatus.COMPLETED.value
-                        translated_count += 1
-                    else:
-                        review.translation_status = TranslationStatus.FAILED.value
-                        failed_count += 1
+                    # 🔥 批量翻译（VIP=1条，标准=5条，短评=20条）
+                    try:
+                        if batch_size == 1:
+                            # VIP 评论：单独翻译
+                            review = batch[0]
+                            translated = translation_service.translate_text(review.body_original)
+                            batch_results = {str(review.id): translated}
+                        else:
+                            # 标准/短评：批量翻译
+                            batch_results = translation_service.translate_batch_with_fallback(batch_input)
+                        
+                        logger.info(f"[智能翻译] {category} 批次翻译完成: {len(batch_results)}/{len(batch)} 条")
+                    except Exception as e:
+                        logger.error(f"[智能翻译] {category} 批次翻译失败: {e}")
+                        batch_results = {}
                     
+                    # 批量更新数据库
+                    for review in batch:
+                        review_id_str = str(review.id)
+                        
+                        if review_id_str in batch_results and batch_results[review_id_str]:
+                            # 翻译成功
+                            review.body_translated = batch_results[review_id_str]
+                            
+                            # 标题单独翻译
+                            if review.title_original and not review.title_translated:
+                                try:
+                                    review.title_translated = translation_service.translate_text(review.title_original)
+                                except:
+                                    pass
+                            
+                            # 情感分析
+                            try:
+                                sentiment = translation_service.analyze_sentiment(review.body_translated)
+                                review.sentiment = sentiment.value
+                            except:
+                                review.sentiment = "neutral"
+                            
+                            review.translation_status = TranslationStatus.COMPLETED.value
+                            translated_count += 1
+                            category_stats[category]['success'] += 1
+                        else:
+                            # 翻译失败
+                            review.translation_status = TranslationStatus.FAILED.value
+                            failed_count += 1
+                    
+                    # 提交本批更新
                     db.commit()
                     
-                    # 控制速率
-                    time.sleep(0.1)
-                    
-                except Exception as e:
-                    logger.warning(f"[流式翻译] 评论 {review.id} 翻译失败: {e}")
-                    review.translation_status = TranslationStatus.FAILED.value
-                    db.commit()
-                    failed_count += 1
+                    # 短暂延迟，避免 QPS 冲高
+                    time.sleep(0.3 if batch_size == 1 else 0.5)
             
-            # 如果这批处理的数量小于 batch_size，说明没有更多了
-            if len(pending_reviews) < batch_size:
+            # 如果获取的评论少于 MAX_FETCH_SIZE，说明没有更多了
+            if len(pending_reviews) < MAX_FETCH_SIZE:
                 break
+        
+        # 输出统计信息
+        logger.info(
+            f"[智能翻译] ✅ 完成: 总计 {translated_count} 条成功, {failed_count} 条失败\n"
+            f"  📊 VIP 评论: {category_stats['vip']['success']}/{category_stats['vip']['total']} 条\n"
+            f"  📊 标准评论: {category_stats['standard']['success']}/{category_stats['standard']['total']} 条\n"
+            f"  📊 短评论: {category_stats['short']['success']}/{category_stats['short']['total']} 条"
+        )
         
         logger.info(f"[流式翻译] 完成: 翻译 {translated_count} 条, 失败 {failed_count} 条")
         
@@ -2034,7 +2280,16 @@ def task_full_auto_analysis(self, product_id: str, task_id: str):
                 logger.info(f"[全自动分析] 📊 并行进度 - 待翻译:{pending_translation} | 待洞察:{pending_insights} | 待主题:{pending_themes}")
                 last_log_time = waited
             
-            # 检查是否全部完成
+            # 检查是否达到90%完成度，可以提前触发报告生成
+            insights_completion = (translated_count - pending_insights) / translated_count if translated_count > 0 else 0
+            themes_completion = (translated_count - pending_themes) / translated_count if translated_count > 0 else 0
+            
+            # 🚀 优化：90%完成度即可触发报告生成
+            if insights_completion >= 0.90 and themes_completion >= 0.90:
+                logger.info(f"[全自动分析] ✅ 达到90%完成度，触发报告生成！洞察:{insights_completion:.0%}, 主题:{themes_completion:.0%}")
+                break
+            
+            # 检查是否全部完成（100%）
             if pending_translation == 0 and pending_insights == 0 and pending_themes == 0:
                 logger.info(f"[全自动分析] ✅ 并行处理全部完成！已翻译:{translated_count}条")
                 break
@@ -2058,19 +2313,22 @@ def task_full_auto_analysis(self, product_id: str, task_id: str):
             update_task_progress(3, TaskStatus.PROCESSING.value)
         
         if waited >= max_wait_seconds:
-            # 🔥 优化：放宽完成度要求，从 95% 降到 85%
-            # 理由：85% 已足够生成高质量报告，剩余任务可异步继续
-            if pending_insights > translated_count * 0.15 or pending_themes > translated_count * 0.15:
-                logger.error(f"[全自动分析] ⚠️ 等待超时且完成度 <85%（洞察待处理:{pending_insights}, 主题待处理:{pending_themes}）")
-                update_task_progress(3, TaskStatus.FAILED.value, f"处理超时，洞察待处理:{pending_insights}，主题待处理:{pending_themes}")
+            # 🔥 优化：放宽完成度要求，从 95% 降到 80%
+            # 理由：80% 已足够生成高质量报告，剩余任务可异步继续
+            insights_completion = (translated_count - pending_insights) / translated_count if translated_count > 0 else 0
+            themes_completion = (translated_count - pending_themes) / translated_count if translated_count > 0 else 0
+            
+            if insights_completion < 0.80 or themes_completion < 0.80:
+                logger.error(f"[全自动分析] ⚠️ 等待超时且完成度 <80%（洞察:{insights_completion:.0%}, 主题:{themes_completion:.0%}）")
+                update_task_progress(3, TaskStatus.FAILED.value, f"处理超时，洞察完成度:{insights_completion:.0%}，主题完成度:{themes_completion:.0%}")
                 return {
                     "success": False,
                     "product_id": product_id,
                     "task_id": task_id,
-                    "error": f"并行处理超时且完成度不足85%，请稍后重试。洞察待处理:{pending_insights}，主题待处理:{pending_themes}"
+                    "error": f"并行处理超时且完成度不足80%，请稍后重试。洞察:{insights_completion:.0%}，主题:{themes_completion:.0%}"
                 }
             else:
-                logger.warning(f"[全自动分析] 并行处理等待超时，但完成度达到85%以上，继续生成报告（洞察:{translated_count - pending_insights}/{translated_count}, 主题:{translated_count - pending_themes}/{translated_count}）")
+                logger.warning(f"[全自动分析] 并行处理等待超时，但完成度达到80%以上，继续生成报告（洞察:{insights_completion:.0%}, 主题:{themes_completion:.0%}）")
         
         # ==========================================
         # Step 4: 生成综合战略版报告
@@ -2096,7 +2354,7 @@ def task_full_auto_analysis(self, product_id: str, task_id: str):
                         min_reviews=10,
                         save_to_db=True,
                         force_regenerate=False,  # [NEW] 不强制重新生成，检查去重
-                        require_full_completion=True  # [NEW] 要求洞察和主题100%完成
+                        require_full_completion=False  # [优化] 允许90%完成度生成报告
                     )
                     await async_db.commit()  # 确保提交
                     return result

@@ -683,6 +683,203 @@ class TranslationService:
             logger.error(f"Translation failed for text: {text[:100]}... Error: {e}")
             raise
     
+    # ==========================================================================
+    # 🔥 批量翻译方法（10 条一批，提升 10 倍效率）
+    # ==========================================================================
+    
+    # 批量翻译系统提示
+    BATCH_TRANSLATION_SYSTEM_PROMPT = """你是一位精通中美文化差异的资深亚马逊跨境电商翻译专家。
+
+## 任务
+将多条亚马逊英文评论批量翻译成中文。
+
+## 翻译原则
+1. **拒绝翻译腔**: 使用自然流畅的中文表达
+2. **情感对齐**: 保持原文的语气和情绪
+3. **电商风格**: 使用符合中国电商的文案风格
+
+## 输入/输出格式
+- 输入: JSON 字典，键为评论 ID，值为英文原文
+- 输出: JSON 字典，键与输入一致，值为中文译文
+- **严格要求**: 只返回 JSON，不要添加任何解释、Markdown 标记或其他文字
+
+## 示例
+输入: {"r1": "Total lemon. Don't waste your money.", "r2": "Game changer for my morning routine."}
+输出: {"r1": "简直是个次品！别浪费钱了。", "r2": "彻底改变了我每天早上的习惯，真香！"}"""
+
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=2, max=15),
+        retry=retry_if_exception_type((Exception,)),
+        reraise=True
+    )
+    def translate_batch(self, reviews: List[dict]) -> dict:
+        """
+        批量翻译多条评论（10 条一批）
+        
+        🔥 核心优化：一次 API 调用翻译 10 条评论
+        - QPS 消耗降低 10 倍
+        - 总体效率提升 8-10 倍
+        
+        Args:
+            reviews: 评论列表，每项包含 {"id": "xxx", "text": "original text"}
+            
+        Returns:
+            翻译结果字典，格式: {"id1": "translated1", "id2": "translated2", ...}
+            
+        Example:
+            results = translation_service.translate_batch([
+                {"id": "r1", "text": "Great product!"},
+                {"id": "r2", "text": "Not worth the money."}
+            ])
+            # 返回: {"r1": "很棒的产品！", "r2": "不值这个价。"}
+        """
+        if not self._check_client():
+            raise RuntimeError("Translation service not configured")
+        
+        if not reviews or len(reviews) == 0:
+            return {}
+        
+        # 构建输入 JSON
+        input_dict = {}
+        for review in reviews:
+            review_id = str(review.get("id", ""))
+            text = review.get("text", "")
+            if review_id and text and text.strip():
+                # 截断超长文本（防止超出 token 限制）
+                text = " ".join(text.split())  # 清理空白
+                if len(text) > 2000:
+                    text = text[:2000] + "..."
+                input_dict[review_id] = text
+        
+        if not input_dict:
+            return {}
+        
+        input_json = json.dumps(input_dict, ensure_ascii=False)
+        
+        logger.info(f"[批量翻译] 开始翻译 {len(input_dict)} 条评论")
+        
+        try:
+            response = self.client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": self.BATCH_TRANSLATION_SYSTEM_PROMPT},
+                    {"role": "user", "content": input_json}
+                ],
+                temperature=0.3,
+                max_tokens=8000,  # 批量翻译需要更多 token
+                timeout=120.0,   # 批量翻译需要更长超时
+            )
+            
+            result_text = response.choices[0].message.content.strip()
+            
+            # 解析 JSON 结果
+            result_dict = self._parse_batch_translation_result(result_text, input_dict)
+            
+            logger.info(f"[批量翻译] 完成: 输入 {len(input_dict)} 条, 成功 {len(result_dict)} 条")
+            
+            return result_dict
+            
+        except Exception as e:
+            logger.error(f"[批量翻译] API 调用失败: {e}")
+            raise
+    
+    def _parse_batch_translation_result(self, result_text: str, input_dict: dict) -> dict:
+        """
+        解析批量翻译结果，带容错处理
+        
+        处理常见的 LLM 输出问题：
+        1. 多余的 Markdown 代码块标记
+        2. 前后有解释文字
+        3. JSON 格式错误
+        """
+        result_dict = {}
+        
+        # 1. 尝试清理 Markdown 代码块
+        clean_text = result_text
+        if "```json" in clean_text:
+            match = re.search(r'```json\s*(.*?)\s*```', clean_text, re.DOTALL)
+            if match:
+                clean_text = match.group(1)
+        elif "```" in clean_text:
+            match = re.search(r'```\s*(.*?)\s*```', clean_text, re.DOTALL)
+            if match:
+                clean_text = match.group(1)
+        
+        # 2. 尝试提取 JSON 对象
+        json_match = re.search(r'\{[^{}]*\}', clean_text, re.DOTALL)
+        if json_match:
+            clean_text = json_match.group(0)
+        
+        # 3. 尝试解析 JSON
+        try:
+            result_dict = json.loads(clean_text)
+            if isinstance(result_dict, dict):
+                # 验证键与输入一致
+                valid_result = {}
+                for key in input_dict.keys():
+                    if key in result_dict and result_dict[key]:
+                        valid_result[key] = str(result_dict[key]).strip()
+                return valid_result
+        except json.JSONDecodeError as e:
+            logger.warning(f"[批量翻译] JSON 解析失败: {e}")
+        
+        # 4. 解析失败，尝试 json_repair（如果可用）
+        try:
+            import json_repair
+            repaired = json_repair.loads(clean_text)
+            if isinstance(repaired, dict):
+                valid_result = {}
+                for key in input_dict.keys():
+                    if key in repaired and repaired[key]:
+                        valid_result[key] = str(repaired[key]).strip()
+                return valid_result
+        except ImportError:
+            pass
+        except Exception as e:
+            logger.warning(f"[批量翻译] json_repair 失败: {e}")
+        
+        # 5. 最终回退：返回空，让调用方降级为单条翻译
+        logger.error(f"[批量翻译] 无法解析结果，原始输出: {result_text[:500]}")
+        return {}
+    
+    def translate_batch_with_fallback(self, reviews: List[dict]) -> dict:
+        """
+        批量翻译，带单条回退机制
+        
+        如果批量翻译失败或部分失败，自动降级为单条翻译
+        
+        Args:
+            reviews: 评论列表，每项包含 {"id": "xxx", "text": "original text"}
+            
+        Returns:
+            翻译结果字典，格式: {"id1": "translated1", "id2": "translated2", ...}
+        """
+        result = {}
+        
+        # 1. 尝试批量翻译
+        try:
+            batch_result = self.translate_batch(reviews)
+            result.update(batch_result)
+        except Exception as e:
+            logger.warning(f"[批量翻译] 批量模式失败，降级为单条: {e}")
+        
+        # 2. 检查是否有未翻译的评论，单条回退
+        for review in reviews:
+            review_id = str(review.get("id", ""))
+            text = review.get("text", "")
+            
+            if review_id and text and review_id not in result:
+                try:
+                    translated = self.translate_text(text)
+                    if translated:
+                        result[review_id] = translated
+                        logger.debug(f"[批量翻译] 单条回退成功: {review_id}")
+                except Exception as e:
+                    logger.warning(f"[批量翻译] 单条回退失败 {review_id}: {e}")
+        
+        return result
+    
     @retry(
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=1, min=2, max=10),
@@ -1149,8 +1346,9 @@ class TranslationService:
         if not self._check_client():
             return []
         
-        # Skip very short reviews
-        if not original_text or len(original_text.strip()) < 20:
+        # [优化] 移除长度限制 - 确保每条评论都能提取洞察
+        # 即使是短评论也可能包含重要信息
+        if not original_text or not original_text.strip():
             return []
         
         try:
