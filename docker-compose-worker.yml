@@ -1,0 +1,172 @@
+# =============================================================================
+# 🖥️ 服务器 B (4核8G) - Worker 节点配置
+# =============================================================================
+# 
+# 职责：
+# - 洞察提取专员（高 PARALLEL_SIZE）
+# - 主题提取专员（高 PARALLEL_SIZE）
+# - 翻译备份（分担主服务器压力）
+# - 全能备份（应急支援）
+#
+# 部署前需要修改：
+# 1. MASTER_IP：服务器 A 的 IP 地址
+# 2. 确保服务器 A 的 Redis 和 PostgreSQL 端口开放
+#
+# 部署：docker-compose -f docker-compose-worker.yml up -d
+# =============================================================================
+
+# ⚠️ 重要：服务器 A 的 IP 地址（从 .env 文件读取）
+x-master-config: &master-config
+  # MASTER_IP 从环境变量读取
+  MASTER_IP: &master-ip "${MASTER_IP:-115.191.30.209}"
+
+services:
+  # ==========================================================================
+  # Worker 1: 洞察专员 (Insight Extraction Worker)
+  # ==========================================================================
+  # 队列：insight_extraction（专属）
+  # 模式：Gevent, 4 协程（低并发）
+  # PARALLEL_SIZE：40（高内部并行）
+  # 职责：专攻洞察提取，物理隔离翻译干扰
+  worker-insight:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: voc-worker-insight
+    restart: unless-stopped
+    # 🔍 洞察专员：低 Celery 并发 + 高 PARALLEL_SIZE
+    command: celery -A app.worker worker --loglevel=info --pool=gevent --concurrency=4 -Q insight_extraction -n insight@%h
+    environment:
+      # ⚠️ 修改为服务器 A 的实际 IP
+      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-vocmaster}:${POSTGRES_PASSWORD:-vocmaster123}@${MASTER_IP:-192.168.1.100}:5432/${POSTGRES_DB:-vocmaster}
+      - REDIS_URL=redis://${MASTER_IP:-192.168.1.100}:6379/0
+      - QWEN_API_KEY=${QWEN_API_KEY}
+      - QWEN_API_BASE=${QWEN_API_BASE:-https://dashscope.aliyuncs.com/compatible-mode/v1}
+      # 🔧 洞察专用配置
+      - INSIGHT_PARALLEL_SIZE=40
+    volumes:
+      - ./backend:/app
+    deploy:
+      resources:
+        limits:
+          memory: 1.5G
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A app.worker inspect ping -d insight@$$HOSTNAME || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    networks:
+      - voc-worker-network
+
+  # ==========================================================================
+  # Worker 2: 主题专员 (Theme Extraction Worker)
+  # ==========================================================================
+  # 队列：theme_extraction（专属）
+  # 模式：Gevent, 4 协程（低并发）
+  # PARALLEL_SIZE：50（高内部并行）
+  # 职责：专攻主题提取，API 响应更快可更高并发
+  worker-theme:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: voc-worker-theme
+    restart: unless-stopped
+    # 🏷️ 主题专员：低 Celery 并发 + 高 PARALLEL_SIZE
+    command: celery -A app.worker worker --loglevel=info --pool=gevent --concurrency=4 -Q theme_extraction -n theme@%h
+    environment:
+      # ⚠️ 修改为服务器 A 的实际 IP
+      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-vocmaster}:${POSTGRES_PASSWORD:-vocmaster123}@${MASTER_IP:-192.168.1.100}:5432/${POSTGRES_DB:-vocmaster}
+      - REDIS_URL=redis://${MASTER_IP:-192.168.1.100}:6379/0
+      - QWEN_API_KEY=${QWEN_API_KEY}
+      - QWEN_API_BASE=${QWEN_API_BASE:-https://dashscope.aliyuncs.com/compatible-mode/v1}
+      # 🔧 主题专用配置
+      - THEME_PARALLEL_SIZE=50
+    volumes:
+      - ./backend:/app
+    deploy:
+      resources:
+        limits:
+          memory: 1.5G
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A app.worker inspect ping -d theme@$$HOSTNAME || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    networks:
+      - voc-worker-network
+
+  # ==========================================================================
+  # Worker 3: 翻译备份 (Translation Worker 2)
+  # ==========================================================================
+  # 队列：translation（与服务器 A 共享）
+  # 模式：Gevent, 40 协程
+  # 职责：分担翻译压力，与主服务器协同处理
+  worker-trans-2:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: voc-worker-trans-2
+    restart: unless-stopped
+    # 🔄 翻译备份：分担主服务器压力
+    command: celery -A app.worker worker --loglevel=info --pool=gevent --concurrency=40 -Q translation -n trans2@%h
+    environment:
+      # ⚠️ 修改为服务器 A 的实际 IP
+      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-vocmaster}:${POSTGRES_PASSWORD:-vocmaster123}@${MASTER_IP:-192.168.1.100}:5432/${POSTGRES_DB:-vocmaster}
+      - REDIS_URL=redis://${MASTER_IP:-192.168.1.100}:6379/0
+      - QWEN_API_KEY=${QWEN_API_KEY}
+      - QWEN_API_BASE=${QWEN_API_BASE:-https://dashscope.aliyuncs.com/compatible-mode/v1}
+    volumes:
+      - ./backend:/app
+    deploy:
+      resources:
+        limits:
+          memory: 1.5G
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A app.worker inspect ping -d trans2@$$HOSTNAME || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    networks:
+      - voc-worker-network
+
+  # ==========================================================================
+  # Worker 4: 全能备份 (Backup Worker)
+  # ==========================================================================
+  # 队列：learning, insight_extraction, theme_extraction
+  # 模式：Gevent, 20 协程
+  # 职责：应急支援，处理溢出任务
+  worker-backup:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: voc-worker-backup
+    restart: unless-stopped
+    # 🛡️ 全能备份：支援所有 AI 任务
+    command: celery -A app.worker worker --loglevel=info --pool=gevent --concurrency=20 -Q learning,insight_extraction,theme_extraction -n backup@%h
+    environment:
+      # ⚠️ 修改为服务器 A 的实际 IP
+      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-vocmaster}:${POSTGRES_PASSWORD:-vocmaster123}@${MASTER_IP:-192.168.1.100}:5432/${POSTGRES_DB:-vocmaster}
+      - REDIS_URL=redis://${MASTER_IP:-192.168.1.100}:6379/0
+      - QWEN_API_KEY=${QWEN_API_KEY}
+      - QWEN_API_BASE=${QWEN_API_BASE:-https://dashscope.aliyuncs.com/compatible-mode/v1}
+    volumes:
+      - ./backend:/app
+    deploy:
+      resources:
+        limits:
+          memory: 1.5G
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A app.worker inspect ping -d backup@$$HOSTNAME || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    networks:
+      - voc-worker-network
+
+networks:
+  voc-worker-network:
+    driver: bridge

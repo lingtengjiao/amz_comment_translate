@@ -1,0 +1,294 @@
+# =============================================================================
+# 🖥️ 服务器 A (8核16G) - 主服务器配置
+# =============================================================================
+# 
+# 职责：
+# - 数据库：PostgreSQL (5GB) + Redis (2GB)
+# - 应用层：FastAPI + React + Nginx
+# - Worker：入库 + 建模 + 翻译主力
+#
+# 部署：docker-compose -f docker-compose-master.yml up -d
+# =============================================================================
+
+services:
+  # ==========================================================================
+  # 🗄️ PostgreSQL Database（8核16G 优化配置）
+  # ==========================================================================
+  db-postgres:
+    image: postgres:15-alpine
+    container_name: voc-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-vocmaster}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-vocmaster123}
+      POSTGRES_DB: ${POSTGRES_DB:-vocmaster}
+      # 🔓 允许所有主机连接（通过密码验证）
+      POSTGRES_HOST_AUTH_METHOD: md5
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    # 🔥 PostgreSQL 高性能配置（16GB 服务器，数据库分配 5GB）
+    # 🔓 listen_addresses='*' 允许远程连接
+    command: >
+      postgres
+      -c listen_addresses='*'
+      -c shared_buffers=4GB
+      -c work_mem=128MB
+      -c max_connections=500
+      -c effective_cache_size=10GB
+      -c maintenance_work_mem=1GB
+      -c checkpoint_completion_target=0.9
+      -c wal_buffers=128MB
+      -c random_page_cost=1.1
+      -c effective_io_concurrency=200
+    deploy:
+      resources:
+        limits:
+          memory: 5G
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-vocmaster}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - voc-network
+
+  # ==========================================================================
+  # 🔴 Redis（2GB 内存限制，消息队列核心）
+  # ==========================================================================
+  db-redis:
+    image: redis:7-alpine
+    container_name: voc-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    # 🔥 Redis 高性能配置 + 密码保护
+    command: >
+      redis-server
+      --maxmemory 2gb
+      --maxmemory-policy allkeys-lru
+      --appendonly yes
+      --appendfsync everysec
+      --tcp-keepalive 300
+      --bind 0.0.0.0
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - voc-network
+
+  # ==========================================================================
+  # 🚀 FastAPI Backend
+  # ==========================================================================
+  app-backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: voc-backend
+    restart: unless-stopped
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-vocmaster}:${POSTGRES_PASSWORD:-vocmaster123}@db-postgres:5432/${POSTGRES_DB:-vocmaster}
+      - REDIS_URL=redis://db-redis:6379/0
+      - QWEN_API_KEY=${QWEN_API_KEY}
+      - QWEN_API_BASE=${QWEN_API_BASE:-https://dashscope.aliyuncs.com/compatible-mode/v1}
+    ports:
+      - "8000:8000"
+    depends_on:
+      db-postgres:
+        condition: service_healthy
+      db-redis:
+        condition: service_healthy
+    volumes:
+      - ./backend:/app
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+    networks:
+      - voc-network
+
+  # ==========================================================================
+  # Worker 1: 基础响应员 (Base Worker)
+  # ==========================================================================
+  # 队列：ingestion, reports, celery
+  # 模式：Prefork, 4 进程（CPU 密集型）
+  # 职责：入库秒回 + 报告生成，不接 AI 活
+  worker-base:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: voc-worker-base
+    restart: unless-stopped
+    # 🏠 Beat 在这里运行（定时任务调度）
+    command: celery -A app.worker worker --beat --loglevel=info --concurrency=4 -Q ingestion,reports,celery -n base@%h
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-vocmaster}:${POSTGRES_PASSWORD:-vocmaster123}@db-postgres:5432/${POSTGRES_DB:-vocmaster}
+      - REDIS_URL=redis://db-redis:6379/0
+      - QWEN_API_KEY=${QWEN_API_KEY}
+      - QWEN_API_BASE=${QWEN_API_BASE:-https://dashscope.aliyuncs.com/compatible-mode/v1}
+    depends_on:
+      db-postgres:
+        condition: service_healthy
+      db-redis:
+        condition: service_healthy
+    volumes:
+      - ./backend:/app
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A app.worker inspect ping -d base@$$HOSTNAME || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    networks:
+      - voc-network
+
+  # ==========================================================================
+  # Worker 2: VIP 建模员 (Learning Worker)
+  # ==========================================================================
+  # 队列：learning（专属快车道）
+  # 模式：Gevent, 30 协程
+  # 职责：维度学习 + 5W建模，新产品秒级响应
+  worker-vip:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: voc-worker-vip
+    restart: unless-stopped
+    command: celery -A app.worker worker --loglevel=info --pool=gevent --concurrency=30 -Q learning -n vip@%h
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-vocmaster}:${POSTGRES_PASSWORD:-vocmaster123}@db-postgres:5432/${POSTGRES_DB:-vocmaster}
+      - REDIS_URL=redis://db-redis:6379/0
+      - QWEN_API_KEY=${QWEN_API_KEY}
+      - QWEN_API_BASE=${QWEN_API_BASE:-https://dashscope.aliyuncs.com/compatible-mode/v1}
+    depends_on:
+      db-postgres:
+        condition: service_healthy
+      db-redis:
+        condition: service_healthy
+    volumes:
+      - ./backend:/app
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A app.worker inspect ping -d vip@$$HOSTNAME || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    networks:
+      - voc-network
+
+  # ==========================================================================
+  # Worker 3: 翻译主力 (Translation Worker)
+  # ==========================================================================
+  # 队列：translation（专属）
+  # 模式：Gevent, 60 协程
+  # 职责：翻译主力军，处理大部分翻译任务
+  worker-trans:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: voc-worker-trans
+    restart: unless-stopped
+    command: celery -A app.worker worker --loglevel=info --pool=gevent --concurrency=60 -Q translation -n trans@%h
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-vocmaster}:${POSTGRES_PASSWORD:-vocmaster123}@db-postgres:5432/${POSTGRES_DB:-vocmaster}
+      - REDIS_URL=redis://db-redis:6379/0
+      - QWEN_API_KEY=${QWEN_API_KEY}
+      - QWEN_API_BASE=${QWEN_API_BASE:-https://dashscope.aliyuncs.com/compatible-mode/v1}
+    depends_on:
+      db-postgres:
+        condition: service_healthy
+      db-redis:
+        condition: service_healthy
+    volumes:
+      - ./backend:/app
+    deploy:
+      resources:
+        limits:
+          memory: 1.5G
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A app.worker inspect ping -d trans@$$HOSTNAME || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    networks:
+      - voc-network
+
+  # ==========================================================================
+  # 🌸 Flower - Celery 实时监控面板
+  # ==========================================================================
+  flower:
+    image: mher/flower:2.0
+    container_name: voc-flower
+    restart: unless-stopped
+    command: celery --broker=redis://db-redis:6379/0 flower --port=5555 --broker_api=redis://db-redis:6379/0
+    ports:
+      - "5555:5555"
+    environment:
+      - CELERY_BROKER_URL=redis://db-redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://db-redis:6379/0
+    depends_on:
+      db-redis:
+        condition: service_healthy
+    networks:
+      - voc-network
+
+  # ==========================================================================
+  # React Frontend
+  # ==========================================================================
+  app-frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: voc-frontend
+    restart: unless-stopped
+    expose:
+      - "80"
+    depends_on:
+      - app-backend
+    networks:
+      - voc-network
+
+  # ==========================================================================
+  # Nginx 反向代理
+  # ==========================================================================
+  nginx:
+    image: nginx:alpine
+    container_name: voc-nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "3000:80"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - app-backend
+      - app-frontend
+    networks:
+      - voc-network
+
+volumes:
+  postgres_data:
+  redis_data:
+
+networks:
+  voc-network:
+    driver: bridge

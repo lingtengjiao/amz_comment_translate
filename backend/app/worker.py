@@ -133,14 +133,16 @@ class ReviewClassifier:
 
 class APIRateLimiter:
     """
-    全局 API 限流器，防止瞬间 QPS 冲高
+    全局 API 限流器，防止瞬间 RPS 冲高
     
     策略：
     - 使用 Redis 滑动窗口计数
-    - 最大 QPS = 25（千问 API 限制 20-30 QPS）
-    - 超过限制时，随机退避 0.1-0.5 秒
+    - qwen-plus-latest: 15,000 RPM = 250 RPS
+    - 安全上限: 250 * 0.8 = 200 RPS（留 20% 余量）
+    - 支持分布式部署（多服务器共享 Redis 限流）
+    - 超过限制时，随机退避 0.05-0.2 秒
     """
-    def __init__(self, redis_client, max_qps=25, window_seconds=1):
+    def __init__(self, redis_client, max_qps=200, window_seconds=1):
         self.redis_client = redis_client
         self.max_qps = max_qps
         self.window_seconds = window_seconds
@@ -195,7 +197,10 @@ class APIRateLimiter:
 redis_client = redis.from_url(settings.REDIS_URL, decode_responses=True)
 
 # 全局限流器实例
-api_limiter = APIRateLimiter(redis_client, max_qps=25)
+# qwen-plus-latest: 15,000 RPM = 250 RPS，安全上限 200 RPS
+import os
+MAX_API_RPS = int(os.environ.get('MAX_API_RPS', '200'))
+api_limiter = APIRateLimiter(redis_client, max_qps=MAX_API_RPS)
 
 def rate_limited_api(api_name="qwen"):
     """
@@ -671,12 +676,18 @@ def task_translate_bullet_points(self, product_id: str):
         # 2. Translate bullet points if not already translated
         if product.bullet_points and not product.bullet_points_translated:
             try:
-                # Parse bullet points from JSON
-                bullet_points = json.loads(product.bullet_points) if isinstance(product.bullet_points, str) else product.bullet_points
+                # Parse bullet points from JSON or array
+                if isinstance(product.bullet_points, str):
+                    bullet_points = json.loads(product.bullet_points)
+                elif isinstance(product.bullet_points, list):
+                    bullet_points = product.bullet_points
+                else:
+                    bullet_points = []
                 
                 if bullet_points and len(bullet_points) > 0:
                     translated_bullets = translation_service.translate_bullet_points(bullet_points)
-                    product.bullet_points_translated = json.dumps(translated_bullets, ensure_ascii=False)
+                    # 直接保存为列表，用于 PostgreSQL TEXT[] 类型
+                    product.bullet_points_translated = translated_bullets
                     logger.info(f"Translated {len(translated_bullets)} bullet points")
             except Exception as e:
                 logger.error(f"Failed to translate bullet points: {e}")
@@ -1069,7 +1080,9 @@ def task_extract_insights(self, product_id: str):
         pending_insights = []  # 待提交的洞察列表
         
         # 🚀 并行协程优化：使用 gevent pool 并行调用 AI API
-        PARALLEL_SIZE = 20  # 洞察提取：中等并发（平衡速度与稳定性）
+        # 支持环境变量配置，服务器 B 可以使用更高的值
+        import os
+        PARALLEL_SIZE = int(os.environ.get('INSIGHT_PARALLEL_SIZE', '40'))  # 默认 40，可通过环境变量调整
         
         logger.info(f"Found {reviews_to_process} reviews remaining for insight extraction (total={total_translated}, already_done={already_processed})")
         logger.info(f"[并行优化-洞察] 使用 PARALLEL_SIZE={PARALLEL_SIZE} 并行处理, BATCH_SIZE={BATCH_SIZE} 批量入库")
@@ -1400,7 +1413,9 @@ def task_extract_themes(self, product_id: str):
         pending_themes = []  # 待提交的主题列表
         
         # 🚀 并行协程优化：使用 gevent pool 并行调用 AI API
-        PARALLEL_SIZE = 30  # 主题提取：高并发（已验证有效，突破瓶颈）
+        # 支持环境变量配置，服务器 B 可以使用更高的值
+        import os
+        PARALLEL_SIZE = int(os.environ.get('THEME_PARALLEL_SIZE', '50'))  # 默认 50，可通过环境变量调整
         
         logger.info(f"[并行优化-主题] 使用 PARALLEL_SIZE={PARALLEL_SIZE} 并行处理, BATCH_SIZE={BATCH_SIZE} 批量入库")
         
@@ -1595,10 +1610,18 @@ def task_ingest_translation_only(self, product_id: str):
         # 3. 翻译五点描述（如果未翻译）
         if product.bullet_points and not product.bullet_points_translated:
             try:
-                bullet_points = json.loads(product.bullet_points) if isinstance(product.bullet_points, str) else product.bullet_points
+                # Parse bullet points from JSON or array
+                if isinstance(product.bullet_points, str):
+                    bullet_points = json.loads(product.bullet_points)
+                elif isinstance(product.bullet_points, list):
+                    bullet_points = product.bullet_points
+                else:
+                    bullet_points = []
+                    
                 if bullet_points and len(bullet_points) > 0:
                     translated_bullets = translation_service.translate_bullet_points(bullet_points)
-                    product.bullet_points_translated = json.dumps(translated_bullets, ensure_ascii=False)
+                    # 直接保存为列表，用于 PostgreSQL TEXT[] 类型
+                    product.bullet_points_translated = translated_bullets
                     logger.info(f"[流式翻译] 五点翻译完成: {len(translated_bullets)} 条")
             except Exception as e:
                 logger.warning(f"[流式翻译] 五点翻译失败: {e}")

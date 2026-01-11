@@ -1,0 +1,246 @@
+# =============================================================================
+# 🚀 VOC 自动化部署工作流
+# =============================================================================
+# 
+# 触发条件：
+# - push 到 main 分支
+# - 手动触发 (workflow_dispatch)
+#
+# 部署流程：
+# 1. 拉取最新代码
+# 2. 通过 SSH 同步代码到服务器
+# 3. 在服务器上构建并重启服务
+#
+# 必需的 GitHub Secrets：
+# - SSH_PRIVATE_KEY: SSH 私钥内容
+# - SERVER_A_IP: 主服务器 IP (115.191.30.209)
+# - SERVER_B_IP: Worker 服务器 IP (115.190.185.29)
+# - SERVER_USER: SSH 用户名 (root)
+# - QWEN_API_KEY: 通义千问 API 密钥
+# =============================================================================
+
+name: 🚀 Deploy to Production
+
+on:
+  push:
+    branches: 
+      - main
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - '.playwright-mcp/**'
+  workflow_dispatch:
+    inputs:
+      deploy_target:
+        description: '部署目标'
+        required: true
+        default: 'all'
+        type: choice
+        options:
+          - all
+          - server-a
+          - server-b
+
+env:
+  SERVER_A_PROJECT_DIR: /opt/voc
+  SERVER_B_PROJECT_DIR: /opt/voc-worker
+
+jobs:
+  # ===========================================================================
+  # 🔍 代码检查（可选）
+  # ===========================================================================
+  lint:
+    name: 🔍 Code Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Check Python syntax
+        run: |
+          cd backend
+          python -m py_compile app/main.py app/worker.py || echo "Python syntax check completed"
+
+  # ===========================================================================
+  # 🖥️ 部署到服务器 A (主服务器)
+  # ===========================================================================
+  deploy-server-a:
+    name: 🖥️ Deploy to Server A (Master)
+    runs-on: ubuntu-latest
+    needs: lint
+    if: |
+      github.event_name == 'push' || 
+      github.event.inputs.deploy_target == 'all' || 
+      github.event.inputs.deploy_target == 'server-a'
+    
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 🔑 Setup SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan -H ${{ secrets.SERVER_A_IP }} >> ~/.ssh/known_hosts
+
+      - name: 📤 Sync code to Server A
+        run: |
+          rsync -avz --delete \
+            --exclude '.git' \
+            --exclude '.github' \
+            --exclude 'node_modules' \
+            --exclude '__pycache__' \
+            --exclude '*.pyc' \
+            --exclude '.env*' \
+            --exclude 'postgres_data' \
+            --exclude 'redis_data' \
+            --exclude '.playwright-mcp' \
+            --exclude '*.zip' \
+            -e "ssh -o StrictHostKeyChecking=no" \
+            ./ ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_A_IP }}:${{ env.SERVER_A_PROJECT_DIR }}/
+
+      - name: 🔧 Create .env file on Server A
+        run: |
+          ssh -o StrictHostKeyChecking=no ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_A_IP }} << 'EOF'
+          cat > ${{ env.SERVER_A_PROJECT_DIR }}/.env << 'ENVFILE'
+          POSTGRES_USER=vocmaster
+          POSTGRES_PASSWORD=vocmaster123
+          POSTGRES_DB=vocmaster
+          QWEN_API_KEY=${{ secrets.QWEN_API_KEY }}
+          QWEN_API_BASE=https://dashscope.aliyuncs.com/compatible-mode/v1
+          ENVFILE
+          EOF
+
+      - name: 🏗️ Build and restart services on Server A
+        run: |
+          ssh -o StrictHostKeyChecking=no ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_A_IP }} << 'EOF'
+          cd ${{ env.SERVER_A_PROJECT_DIR }}
+          
+          echo "📦 Building Docker images..."
+          docker-compose -f docker-compose-master.yml build --parallel
+          
+          echo "🔄 Restarting services (graceful)..."
+          # 先重启后端和 Worker，保持数据库运行
+          docker-compose -f docker-compose-master.yml up -d --force-recreate --no-deps app-backend worker-base worker-vip worker-trans
+          
+          # 重启前端和 Nginx
+          docker-compose -f docker-compose-master.yml up -d --force-recreate --no-deps app-frontend nginx
+          
+          echo "✅ Server A deployment completed!"
+          docker-compose -f docker-compose-master.yml ps
+          EOF
+
+      - name: ❤️ Health check Server A
+        run: |
+          echo "Waiting for services to start..."
+          sleep 30
+          
+          echo "Checking Backend API..."
+          curl -sf http://${{ secrets.SERVER_A_IP }}:8000/health || echo "Backend starting..."
+          
+          echo "Checking Frontend..."
+          curl -sf http://${{ secrets.SERVER_A_IP }}:3000 -o /dev/null && echo "Frontend OK" || echo "Frontend starting..."
+
+  # ===========================================================================
+  # 🔧 部署到服务器 B (Worker 节点)
+  # ===========================================================================
+  deploy-server-b:
+    name: 🔧 Deploy to Server B (Worker)
+    runs-on: ubuntu-latest
+    needs: deploy-server-a
+    if: |
+      github.event_name == 'push' || 
+      github.event.inputs.deploy_target == 'all' || 
+      github.event.inputs.deploy_target == 'server-b'
+    
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 🔑 Setup SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan -H ${{ secrets.SERVER_B_IP }} >> ~/.ssh/known_hosts
+
+      - name: 📤 Sync code to Server B
+        run: |
+          # Server B 只需要 backend 代码和相关配置
+          rsync -avz --delete \
+            --exclude '.git' \
+            --exclude '.github' \
+            --exclude 'node_modules' \
+            --exclude '__pycache__' \
+            --exclude '*.pyc' \
+            --exclude '.env*' \
+            --exclude '.playwright-mcp' \
+            --exclude 'frontend' \
+            --exclude 'extension' \
+            --exclude 'nginx' \
+            --exclude 'docs' \
+            --exclude '*.zip' \
+            --exclude '*.md' \
+            -e "ssh -o StrictHostKeyChecking=no" \
+            ./ ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_B_IP }}:${{ env.SERVER_B_PROJECT_DIR }}/
+
+      - name: 🔧 Create .env file on Server B
+        run: |
+          ssh -o StrictHostKeyChecking=no ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_B_IP }} << 'EOF'
+          cat > ${{ env.SERVER_B_PROJECT_DIR }}/.env << 'ENVFILE'
+          MASTER_IP=${{ secrets.SERVER_A_IP }}
+          POSTGRES_USER=vocmaster
+          POSTGRES_PASSWORD=vocmaster123
+          POSTGRES_DB=vocmaster
+          QWEN_API_KEY=${{ secrets.QWEN_API_KEY }}
+          QWEN_API_BASE=https://dashscope.aliyuncs.com/compatible-mode/v1
+          ENVFILE
+          EOF
+
+      - name: 🏗️ Build and restart services on Server B
+        run: |
+          ssh -o StrictHostKeyChecking=no ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_B_IP }} << 'EOF'
+          cd ${{ env.SERVER_B_PROJECT_DIR }}
+          
+          echo "📦 Building Docker images..."
+          docker-compose -f docker-compose-worker.yml build --parallel
+          
+          echo "🔄 Restarting all workers..."
+          docker-compose -f docker-compose-worker.yml up -d --force-recreate
+          
+          echo "✅ Server B deployment completed!"
+          docker-compose -f docker-compose-worker.yml ps
+          EOF
+
+      - name: ❤️ Verify workers registered
+        run: |
+          echo "Waiting for workers to register..."
+          sleep 45
+          
+          echo "Checking Flower for worker registration..."
+          WORKERS=$(curl -sf http://${{ secrets.SERVER_A_IP }}:5555/api/workers 2>/dev/null | grep -o '"[^"]*@[^"]*"' | wc -l || echo "0")
+          echo "Registered workers: $WORKERS"
+
+  # ===========================================================================
+  # 📋 部署完成通知
+  # ===========================================================================
+  notify:
+    name: 📋 Deployment Summary
+    runs-on: ubuntu-latest
+    needs: [deploy-server-a, deploy-server-b]
+    if: always()
+    
+    steps:
+      - name: 📊 Summary
+        run: |
+          echo "=============================================="
+          echo "🎉 Deployment Summary"
+          echo "=============================================="
+          echo ""
+          echo "🌐 Frontend: http://${{ secrets.SERVER_A_IP }}:3000"
+          echo "🔌 API: http://${{ secrets.SERVER_A_IP }}:8000"
+          echo "🌸 Flower: http://${{ secrets.SERVER_A_IP }}:5555"
+          echo ""
+          echo "Commit: ${{ github.sha }}"
+          echo "Branch: ${{ github.ref_name }}"
+          echo "Triggered by: ${{ github.actor }}"

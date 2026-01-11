@@ -190,17 +190,28 @@ class IngestionService:
                 product.price = info["price"]
             if info.get("bullet_points") and not product.bullet_points:
                 bp = info["bullet_points"]
-                if isinstance(bp, list):
-                    product.bullet_points = json.dumps(bp)
-                else:
-                    product.bullet_points = bp
+                # 确保 bullet_points 是列表格式（用于 PostgreSQL TEXT[] 类型）
+                if isinstance(bp, str):
+                    try:
+                        bp = json.loads(bp)
+                    except json.JSONDecodeError:
+                        bp = [bp] if bp else None
+                elif not isinstance(bp, list):
+                    bp = None
+                product.bullet_points = bp
             self.db.flush()
             return product
         
         # 创建新产品
         bullet_points = info.get("bullet_points")
-        if isinstance(bullet_points, list):
-            bullet_points = json.dumps(bullet_points)
+        # 确保 bullet_points 是列表格式（用于 PostgreSQL TEXT[] 类型）
+        if isinstance(bullet_points, str):
+            try:
+                bullet_points = json.loads(bullet_points)
+            except json.JSONDecodeError:
+                bullet_points = [bullet_points] if bullet_points else None
+        elif not isinstance(bullet_points, list):
+            bullet_points = None
         
         product = Product(
             asin=asin,

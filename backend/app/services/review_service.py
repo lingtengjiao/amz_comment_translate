@@ -778,21 +778,33 @@ class ReviewService:
         else:
             status = TranslationStatus.PENDING
         
-        # Parse bullet_points JSON if stored as string
+        # Parse bullet_points - handle both PostgreSQL text[] array and JSON string
         import json
         bullet_points = None
         bullet_points_translated = None
         
         if product.bullet_points:
-            try:
-                bullet_points = json.loads(product.bullet_points)
-            except (json.JSONDecodeError, TypeError):
+            # PostgreSQL text[] array returns as Python list directly
+            if isinstance(product.bullet_points, list):
+                bullet_points = product.bullet_points
+            elif isinstance(product.bullet_points, str):
+                try:
+                    bullet_points = json.loads(product.bullet_points)
+                except (json.JSONDecodeError, TypeError):
+                    bullet_points = [product.bullet_points] if product.bullet_points else None
+            else:
                 bullet_points = None
         
         if product.bullet_points_translated:
-            try:
-                bullet_points_translated = json.loads(product.bullet_points_translated)
-            except (json.JSONDecodeError, TypeError):
+            # PostgreSQL text[] array returns as Python list directly
+            if isinstance(product.bullet_points_translated, list):
+                bullet_points_translated = product.bullet_points_translated
+            elif isinstance(product.bullet_points_translated, str):
+                try:
+                    bullet_points_translated = json.loads(product.bullet_points_translated)
+                except (json.JSONDecodeError, TypeError):
+                    bullet_points_translated = [product.bullet_points_translated] if product.bullet_points_translated else None
+            else:
                 bullet_points_translated = None
         
         return {
