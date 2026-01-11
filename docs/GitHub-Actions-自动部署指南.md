@@ -181,3 +181,5 @@ docker-compose -f docker-compose-master.yml logs -f app-backend
 - **前端**: http://115.191.30.209:3000
 - **API**: http://115.191.30.209:8000
 - **Flower**: http://115.191.30.209:5555
+
+<!-- 最后部署: 2026-01-11 22:40:02 -->
