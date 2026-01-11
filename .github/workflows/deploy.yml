@@ -115,17 +115,17 @@ jobs:
           cd ${{ env.SERVER_A_PROJECT_DIR }}
           
           echo "📦 Building Docker images..."
-          docker-compose -f docker-compose-master.yml build --parallel
+          docker compose -f docker-compose-master.yml build --parallel
           
           echo "🔄 Restarting services (graceful)..."
           # 先重启后端和 Worker，保持数据库运行
-          docker-compose -f docker-compose-master.yml up -d --force-recreate --no-deps app-backend worker-base worker-vip worker-trans
+          docker compose -f docker-compose-master.yml up -d --force-recreate --no-deps app-backend worker-base worker-vip worker-trans
           
           # 重启前端和 Nginx
-          docker-compose -f docker-compose-master.yml up -d --force-recreate --no-deps app-frontend nginx
+          docker compose -f docker-compose-master.yml up -d --force-recreate --no-deps app-frontend nginx
           
           echo "✅ Server A deployment completed!"
-          docker-compose -f docker-compose-master.yml ps
+          docker compose -f docker-compose-master.yml ps
           EOF
 
       - name: ❤️ Health check Server A
@@ -201,13 +201,13 @@ jobs:
           cd ${{ env.SERVER_B_PROJECT_DIR }}
           
           echo "📦 Building Docker images..."
-          docker-compose -f docker-compose-worker.yml build --parallel
+          docker compose -f docker-compose-worker.yml build --parallel
           
           echo "🔄 Restarting all workers..."
-          docker-compose -f docker-compose-worker.yml up -d --force-recreate
+          docker compose -f docker-compose-worker.yml up -d --force-recreate
           
           echo "✅ Server B deployment completed!"
-          docker-compose -f docker-compose-worker.yml ps
+          docker compose -f docker-compose-worker.yml ps
           EOF
 
       - name: ❤️ Verify workers registered
