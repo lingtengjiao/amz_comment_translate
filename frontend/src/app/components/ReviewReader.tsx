@@ -16,6 +16,7 @@ import {
   AlertTriangle
 } from 'lucide-react';
 import { useState, useMemo, useRef, useEffect, useCallback } from 'react';
+import { useVirtualizer } from '@tanstack/react-virtual';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Button } from './ui/button';
 import { Card } from './ui/card';
@@ -59,8 +60,8 @@ export function ReviewReader() {
   const [isTranslating, setIsTranslating] = useState(false);
   const [translationProgress, setTranslationProgress] = useState(0);
   const [isFullAnalysis, setIsFullAnalysis] = useState(false); // 完整分析模式（翻译+洞察+主题）
-  const [displayedReviews, setDisplayedReviews] = useState(10);
-  const loadMoreRef = useRef<HTMLDivElement>(null);
+  // 虚拟滚动：滚动容器 ref
+  const reviewListRef = useRef<HTMLDivElement>(null);
   const [showHiddenModal, setShowHiddenModal] = useState(false);
   const [editingReview, setEditingReview] = useState<Review | null>(null);
   const [deleteConfirm, setDeleteConfirm] = useState<{ show: boolean; reviewId: string | null }>({
@@ -652,27 +653,13 @@ export function ReviewReader() {
     return [...pinned.sort(sortFunc), ...unpinned.sort(sortFunc)];
   }, [filteredReviews, sortOption, task]);
 
-  // 无限加载功能
-  useEffect(() => {
-    if (!loadMoreRef.current) return;
-
-    const observer = new IntersectionObserver(
-      (entries) => {
-        if (entries[0].isIntersecting && sortedReviews.length > displayedReviews) {
-          setDisplayedReviews(prev => prev + 10);
-        }
-      },
-      { threshold: 0.1 }
-    );
-
-    observer.observe(loadMoreRef.current);
-
-    return () => {
-      if (loadMoreRef.current) {
-        observer.unobserve(loadMoreRef.current);
-      }
-    };
-  }, [sortedReviews.length, displayedReviews]);
+  // 虚拟滚动：只渲染可见区域的评论，性能恒定
+  const rowVirtualizer = useVirtualizer({
+    count: sortedReviews.length,
+    getScrollElement: () => reviewListRef.current,
+    estimateSize: () => 450, // 估计每条评论高度约 450px（包含洞察）
+    overscan: 2, // 预渲染可见区域外 2 个条目
+  });
 
   // 统计媒体数量
   const mediaStats = useMemo(() => {
@@ -1548,42 +1535,65 @@ export function ReviewReader() {
               </div>
             )}
             
-            {/* Reviews List */}
-            <div className="space-y-6 mt-6">
-              {sortedReviews.length === 0 ? (
-                <Card className="p-12 text-center bg-white border-gray-200">
-                  <p className="text-gray-500">没有符合筛选条件的评论</p>
-                </Card>
-              ) : (
-                sortedReviews.slice(0, displayedReviews).map((review) => (
-                  <ReviewCard
-                    key={review.id}
-                    review={review}
-                    highlightEnabled={highlightEnabled}
-                    activeThemes={activeThemes}
-                    allTags={allTags}
-                    sentimentConfig={sentimentConfig}
-                    onEdit={handleEdit}
-                    onDelete={handleDelete}
-                    onToggleHidden={handleToggleHidden}
-                    onTogglePin={handleTogglePin}
-                    isNewlyTranslated={newlyTranslatedIds.has(review.id)}
-                    insightsExpanded={insightsExpanded}
-                  />
-                ))
-              )}
-            </div>
-
-            {/* Load More Trigger */}
-            {sortedReviews.length > displayedReviews && (
-              <div ref={loadMoreRef} className="mt-6 text-center py-4">
-                <Button
-                  onClick={() => setDisplayedReviews(prev => prev + 10)}
-                  variant="outline"
-                  size="sm"
+            {/* Reviews List - 虚拟滚动优化，只渲染可见区域 */}
+            {sortedReviews.length === 0 ? (
+              <Card className="p-12 text-center bg-white border-gray-200 mt-6">
+                <p className="text-gray-500">没有符合筛选条件的评论</p>
+              </Card>
+            ) : (
+              <div 
+                ref={reviewListRef}
+                className="mt-6 overflow-auto"
+                style={{ 
+                  height: isFullscreen ? 'calc(100vh - 280px)' : 'calc(100vh - 350px)',
+                  minHeight: '500px'
+                }}
+              >
+                <div
+                  style={{
+                    height: `${rowVirtualizer.getTotalSize()}px`,
+                    width: '100%',
+                    position: 'relative',
+                  }}
                 >
-                  加载更多评论...
-                </Button>
+                  {rowVirtualizer.getVirtualItems().map((virtualRow) => {
+                    const review = sortedReviews[virtualRow.index];
+                    return (
+                      <div
+                        key={review.id}
+                        data-index={virtualRow.index}
+                        ref={rowVirtualizer.measureElement}
+                        style={{
+                          position: 'absolute',
+                          top: 0,
+                          left: 0,
+                          width: '100%',
+                          transform: `translateY(${virtualRow.start}px)`,
+                          paddingBottom: '24px', // 评论间距
+                        }}
+                      >
+                        <ReviewCard
+                          review={review}
+                          highlightEnabled={highlightEnabled}
+                          activeThemes={activeThemes}
+                          allTags={allTags}
+                          sentimentConfig={sentimentConfig}
+                          onEdit={handleEdit}
+                          onDelete={handleDelete}
+                          onToggleHidden={handleToggleHidden}
+                          onTogglePin={handleTogglePin}
+                          isNewlyTranslated={newlyTranslatedIds.has(review.id)}
+                          insightsExpanded={insightsExpanded}
+                        />
+                      </div>
+                    );
+                  })}
+                </div>
+                
+                {/* 底部信息 */}
+                <div className="text-center py-4 text-sm text-gray-500">
+                  共 {sortedReviews.length} 条评论
+                </div>
               </div>
             )}
           </TabsContent>
