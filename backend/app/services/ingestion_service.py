@@ -139,6 +139,14 @@ class IngestionService:
         
         if not filtered_reviews:
             logger.info(f"[{asin}] 全部 {len(all_reviews)} 条评论已存在，跳过")
+            
+            # [FIXED] 即使没有新评论，也要创建 UserProject 关联
+            # 这样用户采集已有产品时，也能在"我的项目"中看到
+            if user_id:
+                # 需要先获取产品 ID
+                product = self._get_or_create_product(asin, product_info)
+                self._create_or_update_user_project(user_id, product.id, 0)
+            
             return 0, skipped_redis
         
         # Step 2: 内存去重
@@ -157,8 +165,10 @@ class IngestionService:
             inserted_ids = [r.get("review_id") for r in unique_reviews[:inserted] if r.get("review_id")]
             self.deduplicator.mark_as_seen(asin, inserted_ids)
         
-        # [NEW] Step 6: 创建用户项目关联
-        if user_id and inserted > 0:
+        # [FIXED] Step 6: 创建用户项目关联
+        # 无论是否有新评论入库，只要用户采集了产品，就创建关联
+        # 这样用户 B 采集已有产品时，也能在"我的项目"中看到
+        if user_id:
             self._create_or_update_user_project(user_id, product.id, inserted)
         
         total_skipped = skipped_redis + skipped_memory + skipped_db
@@ -343,13 +353,17 @@ class IngestionService:
         """
         创建或更新用户项目关联
         
+        [FIXED] 无论 reviews_count 是否 > 0，都会创建/更新关联
+        这样用户采集已有产品时，也能在"我的项目"中看到
+        
         Args:
             user_id: 用户 UUID（字符串）
             product_id: 产品 UUID
-            reviews_count: 本次贡献的评论数
+            reviews_count: 本次贡献的评论数（可能为 0）
         """
         from app.models.user_project import UserProject
         from uuid import UUID
+        from datetime import datetime
         
         try:
             # 转换 user_id 为 UUID
@@ -367,18 +381,26 @@ class IngestionService:
             user_project = result.scalar_one_or_none()
             
             if user_project:
-                # 更新贡献数
-                user_project.reviews_contributed = (user_project.reviews_contributed or 0) + reviews_count
-                logger.info(f"[UserProject] 更新用户 {user_id} 的项目关联，新增贡献 {reviews_count} 条")
+                # 已存在：更新贡献数和访问时间
+                if reviews_count > 0:
+                    user_project.reviews_contributed = (user_project.reviews_contributed or 0) + reviews_count
+                    logger.info(f"[UserProject] 更新用户 {user_id} 的项目关联，新增贡献 {reviews_count} 条")
+                else:
+                    # 即使没有新评论，也更新访问时间
+                    logger.info(f"[UserProject] 用户 {user_id} 重新采集产品，评论全部已存在，更新访问时间")
+                user_project.last_viewed_at = datetime.now()
             else:
-                # 创建新关联
+                # 不存在：创建新关联
                 user_project = UserProject(
                     user_id=user_uuid,
                     product_id=product_id,
-                    reviews_contributed=reviews_count
+                    reviews_contributed=reviews_count  # 可能为 0
                 )
                 self.db.add(user_project)
-                logger.info(f"[UserProject] 创建用户 {user_id} 的项目关联，贡献 {reviews_count} 条")
+                if reviews_count > 0:
+                    logger.info(f"[UserProject] 创建用户 {user_id} 的项目关联，贡献 {reviews_count} 条")
+                else:
+                    logger.info(f"[UserProject] 创建用户 {user_id} 的项目关联（产品已有历史数据）")
             
             self.db.commit()
             

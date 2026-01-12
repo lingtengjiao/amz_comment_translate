@@ -150,6 +150,15 @@ export function DimensionSetupDialog({
     }
   }, [open, isReady, fetchProgress]);
   
+  // [FIXED] 当 asin 变化时重置状态（切换产品时）
+  useEffect(() => {
+    setTranslationProgress(0);
+    setInsightsProgress(0);
+    setThemesProgress(0);
+    setIsReady(false);
+    setError(null);
+  }, [asin]);
+  
   // 重置状态当对话框关闭时
   useEffect(() => {
     if (!open) {

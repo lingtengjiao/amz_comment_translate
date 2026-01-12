@@ -518,42 +518,54 @@ class ReviewService:
         """
         Get all products with their review statistics.
         
+        [OPTIMIZED] 使用 LEFT JOIN + 条件聚合，一次查询获取所有数据
+        原来: N+1 查询 (1 + N*3 次 SQL)
+        现在: 1 次 SQL 查询
+        
         Returns:
             List of product dicts with statistics
         """
-        # Get all products
-        products_result = await self.db.execute(
-            select(Product).order_by(Product.updated_at.desc())
+        from sqlalchemy import case, literal
+        from sqlalchemy.orm import aliased
+        
+        # 使用 LEFT JOIN + 条件聚合，一次查询获取所有产品及其统计
+        query = (
+            select(
+                Product,
+                func.count(Review.id).label('total_reviews'),
+                func.count(
+                    case(
+                        (Review.translation_status == TranslationStatus.COMPLETED.value, Review.id),
+                        else_=literal(None)
+                    )
+                ).label('translated_reviews'),
+                func.coalesce(
+                    func.avg(
+                        case(
+                            (Review.id.isnot(None), Review.rating),
+                            else_=literal(None)
+                        )
+                    ),
+                    literal(0.0)
+                ).label('calculated_avg_rating')
+            )
+            .outerjoin(Review, Review.product_id == Product.id)
+            .group_by(Product.id)
+            .order_by(Product.updated_at.desc())
         )
-        products = products_result.scalars().all()
+        
+        result_rows = await self.db.execute(query)
+        rows = result_rows.all()
         
         result = []
-        for product in products:
-            # Get review counts
-            total_result = await self.db.execute(
-                select(func.count(Review.id)).where(Review.product_id == product.id)
-            )
-            total_reviews = total_result.scalar() or 0
+        for row in rows:
+            product = row[0]
+            total_reviews = row[1] or 0
+            translated_reviews = row[2] or 0
+            calculated_avg = float(row[3]) if row[3] else 0.0
             
-            translated_result = await self.db.execute(
-                select(func.count(Review.id)).where(
-                    and_(
-                        Review.product_id == product.id,
-                        Review.translation_status == TranslationStatus.COMPLETED.value
-                    )
-                )
-            )
-            translated_reviews = translated_result.scalar() or 0
-            
-            # Use real average rating from product page, fallback to calculated if not available
-            if product.average_rating:
-                avg_rating = float(product.average_rating)
-            else:
-                # Fallback: calculate from collected reviews (for backward compatibility)
-                avg_result = await self.db.execute(
-                    select(func.avg(Review.rating)).where(Review.product_id == product.id)
-                )
-                avg_rating = avg_result.scalar() or 0.0
+            # Use real average rating from product page, fallback to calculated
+            avg_rating = float(product.average_rating) if product.average_rating else calculated_avg
             
             # Determine overall status
             if total_reviews == 0:
@@ -573,7 +585,7 @@ class ReviewService:
                 "marketplace": product.marketplace,
                 "total_reviews": total_reviews,
                 "translated_reviews": translated_reviews,
-                "average_rating": round(float(avg_rating), 2),
+                "average_rating": round(avg_rating, 2),
                 "translation_status": status,
                 "created_at": product.created_at,
                 "updated_at": product.updated_at
@@ -585,6 +597,10 @@ class ReviewService:
         """
         Get products by their IDs with review statistics.
         
+        [OPTIMIZED] 使用 LEFT JOIN + 条件聚合，一次查询获取所有数据
+        原来: N+1 查询 (1 + N*3 次 SQL)
+        现在: 1 次 SQL 查询
+        
         Args:
             product_ids: List of product UUIDs
             
@@ -594,40 +610,47 @@ class ReviewService:
         if not product_ids:
             return []
         
-        # Get products by IDs
-        products_result = await self.db.execute(
-            select(Product)
+        from sqlalchemy import case, literal
+        
+        # 使用 LEFT JOIN + 条件聚合，一次查询获取所有产品及其统计
+        query = (
+            select(
+                Product,
+                func.count(Review.id).label('total_reviews'),
+                func.count(
+                    case(
+                        (Review.translation_status == TranslationStatus.COMPLETED.value, Review.id),
+                        else_=literal(None)
+                    )
+                ).label('translated_reviews'),
+                func.coalesce(
+                    func.avg(
+                        case(
+                            (Review.id.isnot(None), Review.rating),
+                            else_=literal(None)
+                        )
+                    ),
+                    literal(0.0)
+                ).label('calculated_avg_rating')
+            )
             .where(Product.id.in_(product_ids))
+            .outerjoin(Review, Review.product_id == Product.id)
+            .group_by(Product.id)
             .order_by(Product.updated_at.desc())
         )
-        products = products_result.scalars().all()
+        
+        result_rows = await self.db.execute(query)
+        rows = result_rows.all()
         
         result = []
-        for product in products:
-            # Get review counts
-            total_result = await self.db.execute(
-                select(func.count(Review.id)).where(Review.product_id == product.id)
-            )
-            total_reviews = total_result.scalar() or 0
+        for row in rows:
+            product = row[0]
+            total_reviews = row[1] or 0
+            translated_reviews = row[2] or 0
+            calculated_avg = float(row[3]) if row[3] else 0.0
             
-            translated_result = await self.db.execute(
-                select(func.count(Review.id)).where(
-                    and_(
-                        Review.product_id == product.id,
-                        Review.translation_status == TranslationStatus.COMPLETED.value
-                    )
-                )
-            )
-            translated_reviews = translated_result.scalar() or 0
-            
-            # Use real average rating from product page
-            if product.average_rating:
-                avg_rating = float(product.average_rating)
-            else:
-                avg_result = await self.db.execute(
-                    select(func.avg(Review.rating)).where(Review.product_id == product.id)
-                )
-                avg_rating = avg_result.scalar() or 0.0
+            # Use real average rating from product page, fallback to calculated
+            avg_rating = float(product.average_rating) if product.average_rating else calculated_avg
             
             # Determine overall status
             if total_reviews == 0:
@@ -647,7 +670,7 @@ class ReviewService:
                 "marketplace": product.marketplace,
                 "total_reviews": total_reviews,
                 "translated_reviews": translated_reviews,
-                "average_rating": round(float(avg_rating), 2),
+                "average_rating": round(avg_rating, 2),
                 "translation_status": status,
                 "created_at": product.created_at,
                 "updated_at": product.updated_at
@@ -659,13 +682,20 @@ class ReviewService:
         """
         Get detailed statistics for a product.
         
+        [OPTIMIZED] 使用条件聚合，将 14+ 次查询合并为 2 次查询
+        原来: 1(product) + 5(星级) + 3(情感) + 4(统计) + 2(子查询) = 15 次 SQL
+        现在: 1(product) + 1(聚合统计) + 1(子查询统计) = 3 次 SQL
+        
         Args:
             asin: Product ASIN
             
         Returns:
             Dict with product info and statistics
         """
-        # Get product
+        from sqlalchemy import case, literal
+        from app.models.theme_highlight import ReviewThemeHighlight
+        
+        # 查询 1: 获取产品
         product_result = await self.db.execute(
             select(Product).where(Product.asin == asin)
         )
@@ -674,99 +704,79 @@ class ReviewService:
         if not product:
             return None
         
-        # Rating distribution (exclude deleted reviews)
-        rating_dist = {}
-        for star in range(1, 6):
-            count_result = await self.db.execute(
-                select(func.count(Review.id)).where(
-                    and_(
-                        Review.product_id == product.id,
-                        Review.rating == star,
-                        Review.is_deleted == False
-                    )
-                )
-            )
-            rating_dist[f"star_{star}"] = count_result.scalar() or 0
+        # 查询 2: 使用条件聚合一次获取所有基础统计
+        # 包括：星级分布(5个)、情感分布(3个)、总数、翻译数、平均分
+        stats_query = select(
+            # Total reviews (exclude deleted)
+            func.count(case((Review.is_deleted == False, Review.id), else_=literal(None))).label('total_reviews'),
+            # Translated reviews
+            func.count(case(
+                (and_(Review.is_deleted == False, Review.translation_status == TranslationStatus.COMPLETED.value), Review.id),
+                else_=literal(None)
+            )).label('translated_reviews'),
+            # Star ratings distribution
+            func.count(case((and_(Review.is_deleted == False, Review.rating == 1), Review.id), else_=literal(None))).label('star_1'),
+            func.count(case((and_(Review.is_deleted == False, Review.rating == 2), Review.id), else_=literal(None))).label('star_2'),
+            func.count(case((and_(Review.is_deleted == False, Review.rating == 3), Review.id), else_=literal(None))).label('star_3'),
+            func.count(case((and_(Review.is_deleted == False, Review.rating == 4), Review.id), else_=literal(None))).label('star_4'),
+            func.count(case((and_(Review.is_deleted == False, Review.rating == 5), Review.id), else_=literal(None))).label('star_5'),
+            # Sentiment distribution
+            func.count(case((and_(Review.is_deleted == False, Review.sentiment == 'positive'), Review.id), else_=literal(None))).label('positive'),
+            func.count(case((and_(Review.is_deleted == False, Review.sentiment == 'neutral'), Review.id), else_=literal(None))).label('neutral'),
+            func.count(case((and_(Review.is_deleted == False, Review.sentiment == 'negative'), Review.id), else_=literal(None))).label('negative'),
+            # Calculated average rating
+            func.avg(case((Review.is_deleted == False, Review.rating), else_=literal(None))).label('calculated_avg')
+        ).where(Review.product_id == product.id)
         
-        # Sentiment distribution (exclude deleted reviews)
-        sentiment_dist = {}
-        for sentiment in ["positive", "neutral", "negative"]:
-            count_result = await self.db.execute(
-                select(func.count(Review.id)).where(
-                    and_(
-                        Review.product_id == product.id,
-                        Review.sentiment == sentiment,
-                        Review.is_deleted == False
-                    )
-                )
-            )
-            sentiment_dist[sentiment] = count_result.scalar() or 0
+        stats_result = await self.db.execute(stats_query)
+        stats_row = stats_result.one()
         
-        # Total and translated counts (exclude deleted reviews)
-        total_result = await self.db.execute(
-            select(func.count(Review.id)).where(
-                and_(
-                    Review.product_id == product.id,
-                    Review.is_deleted == False
-                )
-            )
-        )
-        total_reviews = total_result.scalar() or 0
+        total_reviews = stats_row.total_reviews or 0
+        translated_reviews = stats_row.translated_reviews or 0
         
-        translated_result = await self.db.execute(
-            select(func.count(Review.id)).where(
-                and_(
-                    Review.product_id == product.id,
-                    Review.translation_status == TranslationStatus.COMPLETED.value,
-                    Review.is_deleted == False
-                )
-            )
-        )
-        translated_reviews = translated_result.scalar() or 0
+        rating_dist = {
+            "star_1": stats_row.star_1 or 0,
+            "star_2": stats_row.star_2 or 0,
+            "star_3": stats_row.star_3 or 0,
+            "star_4": stats_row.star_4 or 0,
+            "star_5": stats_row.star_5 or 0,
+        }
         
-        # Count reviews with insights (exclude deleted reviews)
-        insights_result = await self.db.execute(
-            select(func.count(Review.id)).where(
-                and_(
-                    Review.product_id == product.id,
+        sentiment_dist = {
+            "positive": stats_row.positive or 0,
+            "neutral": stats_row.neutral or 0,
+            "negative": stats_row.negative or 0,
+        }
+        
+        calculated_avg = float(stats_row.calculated_avg) if stats_row.calculated_avg else 0.0
+        
+        # 查询 3: 使用子查询统计 insights 和 themes（这两个需要 exists 子查询）
+        # 合并为一次查询
+        subquery_stats = select(
+            func.count(case(
+                (and_(
                     Review.is_deleted == False,
-                    exists(
-                        select(1).where(ReviewInsight.review_id == Review.id)
-                    )
-                )
-            )
-        )
-        reviews_with_insights = insights_result.scalar() or 0
-        
-        # Count reviews with theme highlights (exclude deleted reviews)
-        from app.models.theme_highlight import ReviewThemeHighlight
-        themes_result = await self.db.execute(
-            select(func.count(Review.id.distinct())).where(
-                and_(
-                    Review.product_id == product.id,
+                    exists(select(1).where(ReviewInsight.review_id == Review.id))
+                ), Review.id),
+                else_=literal(None)
+            )).label('reviews_with_insights'),
+            func.count(case(
+                (and_(
                     Review.is_deleted == False,
-                    exists(
-                        select(1).where(ReviewThemeHighlight.review_id == Review.id)
-                    )
-                )
-            )
-        )
-        reviews_with_themes = themes_result.scalar() or 0
+                    exists(select(1).where(ReviewThemeHighlight.review_id == Review.id))
+                ), Review.id),
+                else_=literal(None)
+            )).label('reviews_with_themes')
+        ).where(Review.product_id == product.id)
         
-        # Use real average rating from product page, fallback to calculated if not available
-        if product.average_rating:
-            avg_rating = float(product.average_rating)
-        else:
-            # Fallback: calculate from collected reviews (exclude deleted)
-            avg_result = await self.db.execute(
-                select(func.avg(Review.rating)).where(
-                    and_(
-                        Review.product_id == product.id,
-                        Review.is_deleted == False
-                    )
-                )
-            )
-            avg_rating = avg_result.scalar() or 0.0
+        subquery_result = await self.db.execute(subquery_stats)
+        subquery_row = subquery_result.one()
+        
+        reviews_with_insights = subquery_row.reviews_with_insights or 0
+        reviews_with_themes = subquery_row.reviews_with_themes or 0
+        
+        # Use real average rating from product page, fallback to calculated
+        avg_rating = float(product.average_rating) if product.average_rating else calculated_avg
         
         # Determine overall status
         if total_reviews == 0:

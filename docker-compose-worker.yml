@@ -34,16 +34,17 @@ services:
       dockerfile: Dockerfile
     container_name: voc-worker-insight
     restart: unless-stopped
-    # 🔍 洞察专员：低 Celery 并发 + 高 PARALLEL_SIZE
-    command: celery -A app.worker worker --loglevel=info --pool=gevent --concurrency=4 -Q insight_extraction -n insight@%h
+    # 🔍 [OPTIMIZED] 洞察专员：提升 Celery 并发 + 高 PARALLEL_SIZE
+    # 从 4 → 10，支持同时处理更多产品的任务
+    command: celery -A app.worker worker --loglevel=info --pool=gevent --concurrency=10 -Q insight_extraction -n insight@%h
     environment:
       # ⚠️ 修改为服务器 A 的实际 IP
       - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-vocmaster}:${POSTGRES_PASSWORD:-vocmaster123}@${MASTER_IP:-192.168.1.100}:5432/${POSTGRES_DB:-vocmaster}
       - REDIS_URL=redis://${MASTER_IP:-192.168.1.100}:6379/0
       - QWEN_API_KEY=${QWEN_API_KEY}
       - QWEN_API_BASE=${QWEN_API_BASE:-https://dashscope.aliyuncs.com/compatible-mode/v1}
-      # 🔧 洞察专用配置
-      - INSIGHT_PARALLEL_SIZE=40
+      # 🔧 [OPTIMIZED] 洞察专用配置 - 提升并行度
+      - INSIGHT_PARALLEL_SIZE=60
     volumes:
       - ./backend:/app
     deploy:
@@ -72,16 +73,17 @@ services:
       dockerfile: Dockerfile
     container_name: voc-worker-theme
     restart: unless-stopped
-    # 🏷️ 主题专员：低 Celery 并发 + 高 PARALLEL_SIZE
-    command: celery -A app.worker worker --loglevel=info --pool=gevent --concurrency=4 -Q theme_extraction -n theme@%h
+    # 🏷️ [OPTIMIZED] 主题专员：提升 Celery 并发 + 高 PARALLEL_SIZE
+    # 从 4 → 10，支持同时处理更多产品的任务
+    command: celery -A app.worker worker --loglevel=info --pool=gevent --concurrency=10 -Q theme_extraction -n theme@%h
     environment:
       # ⚠️ 修改为服务器 A 的实际 IP
       - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-vocmaster}:${POSTGRES_PASSWORD:-vocmaster123}@${MASTER_IP:-192.168.1.100}:5432/${POSTGRES_DB:-vocmaster}
       - REDIS_URL=redis://${MASTER_IP:-192.168.1.100}:6379/0
       - QWEN_API_KEY=${QWEN_API_KEY}
       - QWEN_API_BASE=${QWEN_API_BASE:-https://dashscope.aliyuncs.com/compatible-mode/v1}
-      # 🔧 主题专用配置
-      - THEME_PARALLEL_SIZE=50
+      # 🔧 [OPTIMIZED] 主题专用配置 - 提升并行度
+      - THEME_PARALLEL_SIZE=80
     volumes:
       - ./backend:/app
     deploy:

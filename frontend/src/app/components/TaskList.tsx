@@ -20,11 +20,34 @@ function EmptyState() {
   );
 }
 
+// [OPTIMIZED] 骨架屏 - 比简单的"加载中"更好的用户体验
+function SkeletonCard() {
+  return (
+    <div className="bg-white border border-gray-100 rounded-lg p-4 animate-pulse">
+      <div className="flex gap-4">
+        {/* Image skeleton */}
+        <div className="w-24 h-24 bg-gray-200 rounded-lg flex-shrink-0" />
+        {/* Content skeleton */}
+        <div className="flex-1 space-y-3">
+          <div className="h-3 bg-gray-200 rounded w-20" />
+          <div className="h-4 bg-gray-200 rounded w-full" />
+          <div className="h-4 bg-gray-200 rounded w-3/4" />
+          <div className="flex gap-4 mt-auto pt-2">
+            <div className="h-4 bg-gray-200 rounded w-12" />
+            <div className="h-4 bg-gray-200 rounded w-16" />
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function LoadingState() {
   return (
-    <div className="flex flex-col items-center justify-center py-20">
-      <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
-      <p className="mt-4 text-gray-600">加载中...</p>
+    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+      {[1, 2, 3, 4, 5, 6].map(i => (
+        <SkeletonCard key={i} />
+      ))}
     </div>
   );
 }

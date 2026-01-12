@@ -1075,14 +1075,15 @@ def task_extract_insights(self, product_id: str):
         processed = 0
         insights_extracted = 0
         
-        # 🔥 批量入库优化（Bulk Insert）：减少磁盘 IO
-        BATCH_SIZE = 20  # 每 20 条评论批量提交一次
-        pending_insights = []  # 待提交的洞察列表
-        
         # 🚀 并行协程优化：使用 gevent pool 并行调用 AI API
         # 支持环境变量配置，服务器 B 可以使用更高的值
         import os
-        PARALLEL_SIZE = int(os.environ.get('INSIGHT_PARALLEL_SIZE', '40'))  # 默认 40，可通过环境变量调整
+        PARALLEL_SIZE = int(os.environ.get('INSIGHT_PARALLEL_SIZE', '60'))  # 默认 60，可通过环境变量调整
+        
+        # 🔥 [OPTIMIZED] BATCH_SIZE = PARALLEL_SIZE，充分利用并行池
+        # 之前 BATCH_SIZE=20 限制了真实并发，现在与 PARALLEL_SIZE 同步
+        BATCH_SIZE = PARALLEL_SIZE
+        pending_insights = []  # 待提交的洞察列表
         
         logger.info(f"Found {reviews_to_process} reviews remaining for insight extraction (total={total_translated}, already_done={already_processed})")
         logger.info(f"[并行优化-洞察] 使用 PARALLEL_SIZE={PARALLEL_SIZE} 并行处理, BATCH_SIZE={BATCH_SIZE} 批量入库")
@@ -1160,8 +1161,8 @@ def task_extract_insights(self, product_id: str):
                 task_record.processed_items = already_processed + processed
                 db.commit()
             
-            # 批次间短暂休息，避免 QPS 超限
-            time.sleep(0.2)
+            # [OPTIMIZED] 批次间微小休息，阿里云 API 限流一般 60-100 QPS，0.05s 足够
+            time.sleep(0.05)
         
         # 🔥 提交剩余的待处理洞察
         if pending_insights:
@@ -1408,14 +1409,15 @@ def task_extract_themes(self, product_id: str):
             label_id_map = {}
             logger.debug(f"无标签库，使用开放提取模式")
         
-        # 🔥 批量入库优化（Bulk Insert）：减少磁盘 IO
-        BATCH_SIZE = 20  # 每 20 条评论批量提交一次
-        pending_themes = []  # 待提交的主题列表
-        
         # 🚀 并行协程优化：使用 gevent pool 并行调用 AI API
         # 支持环境变量配置，服务器 B 可以使用更高的值
         import os
-        PARALLEL_SIZE = int(os.environ.get('THEME_PARALLEL_SIZE', '50'))  # 默认 50，可通过环境变量调整
+        PARALLEL_SIZE = int(os.environ.get('THEME_PARALLEL_SIZE', '80'))  # 默认 80，可通过环境变量调整
+        
+        # 🔥 [OPTIMIZED] BATCH_SIZE = PARALLEL_SIZE，充分利用并行池
+        # 之前 BATCH_SIZE=20 限制了真实并发，现在与 PARALLEL_SIZE 同步
+        BATCH_SIZE = PARALLEL_SIZE
+        pending_themes = []  # 待提交的主题列表
         
         logger.info(f"[并行优化-主题] 使用 PARALLEL_SIZE={PARALLEL_SIZE} 并行处理, BATCH_SIZE={BATCH_SIZE} 批量入库")
         
@@ -1510,8 +1512,8 @@ def task_extract_themes(self, product_id: str):
             if task_record:
                 update_task_heartbeat(db, str(task_record.id), processed_items=processed)
             
-            # 批次间短暂休息，避免 QPS 超限
-            time.sleep(0.2)
+            # [OPTIMIZED] 批次间微小休息，阿里云 API 限流一般 60-100 QPS，0.05s 足够
+            time.sleep(0.05)
         
         # 🔥 提交剩余的待处理主题
         if pending_themes:
