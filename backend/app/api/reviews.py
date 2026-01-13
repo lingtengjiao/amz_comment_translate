@@ -618,10 +618,13 @@ async def get_products(
 @products_router.get("/{asin}/stats", response_model=ProductStatsResponse)
 async def get_product_stats(
     asin: str,
+    no_cache: bool = Query(False, description="跳过缓存"),
     db: AsyncSession = Depends(get_db)
 ):
     """
     Get detailed statistics for a product.
+    
+    🚀 Performance: Results are cached in Redis for 5 minutes.
     
     **[NEW] Auto-initializes 5W label learning on first visit:**
     - If product has translated reviews (>=10) but no context labels, 
@@ -633,6 +636,15 @@ async def get_product_stats(
     from app.models.review import Review, TranslationStatus
     from app.models.product_context_label import ProductContextLabel
     from app.services.context_service import ContextService
+    from app.core.cache import get_cache_service
+    
+    # 🚀 尝试从缓存获取
+    cache = await get_cache_service()
+    if not no_cache:
+        cached = await cache.get(f"cache:stats:{asin}:overview")
+        if cached:
+            logger.debug(f"[Cache HIT] Stats for {asin}")
+            return cached
     
     service = ReviewService(db)
     stats = await service.get_product_stats(asin)
@@ -710,7 +722,26 @@ async def get_product_stats(
     
     # 将 active_tasks 添加到返回结果
     stats_dict = stats.model_dump() if hasattr(stats, 'model_dump') else dict(stats)
-    stats_dict['active_tasks'] = active_tasks
+    # 确保 active_tasks 可以被 JSON 序列化
+    stats_dict['active_tasks'] = active_tasks.model_dump() if hasattr(active_tasks, 'model_dump') else {
+        "translation": active_tasks.translation.value if hasattr(active_tasks.translation, 'value') else active_tasks.translation,
+        "insights": active_tasks.insights.value if hasattr(active_tasks.insights, 'value') else active_tasks.insights,
+        "themes": active_tasks.themes.value if hasattr(active_tasks.themes, 'value') else active_tasks.themes,
+        "translation_progress": active_tasks.translation_progress,
+        "insights_progress": active_tasks.insights_progress,
+        "themes_progress": active_tasks.themes_progress
+    }
+    
+    # 🚀 写入缓存（智能 TTL：任务完成缓存久，进行中缓存短）
+    all_completed = (
+        active_tasks.translation == ActiveTaskStatus.COMPLETED and 
+        active_tasks.insights == ActiveTaskStatus.COMPLETED and 
+        active_tasks.themes == ActiveTaskStatus.COMPLETED
+    )
+    # 任务全完成: 缓存 5 分钟，否则缓存 30 秒（减少重复查询但及时更新进度）
+    cache_ttl = 300 if all_completed else 30
+    await cache.set(f"cache:stats:{asin}:overview", stats_dict, ttl=cache_ttl)
+    logger.debug(f"[Cache SET] Stats for {asin} (ttl={cache_ttl}s)")
     
     return stats_dict
 
@@ -2412,10 +2443,13 @@ async def get_product_reports(
 @products_router.get("/{asin}/reports/latest", response_model=ProductReportResponse)
 async def get_latest_report(
     asin: str,
+    no_cache: bool = Query(False, description="跳过缓存"),
     db: AsyncSession = Depends(get_db)
 ):
     """
     获取产品最新的报告（秒开，不用重新生成）。
+    
+    🚀 Performance: Results are cached in Redis for 10 minutes.
     
     如果存在历史报告，直接返回最新的一份。
     如果没有历史报告，返回 404。
@@ -2423,6 +2457,15 @@ async def get_latest_report(
     from sqlalchemy import select
     from app.models.product import Product
     from app.services.summary_service import SummaryService
+    from app.core.cache import get_cache_service
+    
+    # 🚀 尝试从缓存获取
+    cache = await get_cache_service()
+    if not no_cache:
+        cached = await cache.get_product_stats(asin, "latest_report")
+        if cached:
+            logger.debug(f"[Cache HIT] Latest report for {asin}")
+            return ProductReportResponse(**cached)
     
     # Get product
     product_result = await db.execute(
@@ -2441,18 +2484,24 @@ async def get_latest_report(
         if not report:
             raise HTTPException(status_code=404, detail="暂无报告，请先点击生成")
         
-        return ProductReportResponse(
-            id=str(report.id),
-            product_id=str(report.product_id),
-            title=report.title,
-            content=report.content,
-            analysis_data=report.analysis_data,
-            report_type=report.report_type,
-            status=report.status,
-            error_message=report.error_message,
-            created_at=report.created_at.isoformat() if report.created_at else None,
-            updated_at=report.updated_at.isoformat() if report.updated_at else None
-        )
+        response_data = {
+            "id": str(report.id),
+            "product_id": str(report.product_id),
+            "title": report.title,
+            "content": report.content,
+            "analysis_data": report.analysis_data,
+            "report_type": report.report_type,
+            "status": report.status,
+            "error_message": report.error_message,
+            "created_at": report.created_at.isoformat() if report.created_at else None,
+            "updated_at": report.updated_at.isoformat() if report.updated_at else None
+        }
+        
+        # 🚀 写入缓存
+        await cache.set_product_stats(asin, response_data, "latest_report")
+        logger.debug(f"[Cache SET] Latest report for {asin}")
+        
+        return ProductReportResponse(**response_data)
         
     except HTTPException:
         raise

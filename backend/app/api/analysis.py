@@ -273,42 +273,64 @@ async def list_projects(
 @router.get("/projects/{project_id}", response_model=AnalysisProjectResponse)
 async def get_project_detail(
     project_id: UUID,
+    no_cache: bool = Query(False, description="跳过缓存"),
     db: AsyncSession = Depends(get_db)
 ):
     """
     获取项目详情
     
+    🚀 Performance: Completed projects are cached in Redis for 10 minutes.
+    
     - 包含完整的分析结果（result_content）
     - 包含原始数据快照（raw_data_snapshot）
     - 包含关联的产品信息
     """
+    from app.core.cache import get_cache_service
+    
+    cache = await get_cache_service()
+    cache_key = f"cache:analysis_project:{project_id}"
+    
+    # 🚀 尝试从缓存获取
+    if not no_cache:
+        cached = await cache.get(cache_key)
+        if cached:
+            logger.debug(f"[Cache HIT] Analysis project {project_id}")
+            return AnalysisProjectResponse(**cached)
+    
     service = AnalysisService(db)
     
     project = await service.get_project(project_id)
     if not project:
         raise HTTPException(status_code=404, detail="项目不存在")
     
-    return AnalysisProjectResponse(
-        id=str(project.id),
-        title=project.title,
-        description=project.description,
-        analysis_type=project.analysis_type,
-        status=project.status,
-        result_content=project.result_content,
-        raw_data_snapshot=project.raw_data_snapshot,
-        error_message=project.error_message,
-        created_at=project.created_at.isoformat() if project.created_at else None,
-        updated_at=project.updated_at.isoformat() if project.updated_at else None,
-        items=[
-            AnalysisProjectItemResponse(
-                id=str(item.id),
-                product_id=str(item.product_id),
-                role_label=item.role_label,
-                display_order=item.display_order,
-                product=item.to_dict().get("product")
-            ) for item in project.items
+    response_data = {
+        "id": str(project.id),
+        "title": project.title,
+        "description": project.description,
+        "analysis_type": project.analysis_type,
+        "status": project.status,
+        "result_content": project.result_content,
+        "raw_data_snapshot": project.raw_data_snapshot,
+        "error_message": project.error_message,
+        "created_at": project.created_at.isoformat() if project.created_at else None,
+        "updated_at": project.updated_at.isoformat() if project.updated_at else None,
+        "items": [
+            {
+                "id": str(item.id),
+                "product_id": str(item.product_id),
+                "role_label": item.role_label,
+                "display_order": item.display_order,
+                "product": item.to_dict().get("product")
+            } for item in project.items
         ]
-    )
+    }
+    
+    # 🚀 只缓存已完成的项目
+    if project.status == AnalysisStatus.COMPLETED.value:
+        await cache.set(cache_key, response_data, ttl=600)  # 10分钟
+        logger.debug(f"[Cache SET] Analysis project {project_id}")
+    
+    return AnalysisProjectResponse(**response_data)
 
 
 @router.post("/projects/{project_id}/run", response_model=RunAnalysisResponse)
