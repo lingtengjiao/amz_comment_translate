@@ -43,6 +43,7 @@ from app.api.schemas import (
     ProductReportResponse,
     ProductReportListResponse,
     ProductReportCreateResponse,
+    ProductBriefInfo,
     # Report Types
     ReportTypeInfo,
     ReportTypeListResponse,
@@ -195,6 +196,9 @@ async def ingest_reviews_queue(
     # 生成批次 ID
     batch_id = str(uuid.uuid4())
     
+    # [DEBUG] 打印收到的 categories
+    logger.info(f"[入队调试] ASIN={request.asin}, categories={request.categories}, bullet_points={request.bullet_points}")
+    
     # 构建队列数据
     payload = {
         "batch_id": batch_id,
@@ -205,6 +209,7 @@ async def ingest_reviews_queue(
         "average_rating": request.average_rating,
         "price": request.price,
         "bullet_points": request.bullet_points,
+        "categories": request.categories,  # [NEW] 产品类目面包屑
         "reviews": [r.model_dump() for r in request.reviews],
         "is_stream": request.is_stream,
         "user_id": str(current_user.id) if current_user else None  # [NEW] 传递用户 ID
@@ -2069,6 +2074,82 @@ async def get_report_types():
         types=[ReportTypeInfo(**c.to_dict()) for c in configs],
         total=len(configs)
     )
+
+
+@products_router.get("/reports/all", response_model=ProductReportListResponse)
+async def get_all_reports(
+    limit: int = Query(default=100, description="返回的最大报告数量"),
+    report_type: Optional[str] = Query(
+        default=None,
+        description="按类型筛选: comprehensive, operations, product, supply_chain"
+    ),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    获取所有产品的报告列表（用于报告库页面）。
+    
+    返回所有产品生成过的报告，按创建时间倒序排列。
+    
+    **筛选参数：**
+    - `report_type`: 可选，按报告类型筛选
+    - `limit`: 最大返回数量，默认100
+    """
+    from sqlalchemy import select, desc
+    from app.models.product import Product
+    from app.models.report import ProductReport
+    
+    try:
+        # 构建查询
+        query = select(ProductReport).join(Product)
+        
+        # 类型筛选
+        if report_type:
+            query = query.where(ProductReport.report_type == report_type)
+        
+        # 按创建时间倒序
+        query = query.order_by(desc(ProductReport.created_at)).limit(limit)
+        
+        result = await db.execute(query)
+        reports = result.scalars().all()
+        
+        # 获取关联的产品信息
+        product_ids = [r.product_id for r in reports]
+        products_result = await db.execute(
+            select(Product).where(Product.id.in_(product_ids))
+        )
+        products = {p.id: p for p in products_result.scalars().all()}
+        
+        # 构建响应
+        report_responses = [
+            ProductReportResponse(
+                id=str(r.id),
+                product_id=str(r.product_id),
+                report_type=r.report_type,
+                title=r.title,
+                content=r.content,
+                status=r.status,
+                created_at=r.created_at.isoformat() if r.created_at else None,
+                updated_at=r.updated_at.isoformat() if r.updated_at else None,
+                product=ProductBriefInfo(
+                    asin=products[r.product_id].asin,
+                    title=products[r.product_id].title,
+                    image_url=products[r.product_id].image_url,
+                    price=products[r.product_id].price,
+                    average_rating=products[r.product_id].average_rating
+                ) if r.product_id in products else None
+            )
+            for r in reports
+        ]
+        
+        return ProductReportListResponse(
+            success=True,
+            reports=report_responses,
+            total=len(report_responses)
+        )
+    except Exception as e:
+        import logging
+        logging.error(f"Error fetching all reports: {e}")
+        raise HTTPException(status_code=500, detail="获取报告列表失败")
 
 
 # ============== Report Generation API ==============

@@ -49,7 +49,7 @@ export function ReviewInsights({ review, expanded = true }: ReviewInsightsProps)
 
       {/* Insights List - Two Column Layout */}
       {isExpanded && (
-        <div className="space-y-4 pl-6 border-l-2 border-amber-200 dark:border-amber-800">
+        <div className="space-y-4 p-4 bg-rose-50/50 dark:bg-rose-900/10 rounded-lg border border-rose-100 dark:border-rose-800/30">
           {review.insights.map((insight, index) => (
             <div key={index}>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -57,7 +57,7 @@ export function ReviewInsights({ review, expanded = true }: ReviewInsightsProps)
                 <div className="text-right space-y-1">
                   {/* Dimension Tag */}
                   {insight.dimension && (
-                    <span className="inline-block px-2 py-0.5 text-xs font-medium rounded-full bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300 mb-1">
+                    <span className="inline-block px-2 py-0.5 text-xs font-medium rounded-full bg-rose-100 text-rose-700 dark:bg-rose-900/40 dark:text-rose-300 mb-1">
                       {insight.dimension}
                     </span>
                   )}
@@ -83,7 +83,7 @@ export function ReviewInsights({ review, expanded = true }: ReviewInsightsProps)
               
               {/* Divider between insights */}
               {index < review.insights.length - 1 && (
-                <div className="h-px bg-gray-200 dark:bg-gray-700 mt-4" />
+                <div className="h-px bg-rose-200/50 dark:bg-rose-700/30 mt-4" />
               )}
             </div>
           ))}

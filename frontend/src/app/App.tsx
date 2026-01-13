@@ -7,6 +7,7 @@ import { Toaster } from './components/ui/sonner';
 
 // Lazy load route components
 const LoginPage = lazy(() => import('./components/LoginPage'));
+const HomePage = lazy(() => import('./components/home/HomePage'));
 const TaskList = lazy(() => import('./components/TaskList').then(m => ({ default: m.TaskList })));
 const ReviewReader = lazy(() => import('./components/ReviewReader').then(m => ({ default: m.ReviewReader })));
 const ReportPage = lazy(() => import('./components/ReportPage').then(m => ({ default: m.ReportPage })));
@@ -36,7 +37,9 @@ export default function App() {
               <Route path="/login" element={<LoginPage />} />
               
               {/* 受保护的路由 - 需要登录 */}
-              <Route path="/" element={<ProtectedRoute><TaskList /></ProtectedRoute>} />
+              <Route path="/" element={<Navigate to="/home/home" replace />} />
+              <Route path="/home/:section" element={<ProtectedRoute><HomePage /></ProtectedRoute>} />
+              <Route path="/tasks" element={<ProtectedRoute><TaskList /></ProtectedRoute>} />
               <Route path="/analysis" element={<ProtectedRoute><WorkbenchPage /></ProtectedRoute>} />
               <Route path="/analysis/:projectId" element={<ProtectedRoute><AnalysisResultPage /></ProtectedRoute>} />
               <Route path="/reader/:taskId" element={<ProtectedRoute><ReviewReader /></ProtectedRoute>} />
@@ -44,7 +47,7 @@ export default function App() {
               <Route path="/report/:asin/:reportId" element={<ProtectedRoute><ReportPage /></ProtectedRoute>} />
               
               {/* 默认重定向 */}
-              <Route path="*" element={<Navigate to="/" replace />} />
+              <Route path="*" element={<Navigate to="/home/home" replace />} />
             </Routes>
           </Suspense>
         </BrowserRouter>

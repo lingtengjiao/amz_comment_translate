@@ -1,8 +1,6 @@
 import {
   ArrowLeft,
-  Download,
   Languages,
-  FileSpreadsheet,
   PlayCircle,
   ExternalLink,
   Image as ImageIcon,
@@ -13,7 +11,9 @@ import {
   Maximize2,
   Minimize2,
   StopCircle,
-  AlertTriangle
+  AlertTriangle,
+  FileText,
+  Sparkles
 } from 'lucide-react';
 import { useState, useMemo, useRef, useEffect, useCallback } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
@@ -27,6 +27,7 @@ import { StatsCards } from './StatsCards';
 import { FilterBar } from './FilterBar';
 import { ThemeTagBar } from './ThemeTagBar';
 import { MediaTabContent } from './MediaTabContent';
+import { ProductReportDialog } from './ProductReportDialog';
 import { HiddenReviewsModal } from './HiddenReviewsModal';
 import { EditReviewModal } from './EditReviewModal';
 import { ConfirmDialog } from './ConfirmDialog';
@@ -91,6 +92,8 @@ export function ReviewReader() {
   const stuckDetectionRef = useRef<{ lastProgress: number; stuckCount: number }>({ lastProgress: 0, stuckCount: 0 }); // 卡住检测
   const manuallyStoppedRef = useRef(false); // 用户手动停止标志
   const [isTaskStuck, setIsTaskStuck] = useState(false); // 任务是否卡住
+  const [isReportDialogOpen, setIsReportDialogOpen] = useState(false); // 报告对话框
+  const [activeTab, setActiveTab] = useState<'reviews' | 'media'>('reviews'); // 当前激活的 Tab
   
   // [NEW] 存储后端返回的活跃任务状态
   const [activeTasks, setActiveTasks] = useState<{
@@ -692,22 +695,6 @@ export function ReviewReader() {
     };
   }, [linkRating, totalReviews, translatedCount, reviewsWithInsights, reviewsWithThemes, apiRatingDistribution, apiSentimentDistribution]);
 
-  const handleExportXLSX = async () => {
-    if (!asin) return;
-
-    try {
-      const blob = await apiService.exportReviewsByAsin(asin);
-      const link = document.createElement('a');
-      link.href = URL.createObjectURL(blob);
-      link.download = `reviews_${asin}_${new Date().toISOString().split('T')[0]}.xlsx`;
-      link.click();
-      toast.success('导出成功', '文件已开始下载');
-    } catch (err) {
-      console.error('Export failed:', err);
-      toast.error('导出失败', '请重试');
-    }
-  };
-
   // 开始翻译
   const handleStartTranslation = async () => {
     if (!asin) return;
@@ -1117,7 +1104,7 @@ export function ReviewReader() {
     return (
       <div className="min-h-screen bg-gray-50 flex items-center justify-center">
         <div className="text-center">
-          <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+          <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-rose-500"></div>
           <p className="mt-4 text-gray-600">加载中...</p>
         </div>
       </div>
@@ -1130,7 +1117,7 @@ export function ReviewReader() {
         <Card className="p-8 text-center bg-white border-gray-200">
           <p className="text-gray-500 mb-4">{error}</p>
           <div className="flex gap-2 justify-center">
-            <Button onClick={() => navigate('/')}>返回列表</Button>
+            <Button onClick={() => navigate('/home/my-projects')}>返回列表</Button>
             <Button onClick={fetchData} variant="outline" className="gap-2">
               <RefreshCw className="size-4" />
               重试
@@ -1146,7 +1133,7 @@ export function ReviewReader() {
       <div className="min-h-screen bg-gray-50 flex items-center justify-center">
         <Card className="p-8 text-center bg-white border-gray-200">
           <p className="text-gray-500 mb-4">产品不存在</p>
-          <Button onClick={() => navigate('/')}>返回列表</Button>
+          <Button onClick={() => navigate('/home/my-projects')}>返回列表</Button>
         </Card>
       </div>
     );
@@ -1166,9 +1153,8 @@ export function ReviewReader() {
           : 'min-h-screen relative'
       }`}
     >
-      {/* Header */}
-      {/* Header 保持不变，但 z-index 不需要太高，相对于容器即可 */}
-      <header className="bg-white border-b border-gray-200 sticky top-0 z-30 shadow-sm">
+      {/* Header - 固定在最顶部 */}
+      <header className="bg-white border-b border-gray-200 shadow-sm sticky top-0 z-50">
         <div className="max-w-[1600px] mx-auto px-4 sm:px-6 lg:px-8 py-3">
           <div className="flex items-center justify-between gap-4">
             {/* Left: Fullscreen Button + Back Button + Title */}
@@ -1194,7 +1180,7 @@ export function ReviewReader() {
               <Button
                 variant="ghost"
                 size="sm"
-                onClick={() => navigate('/')}
+                onClick={() => navigate('/home/my-projects')}
                 className="gap-2 flex-shrink-0"
               >
                 <ArrowLeft className="size-4" />
@@ -1220,15 +1206,17 @@ export function ReviewReader() {
                 const allAnalyzed = allTranslated && 
                                    reviewsWithInsights >= translatedCount && 
                                    reviewsWithThemes >= translatedCount;
+                // 满足生成报告的最低条件：已翻译>=10条，有洞察，有主题
+                const canGenerateReport = translatedCount >= 10 && reviewsWithInsights > 0 && reviewsWithThemes > 0;
                 
                 if (allAnalyzed) {
-                  // 全部完成后，只显示一个"分析完成"按钮（包含翻译完成的状态）
+                  // 全部完成后，显示"分析完成"按钮
                   return (
                     <Button 
                       disabled 
                       size="sm" 
                       variant="outline"
-                      className="gap-2 min-w-[120px] text-blue-600 border-blue-600"
+                      className="gap-2 min-w-[120px] text-rose-600 border-rose-500"
                       title="所有分析已完成（翻译、洞察、主题）"
                     >
                       <Check className="size-4" />
@@ -1237,7 +1225,7 @@ export function ReviewReader() {
                   );
                 } else if (isFullAnalysis || (isTranslating && isFullAnalysis)) {
                   return (
-                    <Button disabled size="sm" className="gap-2 min-w-[100px] bg-blue-600">
+                    <Button disabled size="sm" className="gap-2 min-w-[100px] bg-gradient-to-r from-rose-500 to-pink-500">
                       <PlayCircle className="size-4 animate-spin" />
                       分析中
                     </Button>
@@ -1247,7 +1235,7 @@ export function ReviewReader() {
                     <Button 
                       onClick={handleFullAnalysis}
                       size="sm"
-                      className="gap-2 min-w-[120px] bg-blue-600 hover:bg-blue-700"
+                      className="gap-2 min-w-[120px] bg-gradient-to-r from-rose-500 to-pink-500 hover:from-rose-600 hover:to-pink-600"
                       title="一键完成翻译、洞察提取和主题提取（推荐）"
                     >
                       <Languages className="size-4" />
@@ -1275,7 +1263,7 @@ export function ReviewReader() {
                       disabled 
                       size="sm" 
                       variant="outline"
-                      className="gap-2 min-w-[100px] text-emerald-600 border-emerald-600"
+                      className="gap-2 min-w-[100px] text-rose-600 border-rose-500"
                       title="翻译已完成"
                     >
                       <Check className="size-4" />
@@ -1295,7 +1283,7 @@ export function ReviewReader() {
                       onClick={handleStartTranslation}
                       size="sm"
                       variant="outline"
-                      className="gap-2 bg-emerald-600 hover:bg-emerald-700 text-white"
+                      className="gap-2 bg-rose-500 hover:bg-rose-600 text-white border-rose-500"
                       title="仅翻译评论"
                     >
                       <Languages className="size-4" />
@@ -1402,10 +1390,27 @@ export function ReviewReader() {
                 </Button>
               )}
               
-              <Button onClick={handleExportXLSX} size="sm" className="gap-2">
-                <FileSpreadsheet className="size-4" />
-                XLSX
-              </Button>
+              {/* 生成报告按钮 - 满足条件才显示（翻译>=90%，洞察>80%，主题>80%） */}
+              {(() => {
+                const translationPercent = totalReviews > 0 ? (translatedCount / totalReviews) * 100 : 0;
+                const insightsPercent = translatedCount > 0 ? (reviewsWithInsights / translatedCount) * 100 : 0;
+                const themesPercent = translatedCount > 0 ? (reviewsWithThemes / translatedCount) * 100 : 0;
+                const canGenerateReport = translationPercent >= 90 && insightsPercent > 80 && themesPercent > 80;
+                
+                if (!canGenerateReport) return null;
+                return (
+                  <Button
+                    size="sm"
+                    onClick={() => setIsReportDialogOpen(true)}
+                    className="gap-2 bg-gradient-to-r from-rose-500 to-pink-500 hover:from-rose-600 hover:to-pink-600"
+                    title="生成产品深度分析报告"
+                  >
+                    <FileText className="size-4" />
+                    生成报告
+                    <Sparkles className="size-3.5 text-yellow-200" />
+                  </Button>
+                );
+              })()}
             </div>
           </div>
 
@@ -1464,18 +1469,24 @@ export function ReviewReader() {
         </div>
       </header>
 
-      {/* Main Content */}
-      <main className="max-w-[1600px] mx-auto px-4 sm:px-6 lg:px-8 py-6">
+      {/* Main Content - 产品信息和统计卡片 */}
+      <div className="max-w-[1600px] mx-auto px-4 sm:px-6 lg:px-8 py-6">
         {/* Product Information Card */}
         <ProductInfoCard task={task} ratingStats={ratingStats} isTranslating={isTranslating} />
 
         {/* Statistics Cards */}
         <StatsCards ratingStats={ratingStats} />
+      </div>
 
-        {/* Tabs for View Switching */}
-        <Tabs defaultValue="reviews" className="w-full">
-          {/* Sticky Filter Section */}
-          <div className="sticky top-[57px] z-10 bg-white rounded-lg border border-gray-200 shadow-md">
+      {/* Tabs Section - 独立区域，支持 sticky 吸顶 */}
+      <div className="max-w-[1600px] mx-auto px-4 sm:px-6 lg:px-8">
+        <Tabs 
+          defaultValue="reviews" 
+          className="w-full"
+          onValueChange={(value) => setActiveTab(value as 'reviews' | 'media')}
+        >
+          {/* Sticky Filter Section - Tab 栏 + 筛选栏吸顶在 Header 下方 */}
+          <div className="sticky top-[57px] z-40 bg-white rounded-lg border border-gray-200 shadow-lg">
             <TabsList className="w-full h-auto p-4 bg-transparent justify-start border-b border-gray-200">
               <TabsTrigger 
                 value="reviews" 
@@ -1492,8 +1503,8 @@ export function ReviewReader() {
               </TabsTrigger>
             </TabsList>
 
-            {/* Filter Bar */}
-            <FilterBar
+            {/* Filter Bar - 仅在评论内容 Tab 显示 */}
+            {activeTab === 'reviews' && <FilterBar
               searchQuery={searchQuery}
               setSearchQuery={setSearchQuery}
               ratingFilter={ratingFilter}
@@ -1506,7 +1517,7 @@ export function ReviewReader() {
               setHighlightEnabled={setHighlightEnabled}
               insightsExpanded={insightsExpanded}
               setInsightsExpanded={setInsightsExpanded}
-            />
+            />}
             
             {/* Theme Tag Bar - 5W 主题标签 - 已隐藏 */}
             {/* {highlightEnabled && (
@@ -1613,7 +1624,7 @@ export function ReviewReader() {
             </div>
           </TabsContent>
         </Tabs>
-      </main>
+      </div>
 
       {/* Hidden Reviews Modal */}
       {showHiddenModal && (
@@ -1650,6 +1661,20 @@ export function ReviewReader() {
         title={infoDialog.title}
         message={infoDialog.message}
         type={infoDialog.type}
+      />
+
+      {/* Product Report Dialog */}
+      <ProductReportDialog
+        isOpen={isReportDialogOpen}
+        onClose={() => setIsReportDialogOpen(false)}
+        asin={task?.asin || ''}
+        productTitle={task?.titleTranslated || task?.title || ''}
+        ratingStats={{
+          totalReviews,
+          translatedReviews: translatedCount,
+          reviewsWithInsights,
+          reviewsWithThemes,
+        }}
       />
     </div>
   );

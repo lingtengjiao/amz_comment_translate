@@ -47,13 +47,22 @@ export const UnifiedProductCard = memo(function UnifiedProductCard({
     mode === 'select'
       ? `group relative overflow-hidden bg-white border transition-all duration-300 cursor-pointer ${
           isSelected
-            ? 'border-indigo-600 bg-indigo-50/50 ring-1 ring-indigo-600 shadow-md'
-            : 'border-gray-100 hover:border-indigo-300 hover:shadow-lg'
+            ? 'border-rose-500 bg-rose-50/50 ring-1 ring-rose-500 shadow-md'
+            : 'border-gray-100 hover:border-rose-300 hover:shadow-lg'
         }`
-      : 'group overflow-hidden bg-white border border-gray-100 hover:border-blue-200 hover:shadow-lg transition-all duration-300 cursor-pointer';
+      : `group relative overflow-hidden bg-white border border-gray-100 hover:border-blue-200 hover:shadow-lg transition-all duration-300 cursor-pointer active:scale-[0.98] ${isLoading ? 'pointer-events-none' : ''}`;
 
   return (
     <Card className={cardClassName} onClick={handleClick}>
+      {/* [NEW] 全卡片 Loading 遮罩 - 点击时显示明确的加载状态 */}
+      {isLoading && (
+        <div className="absolute inset-0 bg-white/80 backdrop-blur-[1px] flex items-center justify-center z-20 rounded-lg">
+          <div className="flex flex-col items-center gap-2">
+            <Loader2 className="size-8 animate-spin text-rose-500" />
+            <span className="text-sm text-gray-500">检查进度...</span>
+          </div>
+        </div>
+      )}
       <div className="p-4 relative">
         {/* 选择模式的复选框 */}
         {mode === 'select' && (
@@ -62,8 +71,8 @@ export const UnifiedProductCard = memo(function UnifiedProductCard({
               absolute top-4 right-4 z-10 flex h-6 w-6 items-center justify-center rounded-full border transition-all
               ${
                 isSelected
-                  ? 'bg-indigo-600 border-indigo-600 scale-110'
-                  : 'bg-white border-gray-300 group-hover:border-indigo-400'
+                  ? 'bg-rose-500 border-rose-500 scale-110'
+                  : 'bg-white border-gray-300 group-hover:border-rose-400'
               }
             `}
             onClick={(e) => {
@@ -107,8 +116,8 @@ export const UnifiedProductCard = memo(function UnifiedProductCard({
             <h3
               className={`mb-3 line-clamp-2 leading-snug transition-colors ${
                 mode === 'select' && isSelected
-                  ? 'text-indigo-900 font-semibold'
-                  : 'text-gray-900 group-hover:text-blue-600'
+                  ? 'text-rose-900 font-semibold'
+                  : 'text-gray-900 group-hover:text-rose-600'
               }`}
             >
               {displayTitle}

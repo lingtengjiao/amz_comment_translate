@@ -649,6 +649,36 @@ export async function getReportHistory(
 }
 
 /**
+ * 获取所有产品的报告列表（用于报告库页面）
+ * 按创建时间倒序排列
+ * 
+ * @param limit - 返回数量限制，默认100
+ * @param reportType - 可选，按报告类型筛选
+ */
+export async function getAllReports(
+  limit: number = 100,
+  reportType?: string
+): Promise<ApiReportListResponse> {
+  let url = `${API_BASE}/products/reports/all?limit=${limit}`;
+  if (reportType) {
+    url += `&report_type=${reportType}`;
+  }
+  const response = await fetch(url);
+  if (!response.ok) {
+    const errorText = await response.text();
+    let message = response.statusText;
+    try {
+      const errorJson = JSON.parse(errorText);
+      message = errorJson.detail || errorJson.message || message;
+    } catch {
+      message = errorText || message;
+    }
+    throw new ApiError(response.status, message);
+  }
+  return response.json();
+}
+
+/**
  * 获取产品最新的报告（秒开）
  * 如果没有历史报告，返回 404
  */
@@ -1090,6 +1120,7 @@ const apiService = {
   generateReport,
   getReportPreview,
   getReportHistory,
+  getAllReports,
   getLatestReport,
   getReportById,
   deleteReport,

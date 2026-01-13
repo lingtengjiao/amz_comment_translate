@@ -10,10 +10,16 @@
   <div class="popup-container">
     <header class="popup-header">
       <div class="logo">
-        <span class="logo-icon">📊</span>
-        <span class="logo-text">VOC-Master</span>
+        <svg class="logo-icon" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+          <!-- Eye Icon - 与首页一致 -->
+          <circle cx="50" cy="50" r="35" fill="#FEF3C7"/>
+          <circle cx="50" cy="50" r="25" fill="#93C5FD"/>
+          <circle cx="50" cy="50" r="15" fill="#1E40AF"/>
+          <circle cx="47" cy="45" r="5" fill="#FFFFFF"/>
+        </svg>
+        <span class="logo-text">洞察大王</span>
       </div>
-      <span class="version">v1.1</span>
+      <span class="version">v1.0</span>
     </header>
 
     <main class="popup-content">
@@ -71,15 +77,11 @@
         </button>
       </div>
 
-      <!-- Quick Links -->
+      <!-- Quick Links (本地开发环境) -->
       <div class="quick-links">
-        <a href="http://115.191.30.209" target="_blank" class="link-btn">
-          <span>📈</span>
-          打开控制台
-        </a>
-        <a href="http://115.191.30.209:8000/docs" target="_blank" class="link-btn">
-          <span>📚</span>
-          API 文档
+        <a href="http://localhost:3000/#/home/my-projects" target="_blank" class="link-btn link-btn-full">
+          <span>📂</span>
+          进入我的洞察
         </a>
       </div>
     </main>

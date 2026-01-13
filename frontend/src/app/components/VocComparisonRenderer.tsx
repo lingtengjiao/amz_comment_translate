@@ -334,11 +334,11 @@ export const VocComparisonRenderer = memo(({ data, items }: VocComparisonRendere
 
         {/* 市场总结（兜底） */}
         {!data.strategy_summary && data.market_summary && (
-          <div className="mt-10 bg-gradient-to-r from-indigo-50 to-blue-50 dark:from-indigo-950/30 dark:to-blue-950/30 p-6 rounded-xl border border-indigo-100 dark:border-indigo-800">
+          <div className="mt-10 bg-gradient-to-r from-rose-50 to-pink-50 dark:from-rose-950/30 dark:to-pink-950/30 p-6 rounded-xl border border-rose-100 dark:border-rose-800">
             <div className="flex items-start gap-4">
-              <Sparkles className="size-8 text-indigo-600 mt-1 flex-shrink-0" />
+              <Sparkles className="size-8 text-rose-600 mt-1 flex-shrink-0" />
               <div>
-                <h2 className="text-xl font-bold text-indigo-900 dark:text-indigo-100 mb-2">市场总结</h2>
+                <h2 className="text-xl font-bold text-rose-900 dark:text-rose-100 mb-2">市场总结</h2>
                 <p className="text-gray-700 dark:text-gray-300 leading-relaxed text-base">
                   {data.market_summary}
                 </p>

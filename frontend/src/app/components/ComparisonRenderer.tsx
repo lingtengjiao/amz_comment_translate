@@ -103,11 +103,11 @@ export const ComparisonRenderer = memo(({ data }: { data: ComparisonResultConten
     <div className="space-y-8 max-w-7xl mx-auto pb-20">
       
       {/* 1. 市场全景速览 (Hero Section) */}
-      <div className="bg-gradient-to-r from-indigo-50 to-blue-50 dark:from-indigo-950/30 dark:to-blue-950/30 p-6 rounded-xl border border-indigo-100 dark:border-indigo-800">
+      <div className="bg-gradient-to-r from-rose-50 to-pink-50 dark:from-rose-950/30 dark:to-pink-950/30 p-6 rounded-xl border border-rose-100 dark:border-rose-800">
         <div className="flex items-start gap-4">
-          <Trophy className="size-8 text-indigo-600 mt-1 flex-shrink-0" />
+          <Trophy className="size-8 text-rose-600 mt-1 flex-shrink-0" />
           <div>
-            <h2 className="text-xl font-bold text-indigo-900 dark:text-indigo-100 mb-2">市场格局速览</h2>
+            <h2 className="text-xl font-bold text-rose-900 dark:text-rose-100 mb-2">市场格局速览</h2>
             <p className="text-gray-700 dark:text-gray-300 leading-relaxed text-lg">
               {data.overview_verdict}
             </p>
@@ -147,7 +147,7 @@ export const ComparisonRenderer = memo(({ data }: { data: ComparisonResultConten
       {/* 4. SWOT 矩阵 */}
       <section>
         <h3 className="text-xl font-bold mb-4 flex items-center gap-2">
-          <Target className="text-emerald-500" /> 产品 SWOT 全景
+          <Target className="text-rose-500" /> 产品 SWOT 全景
         </h3>
         <SwotGrid data={data.swot_comparison} />
       </section>

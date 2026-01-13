@@ -61,7 +61,7 @@ export function AnalysisProjectCard({ project }: AnalysisProjectCardProps) {
 
   return (
     <Card
-      className="cursor-pointer hover:shadow-lg transition-all duration-200 hover:scale-[1.02] border-2 hover:border-indigo-300 dark:hover:border-indigo-700"
+      className="cursor-pointer hover:shadow-lg transition-all duration-200 hover:scale-[1.02] border-2 hover:border-rose-300 dark:hover:border-rose-700"
       onClick={handleClick}
     >
       <CardHeader className="pb-3">
@@ -98,7 +98,7 @@ export function AnalysisProjectCard({ project }: AnalysisProjectCardProps) {
             </div>
           </div>
           {project.status === 'completed' && (
-            <span className="text-indigo-600 dark:text-indigo-400 font-medium">
+            <span className="text-rose-600 dark:text-rose-400 font-medium">
               查看报告 →
             </span>
           )}

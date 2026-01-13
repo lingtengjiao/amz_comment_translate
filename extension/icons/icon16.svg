@@ -1,12 +1,24 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none">
+<svg width="16" height="16" viewBox="0 0 128 128" xmlns="http://www.w3.org/2000/svg">
+  <!-- 红粉渐变背景 + 圆角矩形 -->
   <defs>
-    <linearGradient id="grad16" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" style="stop-color:#667eea"/>
-      <stop offset="100%" style="stop-color:#764ba2"/>
+    <linearGradient id="bgGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#F43F5E;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#EC4899;stop-opacity:1" />
     </linearGradient>
   </defs>
-  <rect width="16" height="16" rx="3" fill="url(#grad16)"/>
-  <path d="M4 8.5L6.5 11L12 5" stroke="white" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-  <circle cx="8" cy="5" r="1.5" fill="white" opacity="0.8"/>
+  
+  <!-- 圆角矩形背景 -->
+  <rect x="8" y="8" width="112" height="112" rx="24" ry="24" fill="url(#bgGradient)"/>
+  
+  <!-- 眼睛图标 - 居中 -->
+  <g transform="translate(64, 64)">
+    <!-- 外圈 - 淡黄色 -->
+    <circle cx="0" cy="0" r="32" fill="#FEF3C7" opacity="0.95"/>
+    <!-- 中圈 - 淡蓝色 -->
+    <circle cx="0" cy="0" r="23" fill="#93C5FD" opacity="0.95"/>
+    <!-- 瞳孔 - 深蓝色 -->
+    <circle cx="0" cy="0" r="14" fill="#1E40AF"/>
+    <!-- 高光 -->
+    <circle cx="-4" cy="-5" r="5" fill="#FFFFFF" opacity="0.9"/>
+  </g>
 </svg>
-

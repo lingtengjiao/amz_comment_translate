@@ -10,7 +10,8 @@
  */
 
 // Backend API configuration
-const API_BASE_URL = 'http://115.191.30.209:8000/api/v1';
+// 本地开发环境配置
+const API_BASE_URL = 'http://localhost:8000/api/v1';
 
 // ==========================================
 // 用户认证状态管理
@@ -18,22 +19,58 @@ const API_BASE_URL = 'http://115.191.30.209:8000/api/v1';
 let authState = {
   isLoggedIn: false,
   token: null,
-  user: null
+  user: null,
+  tokenExpireAt: null,  // [NEW] Token 过期时间
+  tokenIssuedAt: null   // [NEW] Token 签发时间
 };
+
+// [FIXED] 认证状态加载标志（防止竞态条件）
+let authStateReady = false;
+let authStateLoadPromise = null;
+
+// [NEW] Token 过期检查定时器
+let tokenExpiryCheckInterval = null;
 
 // 从 chrome.storage 恢复认证状态
 async function loadAuthState() {
-  try {
-    const result = await chrome.storage.local.get(['auth_token', 'auth_user']);
-    if (result.auth_token) {
-      authState.token = result.auth_token;
-      authState.user = result.auth_user;
-      authState.isLoggedIn = true;
-      console.log('[Auth] Restored auth state for:', authState.user?.email);
-    }
-  } catch (e) {
-    console.error('[Auth] Failed to load auth state:', e);
+  // 如果已经在加载中，返回同一个 Promise（防止重复加载）
+  if (authStateLoadPromise) {
+    return authStateLoadPromise;
   }
+  
+  authStateLoadPromise = (async () => {
+    try {
+      console.log('[Auth] Loading auth state from storage...');
+      const result = await chrome.storage.local.get(['auth_token', 'auth_user', 'token_expire_at', 'token_issued_at']);
+      if (result.auth_token) {
+        authState.token = result.auth_token;
+        authState.user = result.auth_user;
+        authState.tokenExpireAt = result.token_expire_at;
+        authState.tokenIssuedAt = result.token_issued_at;
+        
+        // [NEW] 检查 token 是否已过期
+        if (authState.tokenExpireAt && Date.now() > authState.tokenExpireAt) {
+          console.log('[Auth] ⚠️ Token expired, clearing auth state');
+          await clearAuthState();
+        } else {
+          authState.isLoggedIn = true;
+          console.log('[Auth] ✅ Restored auth state for:', authState.user?.email);
+          
+          // [NEW] 启动过期检查定时器
+          startTokenExpiryCheck();
+        }
+      } else {
+        console.log('[Auth] No saved auth state found');
+      }
+    } catch (e) {
+      console.error('[Auth] ❌ Failed to load auth state:', e);
+    } finally {
+      authStateReady = true;
+      console.log('[Auth] Auth state ready');
+    }
+  })();
+  
+  return authStateLoadPromise;
 }
 
 // 保存认证状态到 chrome.storage
@@ -41,7 +78,9 @@ async function saveAuthState() {
   try {
     await chrome.storage.local.set({
       auth_token: authState.token,
-      auth_user: authState.user
+      auth_user: authState.user,
+      token_expire_at: authState.tokenExpireAt,
+      token_issued_at: authState.tokenIssuedAt
     });
   } catch (e) {
     console.error('[Auth] Failed to save auth state:', e);
@@ -50,9 +89,19 @@ async function saveAuthState() {
 
 // 清除认证状态
 async function clearAuthState() {
-  authState = { isLoggedIn: false, token: null, user: null };
+  authState = { 
+    isLoggedIn: false, 
+    token: null, 
+    user: null,
+    tokenExpireAt: null,
+    tokenIssuedAt: null
+  };
+  
+  // [NEW] 停止过期检查定时器
+  stopTokenExpiryCheck();
+  
   try {
-    await chrome.storage.local.remove(['auth_token', 'auth_user']);
+    await chrome.storage.local.remove(['auth_token', 'auth_user', 'token_expire_at', 'token_issued_at']);
   } catch (e) {
     console.error('[Auth] Failed to clear auth state:', e);
   }
@@ -67,6 +116,93 @@ function getAuthHeaders() {
     headers['Authorization'] = `Bearer ${authState.token}`;
   }
   return headers;
+}
+
+// [NEW] 解码 JWT Token 获取过期时间
+function decodeJWTToken(token) {
+  try {
+    // JWT 格式: header.payload.signature
+    const parts = token.split('.');
+    if (parts.length !== 3) {
+      console.error('[Auth] Invalid JWT format');
+      return null;
+    }
+    
+    // Base64 解码 payload
+    const payload = JSON.parse(atob(parts[1]));
+    return payload;
+  } catch (e) {
+    console.error('[Auth] Failed to decode JWT:', e);
+    return null;
+  }
+}
+
+// [NEW] 启动 Token 过期检查定时器
+function startTokenExpiryCheck() {
+  // 清除旧的定时器
+  stopTokenExpiryCheck();
+  
+  if (!authState.tokenExpireAt) {
+    return;
+  }
+  
+  // 每分钟检查一次
+  tokenExpiryCheckInterval = setInterval(() => {
+    const now = Date.now();
+    const expireAt = authState.tokenExpireAt;
+    const timeLeft = expireAt - now;
+    
+    // Token 已过期
+    if (timeLeft <= 0) {
+      console.log('[Auth] 🚨 Token expired');
+      clearAuthState();
+      notifyTokenExpired();
+      stopTokenExpiryCheck();
+      return;
+    }
+    
+    // Token 即将过期（还剩 1 天）
+    const oneDayMs = 24 * 60 * 60 * 1000;
+    if (timeLeft < oneDayMs && !authState.expiryWarningShown) {
+      const daysLeft = Math.ceil(timeLeft / oneDayMs);
+      console.log(`[Auth] ⚠️ Token expires in ${daysLeft} day(s)`);
+      notifyTokenExpiringSoon(daysLeft);
+      authState.expiryWarningShown = true;
+    }
+  }, 60000); // 每分钟检查一次
+  
+  console.log('[Auth] Token expiry check started');
+}
+
+// [NEW] 停止 Token 过期检查定时器
+function stopTokenExpiryCheck() {
+  if (tokenExpiryCheckInterval) {
+    clearInterval(tokenExpiryCheckInterval);
+    tokenExpiryCheckInterval = null;
+    console.log('[Auth] Token expiry check stopped');
+  }
+}
+
+// [NEW] 通知 Token 已过期
+function notifyTokenExpired() {
+  chrome.notifications.create({
+    type: 'basic',
+    iconUrl: 'icons/icon128.png',
+    title: 'VOC-Master',
+    message: '登录已过期，请重新登录',
+    priority: 2
+  });
+}
+
+// [NEW] 通知 Token 即将过期
+function notifyTokenExpiringSoon(daysLeft) {
+  chrome.notifications.create({
+    type: 'basic',
+    iconUrl: 'icons/icon128.png',
+    title: 'VOC-Master',
+    message: `您的登录将在 ${daysLeft} 天后过期，请注意续期`,
+    priority: 1
+  });
 }
 
 // 用户登录
@@ -84,10 +220,27 @@ async function login(email, password) {
     }
     
     const data = await response.json();
+    
+    // [NEW] 解码 Token 获取过期时间
+    const tokenPayload = decodeJWTToken(data.access_token);
+    if (tokenPayload) {
+      // exp 是 Unix 时间戳（秒），转换为毫秒
+      authState.tokenExpireAt = tokenPayload.exp * 1000;
+      authState.tokenIssuedAt = tokenPayload.iat * 1000;
+      
+      const expireDate = new Date(authState.tokenExpireAt);
+      console.log('[Auth] Token will expire at:', expireDate.toLocaleString());
+    }
+    
     authState.isLoggedIn = true;
     authState.token = data.access_token;
     authState.user = data.user;
+    authState.expiryWarningShown = false;
+    
     await saveAuthState();
+    
+    // [NEW] 启动过期检查
+    startTokenExpiryCheck();
     
     console.log('[Auth] Login success:', authState.user.email);
     return { success: true, user: data.user };
@@ -106,7 +259,14 @@ async function logout() {
 
 // 验证 Token
 async function verifyToken() {
-  if (!authState.token) return { valid: false };
+  if (!authState.token) return { valid: false, reason: 'no_token' };
+  
+  // [NEW] 先检查本地过期时间（避免不必要的 API 调用）
+  if (authState.tokenExpireAt && Date.now() > authState.tokenExpireAt) {
+    console.log('[Auth] Token expired locally');
+    await clearAuthState();
+    return { valid: false, reason: 'expired' };
+  }
   
   try {
     const response = await fetch(`${API_BASE_URL}/auth/verify`, {
@@ -115,16 +275,35 @@ async function verifyToken() {
     const data = await response.json();
     
     if (!data.valid) {
+      console.log('[Auth] Token invalid on server');
       await clearAuthState();
     }
+    
     return data;
   } catch (e) {
-    return { valid: false };
+    console.error('[Auth] Verify failed:', e);
+    return { valid: false, reason: 'network_error' };
   }
 }
 
-// 启动时恢复认证状态
-loadAuthState();
+// [FIXED] 启动时恢复认证状态（使用 await 等待完成）
+(async () => {
+  console.log('[Service Worker] Starting...');
+  await loadAuthState();  // 等待认证状态加载完成
+  console.log('[Service Worker] ✅ Ready');
+})();
+
+// [NEW] 监听 storage 变化，实现跨标签页状态同步
+chrome.storage.onChanged.addListener((changes, areaName) => {
+  if (areaName === 'local') {
+    if (changes.auth_token || changes.auth_user) {
+      console.log('[Auth] Storage changed, reloading auth state...');
+      authStateReady = false;
+      authStateLoadPromise = null;
+      loadAuthState();
+    }
+  }
+});
 
 // Star rating URL parameters
 const STAR_FILTERS = {
@@ -769,12 +948,13 @@ async function getNextPageUrl(tabId) {
  * - 后端接收后立即触发翻译
  * - 用户可以"边采边看"翻译结果
  */
-async function collectReviewsWithTab(asin, stars, pagesPerStar, mediaType, speedMode, sendProgress) {
+async function collectReviewsWithTab(asin, stars, pagesPerStar, mediaType, speedMode, sendProgress, initialProductInfo = null) {
   const allReviews = [];
   const seenReviewIds = new Set();
   let originalTabId = null;
   let totalUploaded = 0;  // [NEW] 累计上传计数
-  let scrapedProductInfo = null;  // [NEW] 暂存产品信息
+  // [UPDATED] 优先使用传入的 productInfo（已包含 categories），否则后面自动爬取
+  let scrapedProductInfo = initialProductInfo;
   
   // 根据速度模式设置等待时间
   // ⚡ 极速模式：激进但不踩红线，依赖 DOM 变化检测而非固定等待
@@ -847,53 +1027,83 @@ async function collectReviewsWithTab(asin, stars, pagesPerStar, mediaType, speed
       }
     }
     
-    // [NEW] 🔥 流式模式：先访问产品页获取完整产品信息
-    console.log('[Collector] Fetching product info for stream mode...');
-    try {
-      const productPageUrl = `https://www.amazon.com/dp/${asin}`;
-      await chrome.tabs.update(collectorTabId, { url: productPageUrl });
-      await waitForTabLoad(collectorTabId, 30000);
-      await new Promise(r => setTimeout(r, timing.firstPageWait));
-      
-      const infoResults = await chrome.scripting.executeScript({
-        target: { tabId: collectorTabId },
-        func: () => {
-          const title = document.querySelector('#productTitle')?.textContent?.trim() ||
-                        document.querySelector('.product-title-word-break')?.textContent?.trim() ||
-                        document.title.split(':')[0].trim();
-          const imageElement = document.querySelector('#landingImage') ||
-                               document.querySelector('#imgBlkFront');
-          const imageUrl = imageElement?.src || null;
-          let averageRating = null;
-          const ratingEl = document.querySelector('#acrPopover .a-icon-alt');
-          if (ratingEl) {
-            const match = ratingEl.textContent?.match(/(\d+\.?\d*)/);
-            if (match) averageRating = parseFloat(match[1]);
+    // [UPDATED] 🔥 如果已有产品信息（从 content.js 传入），跳过爬取；否则爬取
+    if (scrapedProductInfo && scrapedProductInfo.title) {
+      console.log('[Collector] ✅ Using pre-scraped product info:', scrapedProductInfo.title?.substring(0, 50));
+      console.log('[Collector] Categories count:', scrapedProductInfo.categories?.length || 0);
+    } else {
+      console.log('[Collector] Fetching product info for stream mode...');
+      try {
+        const productPageUrl = `https://www.amazon.com/dp/${asin}`;
+        await chrome.tabs.update(collectorTabId, { url: productPageUrl });
+        await waitForTabLoad(collectorTabId, 30000);
+        await new Promise(r => setTimeout(r, timing.firstPageWait));
+        
+        const infoResults = await chrome.scripting.executeScript({
+          target: { tabId: collectorTabId },
+          func: () => {
+            const title = document.querySelector('#productTitle')?.textContent?.trim() ||
+                          document.querySelector('.product-title-word-break')?.textContent?.trim() ||
+                          document.title.split(':')[0].trim();
+            const imageElement = document.querySelector('#landingImage') ||
+                                 document.querySelector('#imgBlkFront');
+            const imageUrl = imageElement?.src || null;
+            let averageRating = null;
+            const ratingEl = document.querySelector('#acrPopover .a-icon-alt');
+            if (ratingEl) {
+              const match = ratingEl.textContent?.match(/(\d+\.?\d*)/);
+              if (match) averageRating = parseFloat(match[1]);
+            }
+            let price = null;
+            const priceEl = document.querySelector('.a-price .a-offscreen');
+            if (priceEl) price = priceEl.textContent?.trim();
+            const bulletPoints = [];
+            document.querySelectorAll('#feature-bullets .a-list-item').forEach(el => {
+              const text = el.textContent?.trim();
+              if (text && text.length > 5 && !bulletPoints.includes(text)) bulletPoints.push(text);
+            });
+            
+            // [NEW] 获取产品类目面包屑
+            const categories = [];
+            const breadcrumbSelectors = [
+              '#wayfinding-breadcrumbs_feature_div ul.a-unordered-list li a',
+              '#wayfinding-breadcrumbs_container a',
+              '.a-breadcrumb a'
+            ];
+            for (const selector of breadcrumbSelectors) {
+              const categoryLinks = document.querySelectorAll(selector);
+              if (categoryLinks.length > 0) {
+                categoryLinks.forEach(link => {
+                  const name = link.textContent?.trim();
+                  const url = link.getAttribute('href');
+                  if (name && url && !name.match(/^(\s|›|>)*$/)) {
+                    categories.push({
+                      name: name,
+                      url: url.startsWith('http') ? url : `${window.location.origin}${url}`
+                    });
+                  }
+                });
+                if (categories.length > 0) break;
+              }
+            }
+            
+            const url = window.location.href;
+            let marketplace = 'US';
+            if (url.includes('.co.uk')) marketplace = 'UK';
+            else if (url.includes('.de')) marketplace = 'DE';
+            return { title, imageUrl, averageRating, price, bulletPoints, categories, marketplace };
           }
-          let price = null;
-          const priceEl = document.querySelector('.a-price .a-offscreen');
-          if (priceEl) price = priceEl.textContent?.trim();
-          const bulletPoints = [];
-          document.querySelectorAll('#feature-bullets .a-list-item').forEach(el => {
-            const text = el.textContent?.trim();
-            if (text && text.length > 5 && !bulletPoints.includes(text)) bulletPoints.push(text);
-          });
-          const url = window.location.href;
-          let marketplace = 'US';
-          if (url.includes('.co.uk')) marketplace = 'UK';
-          else if (url.includes('.de')) marketplace = 'DE';
-          return { title, imageUrl, averageRating, price, bulletPoints, marketplace };
+        });
+        
+        if (infoResults[0]?.result) {
+          scrapedProductInfo = infoResults[0].result;
+          console.log('[Collector] ✅ Product info scraped:', scrapedProductInfo.title?.substring(0, 50));
         }
-      });
-      
-      if (infoResults[0]?.result) {
-        scrapedProductInfo = infoResults[0].result;
-        console.log('[Collector] ✅ Product info scraped:', scrapedProductInfo.title?.substring(0, 50));
+      } catch (e) {
+        console.warn('[Collector] Failed to scrape product info:', e.message);
+        // 使用默认信息，不阻塞采集
+        scrapedProductInfo = { title: `Product ${asin}`, marketplace: 'US' };
       }
-    } catch (e) {
-      console.warn('[Collector] Failed to scrape product info:', e.message);
-      // 使用默认信息，不阻塞采集
-      scrapedProductInfo = { title: `Product ${asin}`, marketplace: 'US' };
     }
 
     for (const star of stars) {
@@ -1025,6 +1235,7 @@ async function collectReviewsWithTab(asin, stars, pagesPerStar, mediaType, speed
               average_rating: scrapedProductInfo?.averageRating,
               price: scrapedProductInfo?.price,
               bullet_points: scrapedProductInfo?.bulletPoints,
+              categories: scrapedProductInfo?.categories,  // [NEW] 产品类目
               reviews: pageNewReviews,  // ⚠️ 仅传输当前页的新评论
               is_stream: true           // 标记为流式传输
             };
@@ -1132,10 +1343,12 @@ async function collectReviewsWithTab(asin, stars, pagesPerStar, mediaType, speed
     console.log(`[Collector] ✅ Collection complete: ${allReviews.length} reviews`);
     console.log('[Collector] ========================================');
     
-    // [NEW] 🚀 采集完成后触发全自动分析（带重试机制）
+    // [FIXED] 🚀 采集完成后触发全自动分析（带重试机制，优化响应处理）
+    // [FIXED] 不再使用 sendProgress，而是直接发送 COLLECTION_COMPLETE 消息
+    // 避免与 .then() 中的 COLLECTION_COMPLETE 冲突
     if (allReviews.length >= 10) {
-      // 等待队列消费完成后再触发（最多等待60秒，每5秒重试一次）
-      const triggerAutoAnalysis = async (maxRetries = 12, delay = 5000) => {
+      // 等待队列消费完成后再触发（最多等待30秒，每3秒重试一次，更快响应）
+      const triggerAutoAnalysis = async (maxRetries = 10, delay = 3000) => {
         for (let attempt = 1; attempt <= maxRetries; attempt++) {
           try {
             console.log(`[Collector] 🚀 Triggering auto analysis (attempt ${attempt}/${maxRetries})...`);
@@ -1146,17 +1359,18 @@ async function collectReviewsWithTab(asin, stars, pagesPerStar, mediaType, speed
             
             if (response.ok) {
               const result = await response.json();
-              console.log('[Collector] ✅ Auto analysis triggered:', result.status);
-              sendProgress({
-                star: 5,
-                page: 1,
-                pagesPerStar: 1,
-                totalReviews: allReviews.length,
-                progress: 100,
-                message: `采集完成！已触发自动分析，共 ${allReviews.length} 条评论`,
-                autoAnalysisStarted: true,
-                taskId: result.task_id
-              });
+              console.log('[Collector] ✅ Auto analysis response:', result.status);
+              
+              // 处理不同的响应状态
+              let message = `采集完成！共 ${allReviews.length} 条评论`;
+              if (result.status === 'started') {
+                message = `采集完成！已触发自动分析，共 ${allReviews.length} 条评论`;
+              } else if (result.status === 'already_running') {
+                message = `采集完成！分析任务进行中，共 ${allReviews.length} 条评论`;
+              }
+              
+              // [FIXED] 不需要额外发送消息，让 .then() 中的 COLLECTION_COMPLETE 处理
+              console.log(`[Collector] ✅ Analysis triggered: ${message}`);
               return true;
             } else if (response.status === 404) {
               // 产品尚未入库，等待后重试
@@ -1164,9 +1378,15 @@ async function collectReviewsWithTab(asin, stars, pagesPerStar, mediaType, speed
               if (attempt < maxRetries) {
                 await new Promise(r => setTimeout(r, delay));
               }
+            } else if (response.status === 400) {
+              // 评论数不足等业务错误，直接返回成功（采集本身完成了）
+              const error = await response.json().catch(() => ({}));
+              console.log('[Collector] ⚠️ Analysis skipped:', error.detail || 'Business error');
+              return true;
             } else {
               console.warn('[Collector] ⚠️ Auto analysis trigger failed:', response.status);
-              return false;
+              // 不阻塞，采集已完成
+              return true;
             }
           } catch (err) {
             console.error(`[Collector] ❌ Auto analysis trigger error (attempt ${attempt}):`, err.message);
@@ -1175,12 +1395,13 @@ async function collectReviewsWithTab(asin, stars, pagesPerStar, mediaType, speed
             }
           }
         }
-        console.error('[Collector] ❌ Auto analysis trigger failed after all retries');
+        // 重试失败，但采集已完成
+        console.error('[Collector] ❌ Auto analysis trigger failed after all retries, but collection is done');
         return false;
       };
       
-      // 异步触发，不阻塞返回
-      triggerAutoAnalysis();
+      // [FIXED] 等待 triggerAutoAnalysis 完成，确保 .then() 中的 COLLECTION_COMPLETE 是最后发送的
+      await triggerAutoAnalysis();
     } else {
       console.log(`[Collector] ⚠️ Only ${allReviews.length} reviews, skipping auto analysis (need >= 10)`);
     }
@@ -1233,6 +1454,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       
       console.log('[Background] Starting tab-based collection for:', asin);
       console.log('[Background] Speed mode:', config.speedMode || 'fast');
+      console.log('[Background] ProductInfo categories:', productInfo?.categories?.length || 0);
       
       // Run collection asynchronously
       collectReviewsWithTab(
@@ -1249,7 +1471,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
               ...progress
             }).catch(() => {});
           }
-        }
+        },
+        productInfo  // [NEW] 传入 productInfo（包含 categories）
       ).then(async (reviews) => {
         console.log('[Background] Collection completed:', reviews.length, 'reviews');
         
@@ -1367,6 +1590,30 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return true;
     
     case 'AUTH_GET_STATE':
+      // [FIXED] 确保认证状态已加载完成再返回（防止竞态条件）
+      if (!authStateReady) {
+        console.log('[Auth] State not ready, waiting for load...');
+        loadAuthState()
+          .then(() => {
+            console.log('[Auth] State loaded, returning:', authState.isLoggedIn);
+            sendResponse({
+              success: true,
+              isLoggedIn: authState.isLoggedIn,
+              user: authState.user
+            });
+          })
+          .catch(error => {
+            console.error('[Auth] Load failed:', error);
+            sendResponse({
+              success: true,
+              isLoggedIn: false,
+              user: null
+            });
+          });
+        return true;  // 保持异步通道
+      }
+      
+      // 状态已就绪，直接返回
       sendResponse({
         success: true,
         isLoggedIn: authState.isLoggedIn,
@@ -1418,12 +1665,12 @@ chrome.runtime.onMessageExternal.addListener((message, sender, sendResponse) => 
   console.log('[External] Message type:', message.type);
 
   // 安全检查：校验发送者域名
+  // [FIXED] 包含本地开发环境和生产环境
   const allowedOrigins = [
     'http://localhost:',
     'http://127.0.0.1:',
-    'http://115.191.30.209:',
-    'http://115.191.30.209',
-    'https://voc-master.com'
+    'http://115.191.30.209',  // 生产环境
+    'https://voc-master.com'  // 未来的正式域名
   ];
   
   const isAllowed = allowedOrigins.some(origin => sender.url?.startsWith(origin));
@@ -1756,6 +2003,30 @@ async function collectReviewsWithTabAuto(asin, stars, pagesPerStar, mediaType, s
             }
           }
 
+          // [NEW] === 抓取产品类目面包屑 ===
+          const categories = [];
+          const breadcrumbSelectors = [
+            '#wayfinding-breadcrumbs_feature_div ul.a-unordered-list li a',
+            '#wayfinding-breadcrumbs_container a',
+            '.a-breadcrumb a'
+          ];
+          for (const selector of breadcrumbSelectors) {
+            const categoryLinks = document.querySelectorAll(selector);
+            if (categoryLinks.length > 0) {
+              categoryLinks.forEach(link => {
+                const name = link.textContent?.trim();
+                const url = link.getAttribute('href');
+                if (name && url && !name.match(/^(\s|›|>)*$/)) {
+                  categories.push({
+                    name: name,
+                    url: url.startsWith('http') ? url : `${window.location.origin}${url}`
+                  });
+                }
+              });
+              if (categories.length > 0) break;
+            }
+          }
+
           // === 判断市场 ===
           const url = window.location.href;
           let marketplace = 'US';
@@ -1764,7 +2035,7 @@ async function collectReviewsWithTabAuto(asin, stars, pagesPerStar, mediaType, s
           else if (url.includes('.fr')) marketplace = 'FR';
           else if (url.includes('.co.jp')) marketplace = 'JP';
 
-          return { title, imageUrl, averageRating, price, bulletPoints, marketplace };
+          return { title, imageUrl, averageRating, price, bulletPoints, categories, marketplace };
         }
       });
       
@@ -1776,6 +2047,7 @@ async function collectReviewsWithTabAuto(asin, stars, pagesPerStar, mediaType, s
           averageRating: scrapedProductInfo.averageRating,
           price: scrapedProductInfo.price,
           bulletPointsCount: scrapedProductInfo.bulletPoints?.length || 0,
+          categoriesCount: scrapedProductInfo.categories?.length || 0,
           marketplace: scrapedProductInfo.marketplace
         });
       }
@@ -1883,6 +2155,7 @@ async function collectReviewsWithTabAuto(asin, stars, pagesPerStar, mediaType, s
               average_rating: scrapedProductInfo?.averageRating,
               price: scrapedProductInfo?.price,
               bullet_points: scrapedProductInfo?.bulletPoints,
+              categories: scrapedProductInfo?.categories,  // [NEW] 产品类目
               reviews: pageNewReviews,  // ⚠️ 仅传输当前页的新评论
               is_stream: true           // 标记为流式传输
             };
@@ -1955,10 +2228,10 @@ async function collectReviewsWithTabAuto(asin, stars, pagesPerStar, mediaType, s
         message: '数据已在采集过程中逐页上传，翻译任务已并行启动'
       });
       
-      // 🚀 采集完成后触发全自动分析（带重试机制）
+      // [FIXED] 🚀 采集完成后触发全自动分析（优化响应处理）
       if (allReviews.length >= 10) {
-        // 等待队列消费完成后再触发（最多等待60秒，每5秒重试一次）
-        const triggerAutoAnalysisWithRetry = async (maxRetries = 12, delay = 5000) => {
+        // 等待队列消费完成后再触发（最多等待30秒，每3秒重试一次，更快响应）
+        const triggerAutoAnalysisWithRetry = async (maxRetries = 10, delay = 3000) => {
           for (let attempt = 1; attempt <= maxRetries; attempt++) {
             try {
               console.log(`[AutoCollector] 🚀 Triggering auto analysis (attempt ${attempt}/${maxRetries})...`);
@@ -1969,16 +2242,20 @@ async function collectReviewsWithTabAuto(asin, stars, pagesPerStar, mediaType, s
               
               if (response.ok) {
                 const result = await response.json();
-                console.log('[AutoCollector] ✅ Auto analysis triggered:', result.status);
+                console.log('[AutoCollector] ✅ Auto analysis response:', result.status);
                 return true;
               } else if (response.status === 404) {
                 console.log(`[AutoCollector] ⏳ Product not ready yet, waiting ${delay/1000}s before retry...`);
                 if (attempt < maxRetries) {
                   await new Promise(r => setTimeout(r, delay));
                 }
+              } else if (response.status === 400) {
+                // 业务错误，采集已完成
+                console.log('[AutoCollector] ⚠️ Analysis skipped (business rule)');
+                return true;
               } else {
                 console.warn('[AutoCollector] ⚠️ Auto analysis trigger failed:', response.status);
-                return false;
+                return true;  // 不阻塞，采集已完成
               }
             } catch (err) {
               console.error(`[AutoCollector] ❌ Auto analysis trigger error (attempt ${attempt}):`, err.message);
@@ -1991,8 +2268,8 @@ async function collectReviewsWithTabAuto(asin, stars, pagesPerStar, mediaType, s
           return false;
         };
         
-        // 异步触发，不阻塞返回
-        triggerAutoAnalysisWithRetry();
+        // [FIXED] 等待完成，确保 COLLECTION_COMPLETE 是最后发送的消息
+        await triggerAutoAnalysisWithRetry();
       } else {
         console.log(`[AutoCollector] ⚠️ Only ${allReviews.length} reviews, skipping auto analysis (need >= 10)`);
       }

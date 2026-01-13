@@ -110,30 +110,19 @@ export function FilterBar({
           </Select>
         </div>
 
-        {/* Right side: Insights Toggle & Highlight Toggle */}
+        {/* Right side: Insights Toggle */}
         <div className="flex items-center gap-4">
           {/* 折叠/展开洞察按钮 */}
           <Button
             variant="outline"
             size="sm"
             onClick={() => setInsightsExpanded(!insightsExpanded)}
-            className="flex items-center gap-1.5 text-amber-700 dark:text-amber-400 border-amber-300 dark:border-amber-600 hover:bg-amber-50 dark:hover:bg-amber-900/20"
+            className="flex items-center gap-1.5 text-rose-600 dark:text-rose-400 border-rose-300 dark:border-rose-600 hover:bg-rose-50 dark:hover:bg-rose-900/20"
           >
             <Lightbulb className="size-4" />
             <span>{insightsExpanded ? '收起洞察' : '展开洞察'}</span>
             {insightsExpanded ? <ChevronUp className="size-4" /> : <ChevronDown className="size-4" />}
           </Button>
-          
-          {/* 主题高亮复选框 */}
-          <label className="flex items-center gap-2 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={highlightEnabled}
-              onChange={(e) => setHighlightEnabled(e.target.checked)}
-              className="size-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-            />
-            <span className="text-sm text-gray-700 dark:text-gray-300">主题高亮</span>
-          </label>
         </div>
       </div>
     </div>

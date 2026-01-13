@@ -64,6 +64,7 @@ export const ProductReportDialog = memo(function ProductReportDialog({
   const [reportHistory, setReportHistory] = useState<ProductReport[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [selectedReportType, setSelectedReportType] = useState<ReportType>('comprehensive');
+  const [isDataUnchanged, setIsDataUnchanged] = useState(false); // 数据是否未更新
 
   // 加载预览数据
   useEffect(() => {
@@ -75,6 +76,7 @@ export const ProductReportDialog = memo(function ProductReportDialog({
   const loadPreview = async () => {
     setIsLoading(true);
     setError(null);
+    setIsDataUnchanged(false);
     try {
       const [data, history] = await Promise.all([
         getReportPreview(asin),
@@ -83,6 +85,21 @@ export const ProductReportDialog = memo(function ProductReportDialog({
       setPreviewData(data);
       setStats(data.stats || null);
       setReportHistory(history.reports || []);
+      
+      // 检查数据是否与最新报告相同
+      if (history.reports && history.reports.length > 0) {
+        const latestReport = history.reports[0];
+        const snapshot = (latestReport as any).data_snapshot;
+        if (snapshot) {
+          // 比较关键数据：总评论数、翻译数、洞察数、主题数
+          const unchanged = 
+            snapshot.total_reviews === ratingStats.totalReviews &&
+            snapshot.translated_reviews === ratingStats.translatedReviews &&
+            snapshot.reviews_with_insights === ratingStats.reviewsWithInsights &&
+            snapshot.reviews_with_themes === ratingStats.reviewsWithThemes;
+          setIsDataUnchanged(unchanged);
+        }
+      }
     } catch (err: any) {
       console.error('Failed to load preview:', err);
       setError(err.message || '加载预览数据失败');
@@ -92,10 +109,13 @@ export const ProductReportDialog = memo(function ProductReportDialog({
   };
 
   // 检查是否可以生成报告
-  const canGenerate = 
+  const meetsRequirements = 
     ratingStats.translatedReviews >= 10 &&
     ratingStats.reviewsWithInsights > 0 &&
     ratingStats.reviewsWithThemes > 0;
+  
+  // 满足条件且数据有更新才能生成
+  const canGenerate = meetsRequirements && !isDataUnchanged;
 
   // 生成报告
   const handleGenerateReport = async () => {
@@ -155,8 +175,8 @@ export const ProductReportDialog = memo(function ProductReportDialog({
     <Dialog open={isOpen} onOpenChange={onClose}>
       <DialogContent className="max-w-4xl w-[90vw] max-h-[90vh] flex flex-col">
         <DialogHeader>
-          <DialogTitle className="flex items-center gap-2">
-            <FileText className="size-5 text-emerald-600" />
+          <DialogTitle className="flex items-center gap-2 text-rose-600">
+            <FileText className="size-5" />
             产品分析报告
           </DialogTitle>
         </DialogHeader>
@@ -170,7 +190,7 @@ export const ProductReportDialog = memo(function ProductReportDialog({
             <div className="space-y-2">
               <div className="flex items-center gap-2 text-sm">
                 {ratingStats.translatedReviews >= 10 ? (
-                  <CheckCircle2 className="size-4 text-emerald-500 flex-shrink-0" />
+                  <CheckCircle2 className="size-4 text-rose-500 flex-shrink-0" />
                 ) : (
                   <XCircle className="size-4 text-red-500 flex-shrink-0" />
                 )}
@@ -180,7 +200,7 @@ export const ProductReportDialog = memo(function ProductReportDialog({
               </div>
               <div className="flex items-center gap-2 text-sm">
                 {ratingStats.reviewsWithInsights > 0 ? (
-                  <CheckCircle2 className="size-4 text-emerald-500 flex-shrink-0" />
+                  <CheckCircle2 className="size-4 text-rose-500 flex-shrink-0" />
                 ) : (
                   <XCircle className="size-4 text-red-500 flex-shrink-0" />
                 )}
@@ -190,7 +210,7 @@ export const ProductReportDialog = memo(function ProductReportDialog({
               </div>
               <div className="flex items-center gap-2 text-sm">
                 {ratingStats.reviewsWithThemes > 0 ? (
-                  <CheckCircle2 className="size-4 text-emerald-500 flex-shrink-0" />
+                  <CheckCircle2 className="size-4 text-rose-500 flex-shrink-0" />
                 ) : (
                   <XCircle className="size-4 text-red-500 flex-shrink-0" />
                 )}
@@ -199,10 +219,17 @@ export const ProductReportDialog = memo(function ProductReportDialog({
                 </span>
               </div>
             </div>
-            {!canGenerate && (
+            {!meetsRequirements && (
               <div className="mt-3 p-3 bg-amber-50 dark:bg-amber-900/20 rounded-lg border border-amber-200 dark:border-amber-800">
                 <p className="text-xs text-amber-700 dark:text-amber-400">
                   ⚠️ 请先完成翻译、洞察提取和完善洞察提取后才能生成报告
+                </p>
+              </div>
+            )}
+            {meetsRequirements && isDataUnchanged && (
+              <div className="mt-3 p-3 bg-rose-50 dark:bg-rose-900/20 rounded-lg border border-rose-200 dark:border-rose-800">
+                <p className="text-xs text-rose-700 dark:text-rose-400">
+                  💡 数据未更新，无需重新生成报告。您可以查看上方的历史报告。
                 </p>
               </div>
             )}
@@ -212,7 +239,7 @@ export const ProductReportDialog = memo(function ProductReportDialog({
           {reportHistory.length > 0 && (
             <div className="bg-gray-50 dark:bg-gray-900/50 rounded-lg p-4 border border-gray-200 dark:border-gray-700">
               <div className="flex items-center gap-2 mb-3">
-                <History className="size-5 text-blue-600 dark:text-blue-400" />
+                <History className="size-5 text-rose-600 dark:text-rose-400" />
                 <h3 className="text-sm font-semibold text-gray-900 dark:text-white">
                   历史报告（{reportHistory.length} 份）
                 </h3>
@@ -220,28 +247,37 @@ export const ProductReportDialog = memo(function ProductReportDialog({
               <div className="space-y-2 max-h-60 overflow-y-auto">
                 {reportHistory.map((report) => {
                   const reportTypeConfig = REPORT_TYPE_CONFIG[report.report_type as ReportType] || REPORT_TYPE_CONFIG.comprehensive;
+                  // 获取数据标签
+                  const dataLabel = (report as any).data_snapshot 
+                    ? `基于 ${(report as any).data_snapshot.total_reviews || 0} 条评论`
+                    : null;
                   return (
                     <button
                       key={report.id}
                       onClick={() => handleViewReport(report.id)}
-                      className="w-full p-3 bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 hover:border-blue-300 dark:hover:border-blue-600 hover:bg-blue-50 dark:hover:bg-blue-900/20 transition-all text-left group"
+                      className="w-full p-3 bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 hover:border-rose-300 dark:hover:border-rose-600 hover:bg-rose-50 dark:hover:bg-rose-900/20 transition-all text-left group"
                     >
                       <div className="flex items-start justify-between gap-3">
                         <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-2 mb-1">
+                          <div className="flex items-center gap-2 mb-1 flex-wrap">
                             <span className="text-lg">{reportTypeConfig.icon}</span>
                             <span className="font-medium text-gray-900 dark:text-white text-sm">
                               {report.title || reportTypeConfig.label}
                             </span>
                             <span className={`px-2 py-0.5 rounded text-xs font-medium ${
                               report.status === 'completed'
-                                ? 'bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-400'
+                                ? 'bg-rose-100 dark:bg-rose-900/30 text-rose-700 dark:text-rose-400'
                                 : report.status === 'failed'
                                 ? 'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400'
                                 : 'bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-400'
                             }`}>
                               {report.status === 'completed' ? '已完成' : report.status === 'failed' ? '失败' : '处理中'}
                             </span>
+                            {dataLabel && (
+                              <span className="px-2 py-0.5 rounded text-xs bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400">
+                                {dataLabel}
+                              </span>
+                            )}
                           </div>
                           <div className="flex items-center gap-3 text-xs text-gray-500 dark:text-gray-400">
                             <span className="flex items-center gap-1">
@@ -253,7 +289,7 @@ export const ProductReportDialog = memo(function ProductReportDialog({
                             </span>
                           </div>
                         </div>
-                        <div className="flex-shrink-0 text-gray-400 group-hover:text-blue-600 dark:group-hover:text-blue-400 transition-colors">
+                        <div className="flex-shrink-0 text-gray-400 group-hover:text-rose-600 dark:group-hover:text-rose-400 transition-colors">
                           <FileText className="size-5" />
                         </div>
                       </div>
@@ -265,7 +301,7 @@ export const ProductReportDialog = memo(function ProductReportDialog({
           )}
 
           {/* 报告类型选择 */}
-          {canGenerate && (
+          {meetsRequirements && (
             <div>
               <h3 className="text-sm font-semibold text-gray-900 dark:text-white mb-3">
                 选择报告类型
@@ -277,7 +313,7 @@ export const ProductReportDialog = memo(function ProductReportDialog({
                     onClick={() => setSelectedReportType(key as ReportType)}
                     className={`p-4 rounded-lg border-2 transition-all text-left ${
                       selectedReportType === key
-                        ? 'border-emerald-500 bg-emerald-50 dark:bg-emerald-900/20'
+                        ? 'border-rose-500 bg-rose-50 dark:bg-rose-900/20'
                         : 'border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 hover:border-gray-300 dark:hover:border-gray-600'
                     }`}
                   >
@@ -291,7 +327,7 @@ export const ProductReportDialog = memo(function ProductReportDialog({
                           {config.description}
                         </div>
                         {previewData?.report_counts?.[key as ReportType] && (
-                          <div className="mt-2 text-xs text-emerald-600 dark:text-emerald-400">
+                          <div className="mt-2 text-xs text-rose-600 dark:text-rose-400">
                             已有 {previewData.report_counts[key as ReportType]} 份
                           </div>
                         )}
@@ -304,7 +340,7 @@ export const ProductReportDialog = memo(function ProductReportDialog({
           )}
 
           {/* 数据预览 */}
-          {stats && canGenerate && (
+          {stats && meetsRequirements && (
             <div className="bg-gray-50 dark:bg-gray-900/50 rounded-lg p-4 border border-gray-200 dark:border-gray-700">
               <h3 className="text-sm font-semibold text-gray-900 dark:text-white mb-3 flex items-center gap-2">
                 <BarChart3 className="size-4" />
@@ -372,7 +408,7 @@ export const ProductReportDialog = memo(function ProductReportDialog({
           {isGenerating && (
             <div className="flex flex-col items-center justify-center py-12 space-y-4">
               <div className="relative">
-                <Loader2 className="size-12 text-emerald-500 animate-spin" />
+                <Loader2 className="size-12 text-rose-500 animate-spin" />
                 <span className="text-2xl absolute -top-2 -right-2">{REPORT_TYPE_CONFIG[selectedReportType].icon}</span>
               </div>
               <div className="text-center">
@@ -387,7 +423,7 @@ export const ProductReportDialog = memo(function ProductReportDialog({
                 </p>
               </div>
               <div className="w-64 h-2 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden">
-                <div className="h-full bg-emerald-500 rounded-full animate-progress" style={{
+                <div className="h-full bg-gradient-to-r from-rose-500 to-pink-500 rounded-full animate-progress" style={{
                   animation: 'progress 30s ease-in-out forwards'
                 }} />
               </div>
@@ -445,7 +481,7 @@ export const ProductReportDialog = memo(function ProductReportDialog({
                   size="sm"
                   onClick={handleGenerateReport}
                   disabled={!canGenerate || isGenerating}
-                  className="gap-1.5 bg-emerald-600 hover:bg-emerald-700"
+                  className="gap-1.5 bg-gradient-to-r from-rose-500 to-pink-500 hover:from-rose-600 hover:to-pink-600"
                 >
                   <span className="mr-1">{REPORT_TYPE_CONFIG[selectedReportType].icon}</span>
                   生成{REPORT_TYPE_CONFIG[selectedReportType].label}

@@ -17,12 +17,12 @@ export default function AnalysisResultPage() {
   const [error, setError] = useState('');
   const [isFullscreen, setIsFullscreen] = useState(false);
   
-  // 智能返回函数：如果有历史记录就返回，否则跳转到首页
+  // 智能返回函数：如果有历史记录就返回，否则跳转到我的洞察
   const handleGoBack = () => {
-    if (window.history.length > 1) {
+    if (window.history.length > 2) {
       navigate(-1);
     } else {
-      navigate('/');
+      navigate('/home/my-projects');
     }
   };
 
@@ -116,7 +116,7 @@ export default function AnalysisResultPage() {
   if (loading && !project) {
     return (
       <div className="h-screen flex flex-col items-center justify-center gap-4 bg-gray-50 dark:bg-gray-950">
-        <Loader2 className="size-10 animate-spin text-indigo-600" />
+        <Loader2 className="size-10 animate-spin text-rose-500" />
         <p className="text-gray-500">正在加载分析项目...</p>
       </div>
     );
@@ -124,10 +124,34 @@ export default function AnalysisResultPage() {
   
   if (loading && project?.status === 'processing') {
     return (
-      <div className="h-screen flex flex-col items-center justify-center gap-4 bg-gray-50 dark:bg-gray-950">
-        <Loader2 className="size-10 animate-spin text-indigo-600" />
-        <p className="text-gray-500">正在生成深度分析报告...</p>
-        <p className="text-sm text-gray-400">分析进行中，预计需要 1-2 分钟</p>
+      <div className="h-screen flex flex-col items-center justify-center gap-6 bg-gray-50 dark:bg-gray-950">
+        <Loader2 className="size-10 animate-spin text-rose-500" />
+        <div className="text-center space-y-2">
+          <p className="text-lg font-medium text-gray-700">正在生成深度分析报告...</p>
+          <p className="text-sm text-gray-500">分析进行中，预计需要 1-2 分钟</p>
+        </div>
+        {/* [NEW] 允许用户返回，让分析在后台运行 */}
+        <div className="flex gap-3 mt-4">
+          <Button 
+            variant="outline" 
+            onClick={handleGoBack}
+            className="gap-2"
+          >
+            <ArrowLeft className="size-4" />
+            返回继续浏览
+          </Button>
+          <Button 
+            variant="ghost" 
+            onClick={() => window.location.reload()}
+            className="gap-2 text-gray-500"
+          >
+            刷新查看进度
+          </Button>
+        </div>
+        <p className="text-xs text-gray-400 mt-4">
+          💡 提示：您可以返回继续其他操作，分析将在后台运行。<br/>
+          完成后可在「AI 竞品对比」页面查看。
+        </p>
       </div>
     );
   }
@@ -165,7 +189,7 @@ export default function AnalysisResultPage() {
             <button
               type="button"
               onClick={handleFullscreenClick}
-              className="inline-flex items-center justify-center gap-2 rounded-md border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 px-3 py-2 text-sm font-medium transition-colors hover:bg-gray-100 dark:hover:bg-gray-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 flex-shrink-0"
+              className="inline-flex items-center justify-center gap-2 rounded-md border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 px-3 py-2 text-sm font-medium transition-colors hover:bg-rose-50 hover:border-rose-300 dark:hover:bg-gray-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-500 flex-shrink-0"
               title={isFullscreen ? '退出沉浸模式 (Esc)' : '进入沉浸模式'}
             >
               {isFullscreen ? (
@@ -221,7 +245,7 @@ export default function AnalysisResultPage() {
         )
       ) : (
         <div className="max-w-7xl mx-auto py-20 text-center">
-          <Loader2 className="size-10 animate-spin text-indigo-600 mx-auto mb-4" />
+          <Loader2 className="size-10 animate-spin text-rose-500 mx-auto mb-4" />
           <p className="text-gray-500">分析结果尚未生成</p>
         </div>
       )}

@@ -71,6 +71,7 @@ class ReviewIngestRequest(BaseModel):
     average_rating: Optional[float] = Field(None, ge=0, le=5, description="Real average rating from product page")
     price: Optional[str] = Field(None, description="Product price with currency")
     bullet_points: Optional[List[str]] = Field(None, description="Product bullet points list")
+    categories: Optional[List[dict]] = Field(None, description="Product category breadcrumb with name and url")
     reviews: List[ReviewRawData] = Field(..., description="List of reviews")
     is_stream: bool = Field(False, description="是否为流式上传模式（每页上传一次）")
     
@@ -803,6 +804,15 @@ class ReportTypeListResponse(BaseModel):
 
 # ============== Product Report (Persisted) Schemas ==============
 
+class ProductBriefInfo(BaseModel):
+    """产品简要信息 - 用于报告列表展示"""
+    asin: str = Field(..., description="产品 ASIN")
+    title: Optional[str] = Field(None, description="产品标题")
+    image_url: Optional[str] = Field(None, description="产品图片 URL")
+    price: Optional[str] = Field(None, description="产品价格")
+    average_rating: Optional[float] = Field(None, description="平均评分")
+
+
 class ProductReportResponse(BaseModel):
     """持久化报告响应 - 四位一体决策中台"""
     id: str = Field(..., description="报告 UUID")
@@ -816,6 +826,7 @@ class ProductReportResponse(BaseModel):
     error_message: Optional[str] = Field(None, description="错误信息")
     created_at: Optional[str] = Field(None, description="创建时间")
     updated_at: Optional[str] = Field(None, description="更新时间")
+    product: Optional[ProductBriefInfo] = Field(None, description="产品简要信息（报告列表用）")
     
     model_config = ConfigDict(
         from_attributes=True,

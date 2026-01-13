@@ -54,7 +54,7 @@ export default function WorkbenchPage() {
 
     setIsCreating(true);
     try {
-      // 构建产品列表，第一个默认为 target，其余为 competitor
+      // 构建产品列表,第一个默认为 target，其余为 competitor
       const productsList = selectedIds.map((id, index) => ({
         product_id: id,
         role_label: index === 0 ? 'target' : 'competitor',
@@ -68,12 +68,19 @@ export default function WorkbenchPage() {
       });
 
       if (result.success && result.project) {
-        toast.success('对比分析项目已创建，正在后台分析...');
+        const projectId = result.project.id;
+        // [OPTIMIZED] 显示成功提示，不跳转，让分析在后台运行
+        toast.success('对比分析已启动', {
+          description: '分析预计需要 1-2 分钟，点击查看进度',
+          duration: 8000,
+          action: {
+            label: '查看进度',
+            onClick: () => navigate(`/analysis/${projectId}`),
+          },
+        });
+        
         setIsModalOpen(false);
         setSelectedIds([]);
-        
-        // 跳转到项目详情页（会自动轮询直到分析完成）
-        navigate(`/analysis/${result.project.id}`);
       } else {
         throw new Error(result.error || '创建失败');
       }
@@ -95,7 +102,7 @@ export default function WorkbenchPage() {
     return (
       <div className="min-h-screen bg-gray-50 flex items-center justify-center">
         <div className="text-center">
-          <Loader2 className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600" />
+          <Loader2 className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-rose-500" />
           <p className="mt-4 text-gray-600">加载中...</p>
         </div>
       </div>
@@ -113,7 +120,7 @@ export default function WorkbenchPage() {
               <p className="text-gray-500 mt-1">选择多个产品进行深度对比分析。至少选择 2 个产品。</p>
             </div>
             <button
-              onClick={() => navigate('/')}
+              onClick={() => navigate('/home/my-projects')}
               className="px-4 py-2 text-sm text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition-colors"
             >
               返回产品列表
@@ -204,7 +211,7 @@ export default function WorkbenchPage() {
               })}
             </div>
             <span className="text-sm font-medium text-gray-700">
-              已选 <span className="font-bold text-indigo-600">{selectedIds.length}</span> 项
+              已选 <span className="font-bold text-rose-600">{selectedIds.length}</span> 项
             </span>
           </div>
 
@@ -243,7 +250,7 @@ export default function WorkbenchPage() {
                 flex items-center gap-2 rounded-full px-5 py-2.5 text-sm font-medium transition-all
                 ${
                   selectedIds.length >= 2 && !isCreating
-                    ? 'bg-indigo-600 text-white hover:bg-indigo-700 shadow-md hover:shadow-lg hover:-translate-y-0.5 cursor-pointer active:scale-95'
+                    ? 'bg-gradient-to-r from-rose-500 to-pink-500 text-white hover:from-rose-600 hover:to-pink-600 shadow-md hover:shadow-lg hover:-translate-y-0.5 cursor-pointer active:scale-95'
                     : 'bg-gray-100 text-gray-400 cursor-not-allowed'
                 }
               `}

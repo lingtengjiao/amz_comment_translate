@@ -676,18 +676,39 @@ def task_translate_bullet_points(self, product_id: str):
         # 2. Translate bullet points if not already translated
         if product.bullet_points and not product.bullet_points_translated:
             try:
-                # Parse bullet points from JSON or array
-                if isinstance(product.bullet_points, str):
-                    bullet_points = json.loads(product.bullet_points)
-                elif isinstance(product.bullet_points, list):
+                # Parse bullet points from JSON, PostgreSQL array, or Python list
+                bullet_points = []
+                if isinstance(product.bullet_points, list):
                     bullet_points = product.bullet_points
-                else:
-                    bullet_points = []
+                elif isinstance(product.bullet_points, str):
+                    bp_str = product.bullet_points.strip()
+                    # 尝试 JSON 格式 [...]
+                    if bp_str.startswith('['):
+                        bullet_points = json.loads(bp_str)
+                    # 处理 PostgreSQL 数组格式 {...}
+                    elif bp_str.startswith('{') and bp_str.endswith('}'):
+                        # 移除首尾的 {} 并按逗号分割（考虑引号内的逗号）
+                        import re
+                        # 匹配引号内的内容或非逗号字符
+                        content = bp_str[1:-1]  # 移除 { }
+                        # 使用正则匹配带引号的字符串
+                        matches = re.findall(r'"([^"]*)"', content)
+                        if matches:
+                            bullet_points = matches
+                        else:
+                            # 简单分割（不带引号的情况）
+                            bullet_points = [s.strip() for s in content.split(',') if s.strip()]
+                    else:
+                        # 尝试直接 JSON 解析
+                        try:
+                            bullet_points = json.loads(bp_str)
+                        except:
+                            bullet_points = [bp_str] if bp_str else []
                 
                 if bullet_points and len(bullet_points) > 0:
                     translated_bullets = translation_service.translate_bullet_points(bullet_points)
-                    # 直接保存为列表，用于 PostgreSQL TEXT[] 类型
-                    product.bullet_points_translated = translated_bullets
+                    # 统一保存为 JSON 字符串格式
+                    product.bullet_points_translated = json.dumps(translated_bullets, ensure_ascii=False)
                     logger.info(f"Translated {len(translated_bullets)} bullet points")
             except Exception as e:
                 logger.error(f"Failed to translate bullet points: {e}")
@@ -1612,18 +1633,34 @@ def task_ingest_translation_only(self, product_id: str):
         # 3. 翻译五点描述（如果未翻译）
         if product.bullet_points and not product.bullet_points_translated:
             try:
-                # Parse bullet points from JSON or array
-                if isinstance(product.bullet_points, str):
-                    bullet_points = json.loads(product.bullet_points)
-                elif isinstance(product.bullet_points, list):
+                # Parse bullet points from JSON, PostgreSQL array, or Python list
+                bullet_points = []
+                if isinstance(product.bullet_points, list):
                     bullet_points = product.bullet_points
-                else:
-                    bullet_points = []
+                elif isinstance(product.bullet_points, str):
+                    bp_str = product.bullet_points.strip()
+                    # 尝试 JSON 格式 [...]
+                    if bp_str.startswith('['):
+                        bullet_points = json.loads(bp_str)
+                    # 处理 PostgreSQL 数组格式 {...}
+                    elif bp_str.startswith('{') and bp_str.endswith('}'):
+                        import re
+                        content = bp_str[1:-1]  # 移除 { }
+                        matches = re.findall(r'"([^"]*)"', content)
+                        if matches:
+                            bullet_points = matches
+                        else:
+                            bullet_points = [s.strip() for s in content.split(',') if s.strip()]
+                    else:
+                        try:
+                            bullet_points = json.loads(bp_str)
+                        except:
+                            bullet_points = [bp_str] if bp_str else []
                     
                 if bullet_points and len(bullet_points) > 0:
                     translated_bullets = translation_service.translate_bullet_points(bullet_points)
-                    # 直接保存为列表，用于 PostgreSQL TEXT[] 类型
-                    product.bullet_points_translated = translated_bullets
+                    # 统一保存为 JSON 字符串格式
+                    product.bullet_points_translated = json.dumps(translated_bullets, ensure_ascii=False)
                     logger.info(f"[流式翻译] 五点翻译完成: {len(translated_bullets)} 条")
             except Exception as e:
                 logger.warning(f"[流式翻译] 五点翻译失败: {e}")

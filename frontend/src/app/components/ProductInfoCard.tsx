@@ -1,8 +1,6 @@
-import { Star, Copy, Check, FileText, Sparkles } from 'lucide-react';
+import { Star, Copy, Check } from 'lucide-react';
 import { useState, memo, useEffect, useRef } from 'react';
 import { Card } from './ui/card';
-import { Button } from './ui/button';
-import { ProductReportDialog } from './ProductReportDialog';
 import type { Task } from '../data/mockData';
 
 interface ProductInfoCardProps {
@@ -19,7 +17,6 @@ interface ProductInfoCardProps {
 
 export const ProductInfoCard = memo(function ProductInfoCard({ task, ratingStats, isTranslating = false }: ProductInfoCardProps) {
   const [copied, setCopied] = useState(false);
-  const [isReportDialogOpen, setIsReportDialogOpen] = useState(false);
   
   // 打字机效果状态
   const [displayedTitle, setDisplayedTitle] = useState('');
@@ -150,18 +147,6 @@ export const ProductInfoCard = memo(function ProductInfoCard({ task, ratingStats
                 </div>
               </div>
               
-              {/* Generate Report Button */}
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setIsReportDialogOpen(true)}
-                className="w-full gap-2 border-emerald-300 dark:border-emerald-700 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-900/30 hover:border-emerald-400"
-              >
-                <FileText className="size-4" />
-                <span>生成产品报告</span>
-                <Sparkles className="size-3.5 text-yellow-500" />
-              </Button>
-
               {/* Review Stats - Compact and Subtle */}
               <div className="px-3 py-2.5 bg-gray-100/50 dark:bg-gray-700/20 rounded text-xs space-y-1.5">
                 <div className="flex items-center justify-between">
@@ -170,7 +155,7 @@ export const ProductInfoCard = memo(function ProductInfoCard({ task, ratingStats
                 </div>
                 <div className="flex items-center justify-between">
                   <span className="text-gray-500 dark:text-gray-500">已翻译</span>
-                  <span className="text-emerald-600 dark:text-emerald-400">
+                  <span className="text-rose-600 dark:text-rose-400">
                     {ratingStats.translatedReviews} 条
                     <span className="text-gray-500 dark:text-gray-400 ml-1">
                       ({ratingStats.totalReviews > 0 
@@ -231,10 +216,10 @@ export const ProductInfoCard = memo(function ProductInfoCard({ task, ratingStats
             <div className="mb-4 space-y-2">
               {/* Chinese Title (Primary) - 带打字机效果 */}
               {(titleToShow || !titleTypingComplete) && (
-                <h2 className={`text-emerald-700 dark:text-emerald-400 font-bold leading-snug ${!titleTypingComplete ? 'transition-all duration-100' : ''}`}>
+                <h2 className={`text-rose-500 dark:text-rose-400 font-bold leading-snug ${!titleTypingComplete ? 'transition-all duration-100' : ''}`}>
                   {titleToShow}
                   {!titleTypingComplete && (
-                    <span className="inline-block w-0.5 h-5 bg-emerald-500 ml-0.5 animate-blink align-middle" />
+                    <span className="inline-block w-0.5 h-5 bg-rose-400 ml-0.5 animate-blink align-middle" />
                   )}
                 </h2>
               )}
@@ -275,12 +260,12 @@ export const ProductInfoCard = memo(function ProductInfoCard({ task, ratingStats
 
                 {/* Chinese Bullet Points - 带打字机效果 */}
                 {(bulletsToShow && bulletsToShow.length > 0) && (
-                  <div className="p-4 bg-emerald-50/50 dark:bg-emerald-500/10 rounded-lg border border-emerald-100 dark:border-emerald-500/20">
-                    <h3 className="text-[10px] uppercase tracking-wider text-emerald-700 dark:text-emerald-400 font-bold mb-3 flex items-center gap-2">
-                      <div className="size-2 rounded-full bg-emerald-500" />
+                  <div className="p-4 bg-rose-50/50 dark:bg-rose-500/10 rounded-lg border border-rose-100 dark:border-rose-500/20">
+                    <h3 className="text-[10px] uppercase tracking-wider text-rose-700 dark:text-rose-400 font-bold mb-3 flex items-center gap-2">
+                      <div className="size-2 rounded-full bg-rose-500" />
                       产品特点
                       {!bulletsTypingComplete && (
-                        <span className="text-xs text-emerald-500 animate-pulse">翻译中...</span>
+                        <span className="text-xs text-rose-500 animate-pulse">翻译中...</span>
                       )}
                     </h3>
                     <ul className="space-y-2">
@@ -291,7 +276,7 @@ export const ProductInfoCard = memo(function ProductInfoCard({ task, ratingStats
                             !bulletsTypingComplete && index === bulletsToShow.length - 1 ? 'animate-slide-in' : ''
                           }`}
                         >
-                          <span className="text-emerald-500 mt-1">•</span>
+                          <span className="text-rose-500 mt-1">•</span>
                           <span>{point}</span>
                         </li>
                       ))}
@@ -303,15 +288,6 @@ export const ProductInfoCard = memo(function ProductInfoCard({ task, ratingStats
           </div>
         </div>
       </div>
-      
-      {/* Product Report Dialog */}
-      <ProductReportDialog
-        isOpen={isReportDialogOpen}
-        onClose={() => setIsReportDialogOpen(false)}
-        asin={task.asin}
-        productTitle={task.titleTranslated || task.title}
-        ratingStats={ratingStats}
-      />
     </Card>
   );
 });

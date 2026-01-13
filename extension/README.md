@@ -2,6 +2,9 @@
 
 Amazon 评论智能采集翻译分析系统 - 浏览器插件端
 
+> 📌 **当前版本**: Local Dev 1.0.2-dev (本地开发环境)  
+> 📌 **配置**: 连接到 `localhost:8000` 后端服务
+
 ## 功能特点
 
 - 🔍 **智能检测**: 自动识别 Amazon 商品 ASIN
@@ -85,6 +88,46 @@ extension/
 2. 右键点击插件图标 -> 检查弹出内容 (调试 Popup)
 3. 在 Amazon 页面按 F12 -> Console 查看 Content Script 日志
 4. 在 `chrome://extensions/` 点击 Service Worker 链接调试后台脚本
+
+## 本地开发指南
+
+### 🚀 快速开始
+
+**详细文档**: 请查看 [README-DEV.md](./README-DEV.md)
+
+1. **启动后端服务**:
+   ```bash
+   cd backend
+   python -m uvicorn app.main:app --reload --port 8000
+   ```
+
+2. **启动前端服务**:
+   ```bash
+   cd frontend
+   npm run dev
+   ```
+
+3. **加载插件**: 
+   - 访问 `chrome://extensions/`
+   - 开启开发者模式
+   - 加载 `extension` 目录
+
+4. **测试**: 访问 Amazon 产品页面，点击插件图标
+
+### 🔄 环境切换
+
+使用脚本快速切换本地/生产环境:
+
+```bash
+cd extension
+./switch-env.sh
+```
+
+### 📚 更多文档
+
+- [本地开发指南](./README-DEV.md) - 详细配置和使用说明
+- [开发检查清单](./CHECKLIST.md) - 快速开始和故障排查
+- [代码优化计划](./CODE_OPTIMIZATION_PLAN.md) - 重构和优化方案
 
 ## 注意事项
 

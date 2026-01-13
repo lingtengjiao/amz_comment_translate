@@ -90,6 +90,16 @@ class UserProject(Base):
         default=False,
         comment="是否收藏"
     )
+    is_deleted: Mapped[bool] = mapped_column(
+        Boolean, 
+        default=False,
+        comment="是否已删除（逻辑删除）"
+    )
+    deleted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        comment="删除时间"
+    )
     
     # 贡献统计
     reviews_contributed: Mapped[int] = mapped_column(

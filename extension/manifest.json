@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
-  "name": "VOC-Master: Amazon Review Collector",
-  "version": "1.0.2",
+  "name": "VOC-Master: Amazon Review Collector (Local Dev)",
+  "version": "1.0.6",
   "description": "Collect Amazon product reviews for translation and analysis. 采集亚马逊商品评论，智能翻译分析。",
   "author": "VOC-Master Team",
   
@@ -9,7 +9,8 @@
     "activeTab",
     "storage",
     "scripting",
-    "tabs"
+    "tabs",
+    "notifications"
   ],
   
   "host_permissions": [
@@ -18,19 +19,14 @@
     "https://*.amazon.de/*",
     "https://*.amazon.fr/*",
     "https://*.amazon.co.jp/*",
-    "http://localhost:8000/*",
-    "http://115.191.30.209:8000/*",
-    "http://115.191.30.209:3000/*",
-    "http://115.191.30.209/*"
+    "http://localhost:*/*",
+    "http://127.0.0.1:*/*"
   ],
   
   "externally_connectable": {
     "matches": [
       "http://localhost:*/*",
-      "http://127.0.0.1:*/*",
-      "http://115.191.30.209:*/*",
-      "http://115.191.30.209/*",
-      "https://*.voc-master.com/*"
+    "http://127.0.0.1:*/*"
     ]
   },
   

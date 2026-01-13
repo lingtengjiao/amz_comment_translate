@@ -21,9 +21,10 @@
   // ================= 核心代码开始 =================
 
   // Configuration
+  // 本地开发环境配置
   const CONFIG = {
-  API_BASE_URL: 'http://115.191.30.209:8000/api/v1',
-  DASHBOARD_URL: 'http://115.191.30.209',
+  API_BASE_URL: 'http://localhost:8000/api/v1',
+  DASHBOARD_URL: 'http://localhost:3000',  // 本地前端地址
   DELAY_BETWEEN_PAGES: { min: 2000, max: 5000 }, // Increased for safety
   DELAY_BETWEEN_STARS: { min: 3000, max: 6000 },
   BATCH_SIZE: 20
@@ -205,7 +206,35 @@ function getProductInfo() {
     }
   }
 
-  return { title, imageUrl, averageRating, price, bulletPoints };
+  // [NEW] Extract category breadcrumb
+  const categories = [];
+  const breadcrumbSelectors = [
+    '#wayfinding-breadcrumbs_feature_div ul.a-unordered-list li a',  // 最常见的
+    '#wayfinding-breadcrumbs_container a',
+    '.a-breadcrumb a',
+    '#SalesRank a',  // 备选
+    '[data-feature-name="breadcrumb"] a'
+  ];
+  
+  for (const selector of breadcrumbSelectors) {
+    const categoryLinks = document.querySelectorAll(selector);
+    if (categoryLinks.length > 0) {
+      categoryLinks.forEach(link => {
+        const name = link.textContent?.trim();
+        const url = link.getAttribute('href');
+        if (name && url && !name.match(/^(\s|›|>)*$/)) {
+          // 过滤空白和分隔符
+          categories.push({
+            name: name,
+            url: url.startsWith('http') ? url : `${window.location.origin}${url}`
+          });
+        }
+      });
+      if (categories.length > 0) break;
+    }
+  }
+
+  return { title, imageUrl, averageRating, price, bulletPoints, categories };
 }
 
 /**
@@ -511,7 +540,7 @@ async function startCollection(config) {
     return;
   }
 
-  const { title, imageUrl, averageRating, price, bulletPoints } = getProductInfo();
+  const { title, imageUrl, averageRating, price, bulletPoints, categories } = getProductInfo();
   const starsToCollect = config.stars || [1, 2, 3, 4, 5];
   const pagesPerStar = config.pagesPerStar || 5;
   const mediaType = config.mediaType || 'all_formats';
@@ -535,7 +564,7 @@ async function startCollection(config) {
     asin,
     config: { stars: starsToCollect, pagesPerStar, mediaType, speedMode },
     productInfo: {
-      title, imageUrl, averageRating, price, bulletPoints,
+      title, imageUrl, averageRating, price, bulletPoints, categories,
       marketplace: detectMarketplace()
     }
   }, (response) => {
@@ -605,8 +634,13 @@ function createOverlay() {
     <div class="voc-panel">
       <div class="voc-header">
         <div class="voc-logo">
-          <span class="voc-icon">📊</span>
-          <span class="voc-title">VOC-Master</span>
+          <svg class="voc-icon-svg" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg" style="width:28px;height:28px;">
+            <circle cx="50" cy="50" r="35" fill="#FEF3C7"/>
+            <circle cx="50" cy="50" r="25" fill="#93C5FD"/>
+            <circle cx="50" cy="50" r="15" fill="#1E40AF"/>
+            <circle cx="47" cy="45" r="5" fill="#FFFFFF"/>
+          </svg>
+          <span class="voc-title">洞察大王</span>
         </div>
         <div style="display:flex; gap:10px; align-items:center;">
           <button class="voc-close" id="voc-expand-btn" title="切换全屏/侧边栏" style="font-size:16px;">⛶</button>
@@ -670,7 +704,7 @@ function createOverlay() {
           <button class="voc-btn voc-btn-primary" id="voc-start-btn">开始采集</button>
           <button class="voc-btn voc-btn-danger" id="voc-stop-btn" style="display: none;">停止采集</button>
           <a class="voc-btn voc-btn-success" id="voc-dashboard-btn" style="display: none;" target="_blank">
-            前往控制台查看分析 →
+            进入洞察中心查看分析 →
           </a>
         </div>
       </div>

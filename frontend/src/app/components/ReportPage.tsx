@@ -61,7 +61,7 @@ const MarkdownRenderer = memo(function MarkdownRenderer({ content }: { content: 
       return text
         .replace(/\*\*(.+?)\*\*/g, '<strong class="font-semibold text-gray-900 dark:text-white">$1</strong>')
         .replace(/\*(.+?)\*/g, '<em>$1</em>')
-        .replace(/"(.+?)"/g, '<span class="text-emerald-600 dark:text-emerald-400">"$1"</span>')
+        .replace(/"(.+?)"/g, '<span class="text-rose-600 dark:text-rose-400">"$1"</span>')
         .replace(/`(.+?)`/g, '<code class="px-1.5 py-0.5 bg-gray-100 dark:bg-gray-800 rounded text-sm">$1</code>');
     };
     
@@ -76,7 +76,7 @@ const MarkdownRenderer = memo(function MarkdownRenderer({ content }: { content: 
       if (trimmed.startsWith('# ')) {
         flushList();
         elements.push(
-          <h1 key={index} className="text-3xl font-bold text-gray-900 dark:text-white mt-8 mb-6 pb-3 border-b-2 border-emerald-500">
+          <h1 key={index} className="text-3xl font-bold text-gray-900 dark:text-white mt-8 mb-6 pb-3 border-b-2 border-rose-500">
             {trimmed.slice(2)}
           </h1>
         );
@@ -371,7 +371,7 @@ export function ReportPage() {
     return (
       <div className="min-h-screen bg-gray-50 dark:bg-gray-900 flex items-center justify-center">
         <div className="text-center">
-          <Loader2 className="size-12 text-emerald-500 animate-spin mx-auto" />
+          <Loader2 className="size-12 text-rose-500 animate-spin mx-auto" />
           <p className="mt-4 text-gray-600 dark:text-gray-400">加载报告中...</p>
         </div>
       </div>
@@ -385,7 +385,7 @@ export function ReportPage() {
       <div className="min-h-screen bg-gray-50 dark:bg-gray-900 flex items-center justify-center">
         <div className="text-center">
           <div className="relative inline-block">
-            <Loader2 className="size-16 text-emerald-500 animate-spin" />
+            <Loader2 className="size-16 text-rose-500 animate-spin" />
             <span className="text-3xl absolute -top-2 -right-2">{typeConfig.icon}</span>
           </div>
           <p className="mt-6 text-xl font-medium text-gray-900 dark:text-white">
@@ -394,7 +394,7 @@ export function ReportPage() {
           <p className="mt-2 text-gray-500 dark:text-gray-400">{typeConfig.description}</p>
           <p className="mt-1 text-sm text-gray-400 dark:text-gray-500">预计需要 30-60 秒，请耐心等待</p>
           <div className="mt-6 w-64 h-2 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden mx-auto">
-            <div className="h-full bg-emerald-500 rounded-full" style={{
+            <div className="h-full bg-gradient-to-r from-rose-500 to-pink-500 rounded-full" style={{
               animation: 'progress 30s ease-in-out forwards'
             }} />
           </div>
@@ -431,7 +431,7 @@ export function ReportPage() {
             </Link>
             <Button 
               onClick={() => handleGenerateReport('comprehensive')}
-              className="gap-2 bg-emerald-600 hover:bg-emerald-700"
+              className="gap-2 bg-gradient-to-r from-rose-500 to-pink-500 hover:from-rose-600 hover:to-pink-600"
             >
               <FileText className="size-4" />
               立即生成报告
@@ -516,7 +516,7 @@ export function ReportPage() {
               <ArrowLeft className="size-5" />
             </Link>
             <div className="flex items-center gap-2">
-              <FileText className="size-5 text-emerald-600" />
+              <FileText className="size-5 text-rose-600" />
               <span className="font-medium text-gray-900 dark:text-white">产品分析报告</span>
             </div>
           </div>
@@ -576,7 +576,7 @@ export function ReportPage() {
                 size="sm"
                 onClick={() => setShowTypeSelector(!showTypeSelector)}
                 disabled={isGenerating}
-                className="gap-1.5 bg-emerald-600 hover:bg-emerald-700"
+                className="gap-1.5 bg-gradient-to-r from-rose-500 to-pink-500 hover:from-rose-600 hover:to-pink-600"
               >
                 <RefreshCw className="size-4" />
                 生成新报告
@@ -627,7 +627,7 @@ export function ReportPage() {
                       onClick={() => handleSelectReport(r)}
                       className={`w-full text-left px-3 py-2 rounded-lg transition-colors ${
                         r.id === report?.id 
-                          ? 'bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-400' 
+                          ? 'bg-rose-50 dark:bg-rose-900/20 text-rose-700 dark:text-rose-400' 
                           : 'hover:bg-gray-100 dark:hover:bg-gray-700'
                       }`}
                     >
@@ -683,7 +683,7 @@ export function ReportPage() {
                       {product.title_translated || product.title || '产品标题'}
                     </h2>
                     <div className="flex flex-wrap items-center gap-4 text-sm text-gray-500 dark:text-gray-400 print:gap-3 print:text-xs">
-                      <span className="px-3 py-1 bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-400 rounded-md text-xs font-medium print:px-2 print:py-0.5">
+                      <span className="px-3 py-1 bg-rose-100 dark:bg-rose-900/30 text-rose-700 dark:text-rose-400 rounded-md text-xs font-medium print:px-2 print:py-0.5">
                         ASIN: {product.asin}
                       </span>
                       {product.average_rating > 0 && (
@@ -742,7 +742,7 @@ export function ReportPage() {
                         基于 {report.analysis_data?.total_reviews || (report.analysis_data as any)?.meta?.total_reviews} 条评论分析
                       </span>
                     )}
-                    <span className="px-3 py-1 bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-400 rounded-md text-xs font-medium print:px-2 print:py-0.5">
+                    <span className="px-3 py-1 bg-rose-100 dark:bg-rose-900/30 text-rose-700 dark:text-rose-400 rounded-md text-xs font-medium print:px-2 print:py-0.5">
                       ASIN: {asin}
                     </span>
                   </div>

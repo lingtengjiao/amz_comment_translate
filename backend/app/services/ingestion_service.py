@@ -72,7 +72,8 @@ class IngestionService:
                     "marketplace": item.get("marketplace", "US"),
                     "average_rating": item.get("average_rating"),
                     "price": item.get("price"),
-                    "bullet_points": item.get("bullet_points")
+                    "bullet_points": item.get("bullet_points"),
+                    "categories": item.get("categories")  # [NEW] 产品类目
                 }
             
             # [NEW] 收集 user_id（取第一个非空的）
@@ -200,28 +201,63 @@ class IngestionService:
                 product.price = info["price"]
             if info.get("bullet_points") and not product.bullet_points:
                 bp = info["bullet_points"]
-                # 确保 bullet_points 是列表格式（用于 PostgreSQL TEXT[] 类型）
-                if isinstance(bp, str):
+                # 统一存储为 JSON 字符串格式
+                if isinstance(bp, list):
+                    product.bullet_points = json.dumps(bp, ensure_ascii=False)
+                elif isinstance(bp, str):
+                    # 验证是否为有效 JSON 数组
                     try:
-                        bp = json.loads(bp)
+                        parsed = json.loads(bp)
+                        if isinstance(parsed, list):
+                            product.bullet_points = bp
+                        else:
+                            product.bullet_points = json.dumps([bp], ensure_ascii=False)
                     except json.JSONDecodeError:
-                        bp = [bp] if bp else None
-                elif not isinstance(bp, list):
-                    bp = None
-                product.bullet_points = bp
+                        product.bullet_points = json.dumps([bp], ensure_ascii=False) if bp else None
+            # [NEW] 更新类目信息
+            if info.get("categories") and not product.categories:
+                cats = info["categories"]
+                # 确保 categories 是 JSON 字符串格式
+                if isinstance(cats, list):
+                    product.categories = json.dumps(cats, ensure_ascii=False)
+                elif isinstance(cats, str):
+                    try:
+                        # 验证是否为有效 JSON
+                        json.loads(cats)
+                        product.categories = cats
+                    except json.JSONDecodeError:
+                        pass
             self.db.flush()
             return product
         
         # 创建新产品
         bullet_points = info.get("bullet_points")
-        # 确保 bullet_points 是列表格式（用于 PostgreSQL TEXT[] 类型）
-        if isinstance(bullet_points, str):
+        # 统一存储为 JSON 字符串格式
+        if isinstance(bullet_points, list):
+            bullet_points = json.dumps(bullet_points, ensure_ascii=False)
+        elif isinstance(bullet_points, str):
+            # 验证是否为有效 JSON 数组
             try:
-                bullet_points = json.loads(bullet_points)
+                parsed = json.loads(bullet_points)
+                if not isinstance(parsed, list):
+                    bullet_points = json.dumps([bullet_points], ensure_ascii=False)
             except json.JSONDecodeError:
-                bullet_points = [bullet_points] if bullet_points else None
-        elif not isinstance(bullet_points, list):
+                bullet_points = json.dumps([bullet_points], ensure_ascii=False) if bullet_points else None
+        else:
             bullet_points = None
+        
+        # [NEW] 处理类目信息
+        categories = info.get("categories")
+        if isinstance(categories, list):
+            categories = json.dumps(categories, ensure_ascii=False)
+        elif isinstance(categories, str):
+            try:
+                # 验证是否为有效 JSON
+                json.loads(categories)
+            except json.JSONDecodeError:
+                categories = None
+        else:
+            categories = None
         
         product = Product(
             asin=asin,
@@ -230,7 +266,8 @@ class IngestionService:
             marketplace=info.get("marketplace", "US"),
             average_rating=str(info["average_rating"]) if info.get("average_rating") else None,
             price=info.get("price"),
-            bullet_points=bullet_points
+            bullet_points=bullet_points,
+            categories=categories
         )
         self.db.add(product)
         self.db.flush()

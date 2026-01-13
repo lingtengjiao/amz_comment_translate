@@ -31,6 +31,7 @@ router = APIRouter(prefix="/user/projects", tags=["User Projects"])
 class UserProjectResponse(BaseModel):
     """用户项目响应"""
     id: str
+    product_id: str  # 产品ID，用于分析项目创建
     asin: str
     title: Optional[str]
     image_url: Optional[str]
@@ -41,6 +42,7 @@ class UserProjectResponse(BaseModel):
     reviews_contributed: int
     total_reviews: int
     translated_reviews: int
+    average_rating: Optional[float]  # 产品评分
     created_at: Optional[str]
 
 
@@ -76,11 +78,16 @@ async def get_my_projects(
     """
     获取当前用户关联的所有产品
     """
-    # 构建查询
+    # 构建查询 - 排除已逻辑删除的项目
     query = (
         select(UserProject, Product)
         .join(Product, UserProject.product_id == Product.id)
-        .where(UserProject.user_id == user.id)
+        .where(
+            and_(
+                UserProject.user_id == user.id,
+                UserProject.is_deleted == False
+            )
+        )
     )
     
     if favorites_only:
@@ -113,6 +120,7 @@ async def get_my_projects(
         
         projects.append(UserProjectResponse(
             id=str(up.id),
+            product_id=str(product.id),  # 产品ID，用于分析项目创建
             asin=product.asin,
             title=product.title,
             image_url=product.image_url,
@@ -123,6 +131,7 @@ async def get_my_projects(
             reviews_contributed=up.reviews_contributed or 0,
             total_reviews=total_reviews,
             translated_reviews=translated_reviews,
+            average_rating=product.average_rating,  # 产品评分
             created_at=up.created_at.isoformat() if up.created_at else None
         ))
     
@@ -154,7 +163,7 @@ async def add_project(
             detail=f"产品 {asin} 不存在"
         )
     
-    # 检查是否已关联
+    # 检查是否已关联（包括已删除的）
     existing_result = await db.execute(
         select(UserProject).where(
             and_(
@@ -166,11 +175,28 @@ async def add_project(
     existing = existing_result.scalar_one_or_none()
     
     if existing:
-        return {
-            "success": True,
-            "message": "产品已在您的项目列表中",
-            "project_id": str(existing.id)
-        }
+        if existing.is_deleted:
+            # 恢复已删除的关联
+            existing.is_deleted = False
+            existing.deleted_at = None
+            if request:
+                if request.custom_alias:
+                    existing.custom_alias = request.custom_alias
+                if request.notes:
+                    existing.notes = request.notes
+            await db.commit()
+            logger.info(f"用户 {user.email} 恢复项目 {asin}")
+            return {
+                "success": True,
+                "message": "产品已恢复到您的项目列表",
+                "project_id": str(existing.id)
+            }
+        else:
+            return {
+                "success": True,
+                "message": "产品已在您的项目列表中",
+                "project_id": str(existing.id)
+            }
     
     # 创建关联
     user_project = UserProject(
@@ -200,7 +226,8 @@ async def remove_project(
     db: AsyncSession = Depends(get_db)
 ):
     """
-    从当前用户的项目列表中移除产品
+    从当前用户的项目列表中移除产品（逻辑删除）
+    产品将被释放回洞察广场，用户可以重新添加
     """
     # 查找产品
     product_result = await db.execute(
@@ -231,10 +258,12 @@ async def remove_project(
             "message": "产品不在您的项目列表中"
         }
     
-    await db.delete(user_project)
+    # 逻辑删除：标记为已删除，不物理删除
+    user_project.is_deleted = True
+    user_project.deleted_at = datetime.utcnow()
     await db.commit()
     
-    logger.info(f"用户 {user.email} 移除项目 {asin}")
+    logger.info(f"用户 {user.email} 移除项目 {asin}（逻辑删除）")
     
     return {
         "success": True,

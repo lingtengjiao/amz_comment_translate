@@ -520,13 +520,15 @@ class ReviewService:
         
         [OPTIMIZED] 使用 LEFT JOIN + 条件聚合，一次查询获取所有数据
         原来: N+1 查询 (1 + N*3 次 SQL)
-        现在: 1 次 SQL 查询
+        现在: 2 次 SQL 查询（主查询 + 洞察/主题统计）
         
         Returns:
             List of product dicts with statistics
         """
-        from sqlalchemy import case, literal
+        from sqlalchemy import case, literal, distinct
         from sqlalchemy.orm import aliased
+        from app.models.insight import ReviewInsight
+        from app.models.theme_highlight import ReviewThemeHighlight
         
         # 使用 LEFT JOIN + 条件聚合，一次查询获取所有产品及其统计
         query = (
@@ -557,12 +559,45 @@ class ReviewService:
         result_rows = await self.db.execute(query)
         rows = result_rows.all()
         
+        # 获取所有产品的洞察和主题统计
+        product_ids = [row[0].id for row in rows]
+        
+        # 查询每个产品有洞察的评论数
+        insights_query = (
+            select(
+                Review.product_id,
+                func.count(distinct(ReviewInsight.review_id)).label('reviews_with_insights')
+            )
+            .join(ReviewInsight, ReviewInsight.review_id == Review.id)
+            .where(Review.product_id.in_(product_ids))
+            .group_by(Review.product_id)
+        )
+        insights_result = await self.db.execute(insights_query)
+        insights_map = {row[0]: row[1] for row in insights_result.all()}
+        
+        # 查询每个产品有主题的评论数
+        themes_query = (
+            select(
+                Review.product_id,
+                func.count(distinct(ReviewThemeHighlight.review_id)).label('reviews_with_themes')
+            )
+            .join(ReviewThemeHighlight, ReviewThemeHighlight.review_id == Review.id)
+            .where(Review.product_id.in_(product_ids))
+            .group_by(Review.product_id)
+        )
+        themes_result = await self.db.execute(themes_query)
+        themes_map = {row[0]: row[1] for row in themes_result.all()}
+        
         result = []
         for row in rows:
             product = row[0]
             total_reviews = row[1] or 0
             translated_reviews = row[2] or 0
             calculated_avg = float(row[3]) if row[3] else 0.0
+            
+            # 获取洞察和主题统计
+            reviews_with_insights = insights_map.get(product.id, 0)
+            reviews_with_themes = themes_map.get(product.id, 0)
             
             # Use real average rating from product page, fallback to calculated
             avg_rating = float(product.average_rating) if product.average_rating else calculated_avg
@@ -585,6 +620,8 @@ class ReviewService:
                 "marketplace": product.marketplace,
                 "total_reviews": total_reviews,
                 "translated_reviews": translated_reviews,
+                "reviews_with_insights": reviews_with_insights,
+                "reviews_with_themes": reviews_with_themes,
                 "average_rating": round(avg_rating, 2),
                 "translation_status": status,
                 "created_at": product.created_at,
@@ -599,7 +636,7 @@ class ReviewService:
         
         [OPTIMIZED] 使用 LEFT JOIN + 条件聚合，一次查询获取所有数据
         原来: N+1 查询 (1 + N*3 次 SQL)
-        现在: 1 次 SQL 查询
+        现在: 3 次 SQL 查询（主查询 + 洞察统计 + 主题统计）
         
         Args:
             product_ids: List of product UUIDs
@@ -610,7 +647,9 @@ class ReviewService:
         if not product_ids:
             return []
         
-        from sqlalchemy import case, literal
+        from sqlalchemy import case, literal, distinct
+        from app.models.insight import ReviewInsight
+        from app.models.theme_highlight import ReviewThemeHighlight
         
         # 使用 LEFT JOIN + 条件聚合，一次查询获取所有产品及其统计
         query = (
@@ -642,12 +681,42 @@ class ReviewService:
         result_rows = await self.db.execute(query)
         rows = result_rows.all()
         
+        # 查询每个产品有洞察的评论数
+        insights_query = (
+            select(
+                Review.product_id,
+                func.count(distinct(ReviewInsight.review_id)).label('reviews_with_insights')
+            )
+            .join(ReviewInsight, ReviewInsight.review_id == Review.id)
+            .where(Review.product_id.in_(product_ids))
+            .group_by(Review.product_id)
+        )
+        insights_result = await self.db.execute(insights_query)
+        insights_map = {row[0]: row[1] for row in insights_result.all()}
+        
+        # 查询每个产品有主题的评论数
+        themes_query = (
+            select(
+                Review.product_id,
+                func.count(distinct(ReviewThemeHighlight.review_id)).label('reviews_with_themes')
+            )
+            .join(ReviewThemeHighlight, ReviewThemeHighlight.review_id == Review.id)
+            .where(Review.product_id.in_(product_ids))
+            .group_by(Review.product_id)
+        )
+        themes_result = await self.db.execute(themes_query)
+        themes_map = {row[0]: row[1] for row in themes_result.all()}
+        
         result = []
         for row in rows:
             product = row[0]
             total_reviews = row[1] or 0
             translated_reviews = row[2] or 0
             calculated_avg = float(row[3]) if row[3] else 0.0
+            
+            # 获取洞察和主题统计
+            reviews_with_insights = insights_map.get(product.id, 0)
+            reviews_with_themes = themes_map.get(product.id, 0)
             
             # Use real average rating from product page, fallback to calculated
             avg_rating = float(product.average_rating) if product.average_rating else calculated_avg
@@ -670,6 +739,8 @@ class ReviewService:
                 "marketplace": product.marketplace,
                 "total_reviews": total_reviews,
                 "translated_reviews": translated_reviews,
+                "reviews_with_insights": reviews_with_insights,
+                "reviews_with_themes": reviews_with_themes,
                 "average_rating": round(avg_rating, 2),
                 "translation_status": status,
                 "created_at": product.created_at,
@@ -788,34 +859,49 @@ class ReviewService:
         else:
             status = TranslationStatus.PENDING
         
-        # Parse bullet_points - handle both PostgreSQL text[] array and JSON string
+        # Parse bullet_points - handle PostgreSQL text[] array, JSON string, and PostgreSQL array format
         import json
-        bullet_points = None
-        bullet_points_translated = None
+        import re
         
-        if product.bullet_points:
-            # PostgreSQL text[] array returns as Python list directly
-            if isinstance(product.bullet_points, list):
-                bullet_points = product.bullet_points
-            elif isinstance(product.bullet_points, str):
+        def parse_bullet_points(bp_data):
+            """Parse bullet points from various formats"""
+            if bp_data is None:
+                return None
+            # Already a list
+            if isinstance(bp_data, list):
+                return bp_data
+            if isinstance(bp_data, str):
+                bp_str = bp_data.strip()
+                if not bp_str:
+                    return None
+                # Try JSON format first: [...]
+                if bp_str.startswith('['):
+                    try:
+                        return json.loads(bp_str)
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+                # PostgreSQL array format: {...}
+                if bp_str.startswith('{') and bp_str.endswith('}'):
+                    content = bp_str[1:-1]  # Remove { }
+                    # Match quoted strings: "..."
+                    matches = re.findall(r'"((?:[^"\\]|\\.)*)"', content)
+                    if matches:
+                        # Unescape double quotes
+                        return [m.replace('\\"', '"').replace('\\\\', '\\') for m in matches]
+                    # If no quoted strings, try simple comma split
+                    parts = [s.strip() for s in content.split(',') if s.strip()]
+                    if parts:
+                        return parts
+                # Last resort: try JSON parse
                 try:
-                    bullet_points = json.loads(product.bullet_points)
+                    return json.loads(bp_str)
                 except (json.JSONDecodeError, TypeError):
-                    bullet_points = [product.bullet_points] if product.bullet_points else None
-            else:
-                bullet_points = None
+                    # Return as single-item list if non-empty
+                    return [bp_str] if bp_str else None
+            return None
         
-        if product.bullet_points_translated:
-            # PostgreSQL text[] array returns as Python list directly
-            if isinstance(product.bullet_points_translated, list):
-                bullet_points_translated = product.bullet_points_translated
-            elif isinstance(product.bullet_points_translated, str):
-                try:
-                    bullet_points_translated = json.loads(product.bullet_points_translated)
-                except (json.JSONDecodeError, TypeError):
-                    bullet_points_translated = [product.bullet_points_translated] if product.bullet_points_translated else None
-            else:
-                bullet_points_translated = None
+        bullet_points = parse_bullet_points(product.bullet_points)
+        bullet_points_translated = parse_bullet_points(product.bullet_points_translated)
         
         return {
             "product": {

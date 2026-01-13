@@ -1,4 +1,4 @@
-import { Image as ImageIcon, Video, ShieldCheck, Star, Pin } from 'lucide-react';
+import { Image as ImageIcon, Video, ShieldCheck, Star, Pin, ExternalLink } from 'lucide-react';
 import { Card } from './ui/card';
 import { Badge } from './ui/badge';
 import { ReviewMediaGallery } from './ReviewMediaGallery';
@@ -120,6 +120,18 @@ export function MediaTabContent({ task, mediaStats, sentimentConfig, onEditMedia
                         ))}
                       </div>
                       <span>{review.date}</span>
+                      {/* 原评论链接 */}
+                      {review.reviewUrl && (
+                        <a
+                          href={review.reviewUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="flex items-center gap-1 text-rose-500 hover:text-rose-600 transition-colors"
+                        >
+                          <ExternalLink className="size-3.5" />
+                          <span>查看原评论</span>
+                        </a>
+                      )}
                     </div>
                   </div>
                 </div>

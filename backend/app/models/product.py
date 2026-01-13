@@ -61,6 +61,13 @@ class Product(Base):
         nullable=True,
         comment="Real average rating from Amazon product page"
     )
+    # Category breadcrumb - stored as JSON array of objects with name and url
+    # Example: [{"name": "Books", "url": "/books"}, {"name": "Social Sciences", "url": "/books/social-sciences"}]
+    categories: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+        comment="Product category breadcrumb as JSON array"
+    )
     
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

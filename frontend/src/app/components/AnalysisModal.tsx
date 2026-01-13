@@ -48,7 +48,7 @@ export const AnalysisModal: React.FC<AnalysisModalProps> = ({
     <Dialog open={isOpen} onOpenChange={handleClose}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle className="flex items-center gap-2 text-indigo-600">
+          <DialogTitle className="flex items-center gap-2 text-rose-600">
             <Sparkles className="h-5 w-5" />
             <span>发起对比分析</span>
           </DialogTitle>
@@ -81,7 +81,7 @@ export const AnalysisModal: React.FC<AnalysisModalProps> = ({
             <Label htmlFor="description">项目描述（可选）</Label>
             <textarea
               id="description"
-              className="w-full min-h-[80px] rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
+              className="w-full min-h-[80px] rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-rose-500 focus:outline-none focus:ring-2 focus:ring-rose-500/20"
               placeholder="描述这次对比的目的或背景..."
               value={description}
               onChange={(e) => setDescription(e.target.value)}
@@ -101,7 +101,7 @@ export const AnalysisModal: React.FC<AnalysisModalProps> = ({
           <Button
             onClick={handleSubmit}
             disabled={!title.trim() || isSubmitting}
-            className="bg-indigo-600 hover:bg-indigo-700"
+            className="bg-gradient-to-r from-rose-500 to-pink-500 hover:from-rose-600 hover:to-pink-600"
           >
             {isSubmitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
             开始分析
