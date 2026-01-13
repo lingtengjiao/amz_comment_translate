@@ -72,16 +72,61 @@ class UpdateProjectRequest(BaseModel):
 @router.get("", response_model=UserProjectListResponse)
 async def get_my_projects(
     favorites_only: bool = Query(False, description="只显示收藏的项目"),
+    no_cache: bool = Query(False, description="跳过缓存"),
     user: User = Depends(get_current_user_required),
     db: AsyncSession = Depends(get_db)
 ):
     """
     获取当前用户关联的所有产品
+    
+    🚀 Performance: Results are cached in Redis for 1 minute.
     """
+    from app.core.cache import get_cache_service
+    import logging
+    logger = logging.getLogger(__name__)
+    
+    cache = await get_cache_service()
+    cache_key_suffix = f"fav_{favorites_only}"
+    
+    # 尝试从缓存获取
+    if not no_cache:
+        cached = await cache.get_user_projects(str(user.id), page=1, page_size=1000)
+        if cached and cached.get("favorites_only") == favorites_only:
+            logger.debug(f"[Cache HIT] User projects for user {user.id}")
+            return UserProjectListResponse(**cached)
+    
     # 构建查询 - 排除已逻辑删除的项目
+    # 🚀 优化：使用子查询一次性获取所有统计数据，避免 N+1 查询
+    from sqlalchemy import case
+    from sqlalchemy.orm import aliased
+    
+    # 子查询：统计每个产品的评论数和已翻译数
+    review_stats = (
+        select(
+            Review.product_id,
+            func.count(Review.id).label("total_reviews"),
+            func.count(
+                case(
+                    (Review.translation_status == TranslationStatus.COMPLETED.value, Review.id),
+                    else_=None
+                )
+            ).label("translated_reviews")
+        )
+        .where(Review.is_deleted == False)
+        .group_by(Review.product_id)
+        .subquery()
+    )
+    
+    # 主查询
     query = (
-        select(UserProject, Product)
+        select(
+            UserProject, 
+            Product,
+            func.coalesce(review_stats.c.total_reviews, 0).label("total_reviews"),
+            func.coalesce(review_stats.c.translated_reviews, 0).label("translated_reviews")
+        )
         .join(Product, UserProject.product_id == Product.id)
+        .outerjoin(review_stats, Product.id == review_stats.c.product_id)
         .where(
             and_(
                 UserProject.user_id == user.id,
@@ -99,28 +144,10 @@ async def get_my_projects(
     rows = result.all()
     
     projects = []
-    for up, product in rows:
-        # 获取评论统计
-        review_count_result = await db.execute(
-            select(func.count(Review.id))
-            .where(Review.product_id == product.id)
-        )
-        total_reviews = review_count_result.scalar() or 0
-        
-        translated_count_result = await db.execute(
-            select(func.count(Review.id))
-            .where(
-                and_(
-                    Review.product_id == product.id,
-                    Review.translation_status == TranslationStatus.COMPLETED.value
-                )
-            )
-        )
-        translated_reviews = translated_count_result.scalar() or 0
-        
+    for up, product, total_reviews, translated_reviews in rows:
         projects.append(UserProjectResponse(
             id=str(up.id),
-            product_id=str(product.id),  # 产品ID，用于分析项目创建
+            product_id=str(product.id),
             asin=product.asin,
             title=product.title,
             image_url=product.image_url,
@@ -131,14 +158,21 @@ async def get_my_projects(
             reviews_contributed=up.reviews_contributed or 0,
             total_reviews=total_reviews,
             translated_reviews=translated_reviews,
-            average_rating=product.average_rating,  # 产品评分
+            average_rating=product.average_rating,
             created_at=up.created_at.isoformat() if up.created_at else None
         ))
     
-    return UserProjectListResponse(
-        total=len(projects),
-        projects=projects
-    )
+    response_data = {
+        "total": len(projects),
+        "projects": [p.model_dump() for p in projects],
+        "favorites_only": favorites_only  # 用于缓存区分
+    }
+    
+    # 写入缓存
+    await cache.set_user_projects(str(user.id), response_data, page=1, page_size=1000)
+    logger.debug(f"[Cache SET] User projects for user {user.id}")
+    
+    return UserProjectListResponse(**response_data)
 
 
 @router.post("/{asin}")

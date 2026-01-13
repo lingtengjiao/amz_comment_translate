@@ -109,6 +109,21 @@ class IngestionService:
             total_skipped = sum(r.get("skipped", 0) for r in results.values())
             self.batch_tracker.update(batch_id, "completed", total_inserted, total_skipped)
         
+        # Step 4: 🚀 缓存失效 - 清除有新数据入库的产品缓存
+        from app.core.cache import get_cache_service_sync
+        cache = get_cache_service_sync()
+        
+        for asin, result in results.items():
+            if result.get("inserted", 0) > 0:
+                cache.invalidate_all_for_product(asin)
+                logger.info(f"[Cache] Invalidated caches for product {asin}")
+        
+        # 清除相关用户的项目列表缓存
+        for user_id in set(user_id_map.values()):
+            if user_id:
+                cache.delete_pattern(f"cache:user_projects:{user_id}:*")
+                logger.info(f"[Cache] Invalidated user projects cache for user {user_id}")
+        
         return results
     
     def _process_asin(

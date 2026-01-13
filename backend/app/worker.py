@@ -1193,6 +1193,20 @@ def task_extract_insights(self, product_id: str):
         
         logger.info(f"Insight extraction completed: processed {processed} new reviews (total={total_translated}, now_done={already_processed + processed}), {insights_extracted} insights extracted")
         
+        # 🚀 缓存失效 - 洞察提取完成后清除产品相关缓存
+        if insights_extracted > 0:
+            try:
+                from app.core.cache import get_cache_service_sync
+                from app.models.product import Product
+                product_result = db.execute(select(Product).where(Product.id == product_id))
+                product = product_result.scalar_one_or_none()
+                if product:
+                    cache = get_cache_service_sync()
+                    cache.invalidate_all_for_product(product.asin)
+                    logger.info(f"[Cache] Invalidated caches for product {product.asin} after insight extraction")
+            except Exception as cache_error:
+                logger.warning(f"[Cache] Failed to invalidate cache: {cache_error}")
+        
         # [FIX] 更新 Task 状态为完成
         if task_record:
             task_record.status = TaskStatus.COMPLETED.value
@@ -1544,6 +1558,20 @@ def task_extract_themes(self, product_id: str):
         
         logger.info(f"Theme extraction completed: {processed}/{total_reviews} reviews processed, {themes_extracted} theme entries created")
         
+        # 🚀 缓存失效 - 主题提取完成后清除产品相关缓存
+        if themes_extracted > 0:
+            try:
+                from app.core.cache import get_cache_service_sync
+                from app.models.product import Product
+                product_result = db.execute(select(Product).where(Product.id == product_id))
+                product = product_result.scalar_one_or_none()
+                if product:
+                    cache = get_cache_service_sync()
+                    cache.invalidate_all_for_product(product.asin)
+                    logger.info(f"[Cache] Invalidated caches for product {product.asin} after theme extraction")
+            except Exception as cache_error:
+                logger.warning(f"[Cache] Failed to invalidate cache: {cache_error}")
+        
         # [NEW] 更新 Task 状态为完成
         if task_record:
             task_record.status = TaskStatus.COMPLETED.value
@@ -1823,6 +1851,16 @@ def task_ingest_translation_only(self, product_id: str):
         )
         
         logger.info(f"[流式翻译] 完成: 翻译 {translated_count} 条, 失败 {failed_count} 条")
+        
+        # 🚀 缓存失效 - 翻译完成后清除产品相关缓存
+        if translated_count > 0:
+            try:
+                from app.core.cache import get_cache_service_sync
+                cache = get_cache_service_sync()
+                cache.invalidate_all_for_product(product.asin)
+                logger.info(f"[Cache] Invalidated caches for product {product.asin} after translation")
+            except Exception as cache_error:
+                logger.warning(f"[Cache] Failed to invalidate cache: {cache_error}")
         
         return {
             "success": True,

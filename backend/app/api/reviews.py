@@ -340,6 +340,7 @@ async def get_reviews(
     rating: Optional[int] = Query(None, ge=1, le=5),
     sentiment: Optional[str] = Query(None, pattern="^(positive|neutral|negative)$"),
     status: Optional[str] = Query(None, pattern="^(pending|processing|completed|failed)$"),
+    no_cache: bool = Query(False, description="跳过缓存，强制从数据库获取"),
     db: AsyncSession = Depends(get_db)
 ):
     """
@@ -351,7 +352,22 @@ async def get_reviews(
     - rating: Filter by star rating (1-5)
     - sentiment: Filter by sentiment (positive/neutral/negative)
     - status: Filter by translation status
+    - no_cache: Skip cache and fetch from database
+    
+    🚀 Performance: Results are cached in Redis for 5 minutes.
     """
+    from app.core.cache import get_cache_service
+    
+    cache = await get_cache_service()
+    
+    # 尝试从缓存获取（除非指定 no_cache）
+    if not no_cache:
+        cached = await cache.get_reviews(asin, page, page_size, rating, sentiment)
+        if cached:
+            logger.debug(f"[Cache HIT] Reviews for {asin} page={page}")
+            return ReviewListResponse(**cached)
+    
+    # 缓存未命中，从数据库获取
     service = ReviewService(db)
     
     reviews, total = await service.get_product_reviews(
@@ -363,12 +379,18 @@ async def get_reviews(
         status_filter=status
     )
     
-    return ReviewListResponse(
-        total=total,
-        page=page,
-        page_size=page_size,
-        reviews=[ReviewResponse.model_validate(r) for r in reviews]
-    )
+    response_data = {
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "reviews": [ReviewResponse.model_validate(r).model_dump() for r in reviews]
+    }
+    
+    # 写入缓存
+    await cache.set_reviews(asin, response_data, page, page_size, rating, sentiment)
+    logger.debug(f"[Cache SET] Reviews for {asin} page={page}")
+    
+    return ReviewListResponse(**response_data)
 
 
 @router.get("/{asin}/export")
