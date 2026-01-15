@@ -134,19 +134,17 @@ services:
   # 总并发：4 + 100 + 300 = 404 并发 API 请求！
 
   # ============================================================================
-  # 🚀 6 队列 + 5 Worker 职能化架构（40K RPM 高吞吐优化版）
+  # 🚀 6 队列 + 5 Worker 职能化架构（本地开发环境）
   # ============================================================================
   #
   # 🎯 核心优化：物理隔离队列 + 职能化 Worker 分工
   #
-  # 🔥 40K RPM 优化后总并发：4 + 100 + 200 + 150 + 150 = 604 并发！
-  # （相比 15K RPM 版本 354 并发，提升 70%）
+  # 总并发：4 + 50 + 100 + 100 + 100 = 354 并发（适合本地开发）
   #
   # 核心优势：
   # - 翻译不再是屏障：独立 Worker，不阻塞分析
   # - 建模永远优先：所有 AI Worker 都支援 learning
   # - 洞察/主题并行：各有专属队列，不互相竞争
-  # - API 吞吐上限：500 RPS（40K RPM，留 25% 余量）
   #
 
   # ==========================================================================
@@ -193,7 +191,7 @@ services:
   # Worker 2: VIP 建模员 (VIP/Learning)
   # ==========================================================================
   # 队列：learning（专属）
-  # 模式：Gevent, 100 协程 (40K RPM 优化：50→100)
+  # 模式：Gevent, 50 协程
   # 职责：建模快车道，专攻维度学习和 5W 建模，分析开始的开关
   worker-vip:
     build:
@@ -202,7 +200,7 @@ services:
     container_name: voc-worker-vip
     restart: unless-stopped
     # 🌟 VIP 快车道：只监听 learning，保证新产品秒级建模
-    command: celery -A app.worker worker --loglevel=info --pool=gevent --concurrency=100 -Q learning -n vip@%h
+    command: celery -A app.worker worker --loglevel=info --pool=gevent --concurrency=50 -Q learning -n vip@%h
     environment:
       - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-vocmaster}:${POSTGRES_PASSWORD:-vocmaster123}@db-postgres:5432/${POSTGRES_DB:-vocmaster}
       - REDIS_URL=redis://db-redis:6379/0
@@ -233,7 +231,7 @@ services:
   # Worker 3: 独立翻译组 (Translation)
   # ==========================================================================
   # 队列：translation（专属）
-  # 模式：Gevent, 200 协程 (40K RPM 优化：100→200，翻译吞吐翻倍)
+  # 模式：Gevent, 100 协程
   # 职责：专门消化海量翻译，不影响其他分析任务
   worker-trans:
     build:
@@ -242,7 +240,7 @@ services:
     container_name: voc-worker-trans
     restart: unless-stopped
     # 🔄 独立翻译：专属队列，不阻塞洞察和主题提取
-    command: celery -A app.worker worker --loglevel=info --pool=gevent --concurrency=200 -Q translation -n trans@%h
+    command: celery -A app.worker worker --loglevel=info --pool=gevent --concurrency=100 -Q translation -n trans@%h
     environment:
       - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-vocmaster}:${POSTGRES_PASSWORD:-vocmaster123}@db-postgres:5432/${POSTGRES_DB:-vocmaster}
       - REDIS_URL=redis://db-redis:6379/0
@@ -273,7 +271,7 @@ services:
   # Worker 4: 洞察专员 (Insight Extraction)
   # ==========================================================================
   # 队列：insight_extraction, learning（优先洞察，闲时支援建模）
-  # 模式：Gevent, 150 协程 (40K RPM 优化：100→150)
+  # 模式：Gevent, 100 协程
   # 职责：主攻洞察提取，闲时支援建模
   worker-insight:
     build:
@@ -282,7 +280,7 @@ services:
     container_name: voc-worker-insight
     restart: unless-stopped
     # 🔍 洞察专员：优先 insight_extraction，闲时支援 learning
-    command: celery -A app.worker worker --loglevel=info --pool=gevent --concurrency=150 -Q insight_extraction,learning -n insight@%h
+    command: celery -A app.worker worker --loglevel=info --pool=gevent --concurrency=100 -Q insight_extraction,learning -n insight@%h
     environment:
       - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-vocmaster}:${POSTGRES_PASSWORD:-vocmaster123}@db-postgres:5432/${POSTGRES_DB:-vocmaster}
       - REDIS_URL=redis://db-redis:6379/0
@@ -313,7 +311,7 @@ services:
   # Worker 5: 主题专员 (Theme Extraction)
   # ==========================================================================
   # 队列：theme_extraction, learning（优先主题，闲时支援建模）
-  # 模式：Gevent, 150 协程 (40K RPM 优化：100→150)
+  # 模式：Gevent, 100 协程
   # 职责：主攻主题提取，闲时支援建模
   worker-theme:
     build:
@@ -322,7 +320,7 @@ services:
     container_name: voc-worker-theme
     restart: unless-stopped
     # 🏷️ 主题专员：优先 theme_extraction，闲时支援 learning
-    command: celery -A app.worker worker --loglevel=info --pool=gevent --concurrency=150 -Q theme_extraction,learning -n theme@%h
+    command: celery -A app.worker worker --loglevel=info --pool=gevent --concurrency=100 -Q theme_extraction,learning -n theme@%h
     environment:
       - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-vocmaster}:${POSTGRES_PASSWORD:-vocmaster123}@db-postgres:5432/${POSTGRES_DB:-vocmaster}
       - REDIS_URL=redis://db-redis:6379/0
