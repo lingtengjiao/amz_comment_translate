@@ -283,7 +283,10 @@ export const ComprehensiveReportPage = memo(function ComprehensiveReportPage({
                     </span>
                     {item.confidence && <ConfidenceBadge confidence={String(item.confidence)} />}
                   </div>
-                  <p className="text-sm text-gray-700 dark:text-gray-300">{String(item.directive || item.action || '')}</p>
+                  {/* 🔧 [FIX] 支持多种字段名：directive, action, insight, issue, description */}
+                  <p className="text-sm text-gray-700 dark:text-gray-300">
+                    {String(item.directive || item.action || item.insight || item.issue || item.description || '')}
+                  </p>
                   {item.evidence && <EvidenceInline evidence={item.evidence} />}
                 </div>
               ))}
@@ -324,7 +327,8 @@ export const ComprehensiveReportPage = memo(function ComprehensiveReportPage({
         <Card title="⚡ 优先行动项" icon={Zap}>
           <div className="space-y-3">
             {data.priority_actions.map((action: any, i: number) => {
-              const actionText = action.action || action.task || JSON.stringify(action);
+              // 🔧 [FIX] 支持多种字段名：action, task, issue, insight, point
+              const actionText = action.action || action.task || action.issue || action.insight || action.point || action.description || '';
               const owner = action.owner || '';
               const deadline = action.deadline || '';
               const priority = action.priority || '';

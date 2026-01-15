@@ -1146,13 +1146,14 @@ export function ReviewReader() {
                            activeTasks.themes === 'processing') {
                   // 🔥 统一显示"AI分析中"，计算综合进度
                   // 综合进度 = (翻译进度 + 洞察进度 + 主题进度) / 3
+                  // 🔧 [FIX] 使用 Math.min(100, x) 确保进度不超过 100%
                   const transProgress = translatedCount > 0 && totalReviews > 0 
-                    ? Math.round((translatedCount / totalReviews) * 100) : 0;
-                  const insightProgress = translatedCount > 0 
-                    ? Math.round((reviewsWithInsights / translatedCount) * 100) : 0;
-                  const themeProgress = translatedCount > 0 
-                    ? Math.round((reviewsWithThemes / translatedCount) * 100) : 0;
-                  const overallProgress = Math.round((transProgress + insightProgress + themeProgress) / 3);
+                    ? Math.min(100, Math.round((translatedCount / totalReviews) * 100)) : 0;
+                  const insightProgress = totalReviews > 0 
+                    ? Math.min(100, Math.round((reviewsWithInsights / totalReviews) * 100)) : 0;
+                  const themeProgress = totalReviews > 0 
+                    ? Math.min(100, Math.round((reviewsWithThemes / totalReviews) * 100)) : 0;
+                  const overallProgress = Math.min(100, Math.round((transProgress + insightProgress + themeProgress) / 3));
                   
                   return (
                     <Button disabled size="sm" className="gap-2 min-w-[120px] bg-gradient-to-r from-rose-500 to-pink-500">
@@ -1255,9 +1256,10 @@ export function ReviewReader() {
               
               {/* 生成报告按钮 - 满足条件才显示（翻译>=90%，洞察>80%，主题>80%） */}
               {(() => {
-                const translationPercent = totalReviews > 0 ? (translatedCount / totalReviews) * 100 : 0;
-                const insightsPercent = translatedCount > 0 ? (reviewsWithInsights / translatedCount) * 100 : 0;
-                const themesPercent = translatedCount > 0 ? (reviewsWithThemes / translatedCount) * 100 : 0;
+                // 🔧 [FIX] 使用 totalReviews 作为分母，确保进度不超过 100%
+                const translationPercent = totalReviews > 0 ? Math.min(100, (translatedCount / totalReviews) * 100) : 0;
+                const insightsPercent = totalReviews > 0 ? Math.min(100, (reviewsWithInsights / totalReviews) * 100) : 0;
+                const themesPercent = totalReviews > 0 ? Math.min(100, (reviewsWithThemes / totalReviews) * 100) : 0;
                 const canGenerateReport = translationPercent >= 90 && insightsPercent > 80 && themesPercent > 80;
                 
                 if (!canGenerateReport) return null;
@@ -1299,14 +1301,14 @@ export function ReviewReader() {
             activeTasks.themes === 'processing') && (
             <div className="mt-3 space-y-2">
               {(() => {
-                // 计算综合进度
+                // 🔧 [FIX] 计算综合进度，确保不超过 100%
                 const transProgress = translatedCount > 0 && totalReviews > 0 
-                  ? (translatedCount / totalReviews) * 100 : 0;
-                const insightProgress = translatedCount > 0 
-                  ? (reviewsWithInsights / translatedCount) * 100 : 0;
-                const themeProgress = translatedCount > 0 
-                  ? (reviewsWithThemes / translatedCount) * 100 : 0;
-                const overallProgress = (transProgress + insightProgress + themeProgress) / 3;
+                  ? Math.min(100, (translatedCount / totalReviews) * 100) : 0;
+                const insightProgress = totalReviews > 0 
+                  ? Math.min(100, (reviewsWithInsights / totalReviews) * 100) : 0;
+                const themeProgress = totalReviews > 0 
+                  ? Math.min(100, (reviewsWithThemes / totalReviews) * 100) : 0;
+                const overallProgress = Math.min(100, (transProgress + insightProgress + themeProgress) / 3);
                 
                 return (
                   <>
@@ -1315,7 +1317,7 @@ export function ReviewReader() {
                         🤖 正在进行AI分析...
                       </span>
                       <span className="text-gray-900 font-medium">
-                        洞察: {reviewsWithInsights}/{translatedCount} | 主题: {reviewsWithThemes}/{translatedCount}
+                        洞察: {Math.min(reviewsWithInsights, totalReviews)}/{totalReviews} | 主题: {Math.min(reviewsWithThemes, totalReviews)}/{totalReviews}
                       </span>
                     </div>
                     <Progress value={overallProgress} className="h-2" />

@@ -27,8 +27,9 @@ export const QCChecklist = memo(function QCChecklist({ data }: QCChecklistProps)
               </span>
               <div className="flex-1">
                 <div className="flex items-center gap-2 mb-1">
+                  {/* 🔧 [FIX] 支持多种字段名：issue, insight, point, description */}
                   <span className="font-medium text-gray-900 dark:text-white">
-                    {item.issue}
+                    {item.issue || item.insight || item.point || item.description || ''}
                   </span>
                   <ConfidenceBadge confidence={item.confidence} />
                 </div>
@@ -41,7 +42,7 @@ export const QCChecklist = memo(function QCChecklist({ data }: QCChecklistProps)
               </div>
             </div>
             
-            <EvidenceInline evidence={item.evidence} />
+            <EvidenceInline evidence={item.evidence || []} />
           </div>
         ))}
       </div>

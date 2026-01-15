@@ -193,12 +193,18 @@ export const OperationsReportPage = memo(function OperationsReportPage({
         </Card>
       )}
 
-      {/* 广告投放建议 (target_audience) */}
+      {/* 广告投放建议 (target_audience) - 🔧 [FIX] 支持数组和对象两种格式 */}
       {data.target_audience && (
         <Card title="🎯 广告投放建议" icon={Target} variant="info">
           {typeof data.target_audience === 'string' ? (
             <p className="text-gray-700 dark:text-gray-300 leading-relaxed">{data.target_audience}</p>
+          ) : Array.isArray(data.target_audience) ? (
+            // 数组格式：每项是一个洞察对象
+            <ul className="space-y-2">
+              {data.target_audience.map((item: any, i: number) => renderListItem(item, i, 'bg-blue-50 dark:bg-blue-900/20'))}
+            </ul>
           ) : typeof data.target_audience === 'object' && (
+            // 对象格式：包含 primary, secondary 等字段
             <div className="space-y-3">
               {data.target_audience.primary && (
                 <div className="p-3 bg-blue-50 dark:bg-blue-900/20 rounded-lg">

@@ -30,18 +30,12 @@ export const MissingParts = memo(function MissingParts({ data }: MissingPartsPro
             className="p-3 bg-white dark:bg-gray-800 rounded-lg border border-orange-200 dark:border-orange-800"
           >
             <div className="flex items-center gap-2 mb-2 flex-wrap">
+              {/* 🔧 [FIX] 支持多种字段名 */}
               <span className="font-medium text-gray-900 dark:text-white">
-                {part.part}
+                {part.part || part.issue || part.insight || part.description || part.point || ''}
               </span>
               <ConfidenceBadge confidence={part.confidence} />
             </div>
-            
-            {/* 显示 description 字段 */}
-            {part.description && (
-              <p className="text-sm text-gray-700 dark:text-gray-300 mb-2">
-                {part.description}
-              </p>
-            )}
             
             {part.impact_analysis && (
               <p className="text-sm text-gray-600 dark:text-gray-400 mb-2">

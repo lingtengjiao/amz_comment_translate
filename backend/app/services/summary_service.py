@@ -1239,17 +1239,11 @@ class SummaryService:
         hints = []
         
         FIELD_EXAMPLES = {
+            # ========== 供应链报告字段 ==========
             "usage_context_analysis": '''
 # usage_context_analysis 格式示例（必须是数组）:
 "usage_context_analysis": [
-  {"insight": "用户主要是...", "confidence": "high", "evidence": [{"review_id": null, "quote": "..."}]},
-  {"insight": "使用场景包括...", "confidence": "medium", "evidence": [...]}
-]''',
-            "user_profile": '''
-# user_profile 格式示例（必须是数组）:
-"user_profile": [
-  {"insight": "购买者画像描述...", "confidence": "high", "evidence": [...]},
-  {"insight": "使用者特征...", "confidence": "medium", "evidence": [...]}
+  {"insight": "用户主要是...", "confidence": "high", "evidence": [{"review_id": null, "quote": "..."}]}
 ]''',
             "quality_summary": '''
 # quality_summary 格式示例（单个对象）:
@@ -1261,8 +1255,153 @@ class SummaryService:
             "material_defects": '''
 # material_defects 格式示例（必须是数组）:
 "material_defects": [
-  {"issue": "问题描述...", "confidence": "high", "evidence": [...]}
+  {"issue": "问题描述...", "confidence": "high", "evidence": [{"review_id": null, "quote": "..."}]}
 ]''',
+            "packaging_issues": '''
+# packaging_issues 格式示例（必须是数组）:
+"packaging_issues": [
+  {"issue": "包装问题描述...", "confidence": "medium", "evidence": [...]}
+]''',
+            "missing_parts": '''
+# missing_parts 格式示例（必须是数组）:
+"missing_parts": [
+  {"issue": "缺失配件描述...", "confidence": "medium", "evidence": [...]}
+]''',
+            "supplier_issues": '''
+# supplier_issues 格式示例（必须是数组）:
+"supplier_issues": [
+  {"issue": "供应商问题描述...", "confidence": "high", "evidence": [...]}
+]''',
+            "return_rate_factors": '''
+# return_rate_factors 格式示例（必须是数组）:
+"return_rate_factors": [
+  {"insight": "退货原因分析...", "confidence": "high", "evidence": [...]}
+]''',
+            "qc_checklist": '''
+# qc_checklist 格式示例（必须是数组，每项包含 issue 字段）:
+"qc_checklist": [
+  {"issue": "检查项描述...", "suggestion": "建议措施", "confidence": "high", "evidence": [...]}
+]''',
+            "assembly_defects": '''
+# assembly_defects 格式示例（必须是数组）:
+"assembly_defects": [
+  {"issue": "组装问题描述...", "confidence": "medium", "evidence": [...]}
+]''',
+            # ========== 综合报告字段 ==========
+            "user_profile": '''
+# user_profile 格式示例（必须是数组）:
+"user_profile": [
+  {"insight": "购买者画像描述...", "confidence": "high", "evidence": [...]},
+  {"insight": "使用者特征...", "confidence": "medium", "evidence": [...]}
+]''',
+            "strategic_verdict": '''
+# strategic_verdict 格式示例（字符串）:
+"strategic_verdict": "战略定调描述文本..."''',
+            "market_fit_analysis": '''
+# market_fit_analysis 格式示例（数组）:
+"market_fit_analysis": [
+  {"insight": "市场匹配分析...", "confidence": "high", "evidence": [...]}
+]''',
+            "core_swot": '''
+# core_swot 格式示例（必须是对象，包含四个分类数组）:
+# 重要：这是一个对象，不是数组！必须按 strengths/weaknesses/opportunities/threats 分类
+"core_swot": {
+  "strengths": [
+    {"point": "产品优势描述...", "confidence": "high", "evidence": [{"review_id": null, "quote": "用户正面评价..."}]}
+  ],
+  "weaknesses": [
+    {"point": "产品劣势/痛点描述...", "confidence": "high", "evidence": [...]}
+  ],
+  "opportunities": [
+    {"point": "市场机会描述...", "rationale": "机会分析依据"}
+  ],
+  "threats": [
+    {"point": "潜在威胁描述...", "rationale": "威胁分析依据"}
+  ]
+}''',
+            "department_directives": '''
+# department_directives 格式示例（必须是数组，每项有 insight 和 department）:
+"department_directives": [
+  {"department": "市场部", "insight": "指令内容...", "confidence": "high", "evidence": [...]}
+]''',
+            "priority_actions": '''
+# priority_actions 格式示例（必须是数组，每项有 action 字段）:
+"priority_actions": [
+  {"action": "行动描述...", "owner": "负责人", "priority": "P0", "confidence": "high", "evidence": [...]}
+]''',
+            # ========== 运营报告字段 ==========
+            "selling_points": '''
+# selling_points 格式示例（必须是数组）:
+"selling_points": [
+  {"insight": "卖点描述...", "confidence": "high", "evidence": [...]}
+]''',
+            "marketing_risks": '''
+# marketing_risks 格式示例（必须是数组）:
+"marketing_risks": [
+  {"insight": "风险描述...", "confidence": "high", "evidence": [...]}
+]''',
+            "target_audience": '''
+# target_audience 格式示例（必须是数组，不要嵌套其他字段）:
+"target_audience": [
+  {"insight": "目标受众描述...", "confidence": "high", "evidence": [...]}
+]''',
+            "competitor_analysis": '''
+# competitor_analysis 格式示例（必须是数组，不要嵌套其他字段）:
+"competitor_analysis": [
+  {"insight": "竞品分析描述...", "confidence": "medium", "evidence": [...]}
+]''',
+            "listing_optimization": '''
+# listing_optimization 格式示例（必须是数组）:
+"listing_optimization": [
+  {"element": "Title/Bullets/Images", "suggestion": "优化建议...", "confidence": "high", "evidence": [...]}
+]''',
+            "review_response_templates": '''
+# review_response_templates 格式示例（必须是数组）:
+"review_response_templates": [
+  {"issue": "问题类型", "response": "回复模板内容...", "confidence": "medium", "evidence": [...]}
+]''',
+            "executive_summary": '''
+# executive_summary 格式示例（可以是字符串或数组）:
+"executive_summary": "执行摘要文本..."''',
+            # ========== 产品报告字段 ==========
+            "user_research": '''
+# user_research 格式示例（必须是数组）:
+"user_research": [
+  {"insight": "用户研究洞察...", "confidence": "high", "evidence": [...]}
+]''',
+            "quality_score": '''
+# quality_score 格式示例（对象）:
+"quality_score": {
+  "overall": 75,
+  "design": 80,
+  "functionality": 70
+}''',
+            "critical_bugs": '''
+# critical_bugs 格式示例（必须是数组）:
+"critical_bugs": [
+  {"issue": "严重缺陷描述...", "priority": "P0", "confidence": "high", "evidence": [...]}
+]''',
+            "unmet_needs": '''
+# unmet_needs 格式示例（必须是数组）:
+"unmet_needs": [
+  {"insight": "用户未满足需求...", "confidence": "medium", "evidence": [...]}
+]''',
+            "usability_issues": '''
+# usability_issues 格式示例（必须是数组）:
+"usability_issues": [
+  {"insight": "易用性问题描述...", "confidence": "high", "evidence": [...]}
+]''',
+            "design_recommendations": '''
+# design_recommendations 格式示例（必须是数组）:
+"design_recommendations": [
+  {"insight": "设计改进建议...", "confidence": "medium", "evidence": [...]}
+]''',
+            "usage_context_gap": '''
+# usage_context_gap 格式示例（可以是字符串或数组）:
+"usage_context_gap": "使用场景差距分析描述..."''',
+            "roadmap_suggestion": '''
+# roadmap_suggestion 格式示例（可以是字符串或数组）:
+"roadmap_suggestion": "下版本升级方向描述..."''',
         }
         
         for field in fields:
@@ -1383,6 +1522,220 @@ class SummaryService:
                     # 确保有 evidence 字段
                     if 'evidence' not in item:
                         item['evidence'] = []
+        
+        # ==========================================
+        # 综合报告专用修复：core_swot
+        # ==========================================
+        if report_type == "comprehensive" and "core_swot" in result:
+            swot = result["core_swot"]
+            
+            # 如果 core_swot 是数组格式，转换为对象格式
+            if isinstance(swot, list):
+                logger.info(f"[格式修复] core_swot 是数组格式，需要转换为对象格式")
+                
+                # 尝试基于关键词分类
+                strengths = []
+                weaknesses = []
+                opportunities = []
+                threats = []
+                
+                positive_keywords = ['优势', '优点', '卖点', '亮点', '好评', '满意', '出色', '优秀', '高质量', 
+                                     '续航', '保温', '设计好', '做工好', '质量好', '性价比', '推荐', '喜欢', '五星']
+                negative_keywords = ['劣势', '缺点', '问题', '痛点', '差评', '失望', '糟糕', '质量差', '损坏', 
+                                     '故障', '坏了', '不满', '退货', '售后', '充电慢', '电池衰减', '不耐用']
+                opportunity_keywords = ['机会', '潜力', '市场', '增长', '需求', '趋势', '空间', '拓展', '场景']
+                threat_keywords = ['威胁', '风险', '竞争', '挑战', '下降', '流失', '负面', '危机']
+                
+                for item in swot:
+                    if not isinstance(item, dict):
+                        continue
+                    
+                    # 获取文本内容用于分类
+                    text = str(item.get('insight', '') or item.get('point', '') or item.get('description', '')).lower()
+                    
+                    # 转换字段名：insight -> point
+                    if 'insight' in item and 'point' not in item:
+                        item['point'] = item['insight']
+                    
+                    # 基于关键词分类
+                    is_positive = any(kw in text for kw in positive_keywords)
+                    is_negative = any(kw in text for kw in negative_keywords)
+                    is_opportunity = any(kw in text for kw in opportunity_keywords)
+                    is_threat = any(kw in text for kw in threat_keywords)
+                    
+                    if is_threat or (is_negative and '风险' in text):
+                        threats.append(item)
+                    elif is_opportunity:
+                        opportunities.append(item)
+                    elif is_negative or ('问题' in text) or ('缺' in text) or ('差' in text):
+                        weaknesses.append(item)
+                    else:
+                        # 默认归类为优势
+                        strengths.append(item)
+                
+                result["core_swot"] = {
+                    "strengths": strengths,
+                    "weaknesses": weaknesses,
+                    "opportunities": opportunities,
+                    "threats": threats
+                }
+                logger.info(f"[格式修复] core_swot 转换完成: S={len(strengths)}, W={len(weaknesses)}, O={len(opportunities)}, T={len(threats)}")
+            
+            # 如果是对象格式但缺少某些分类，补全
+            elif isinstance(swot, dict):
+                for key in ['strengths', 'weaknesses', 'opportunities', 'threats']:
+                    if key not in swot:
+                        swot[key] = []
+                        logger.info(f"[格式修复] core_swot 补全缺失字段: {key}")
+                    elif not isinstance(swot[key], list):
+                        swot[key] = [swot[key]] if swot[key] else []
+        
+        # ==========================================
+        # 综合报告专用修复：priority_actions
+        # ==========================================
+        if report_type == "comprehensive" and "priority_actions" in result:
+            items = result["priority_actions"]
+            if isinstance(items, list):
+                for item in items:
+                    # issue -> action 转换
+                    if 'issue' in item and 'action' not in item:
+                        item['action'] = item['issue']
+                        logger.info(f"[格式修复] priority_actions: issue -> action")
+                    # 确保有 confidence 和 evidence
+                    if 'confidence' not in item:
+                        item['confidence'] = 'medium'
+                    if 'evidence' not in item:
+                        item['evidence'] = []
+        
+        # ==========================================
+        # 综合报告专用修复：department_directives
+        # ==========================================
+        if report_type == "comprehensive" and "department_directives" in result:
+            items = result["department_directives"]
+            if isinstance(items, list):
+                for i, item in enumerate(items):
+                    # 确保有 insight 字段
+                    if 'insight' not in item:
+                        for alt in ['directive', 'action', 'issue', 'description', 'content']:
+                            if alt in item:
+                                item['insight'] = item[alt]
+                                break
+                    # 确保有 department 字段
+                    if 'department' not in item:
+                        item['department'] = item.get('to', f'指令 {i+1}')
+                    if 'confidence' not in item:
+                        item['confidence'] = 'medium'
+                    if 'evidence' not in item:
+                        item['evidence'] = []
+        
+        # ==========================================
+        # 运营报告专用修复
+        # ==========================================
+        if report_type == "operations":
+            # 修复 target_audience：如果是嵌套结构，提取出来
+            if "target_audience" in result:
+                ta = result["target_audience"]
+                if isinstance(ta, list) and len(ta) > 0:
+                    first = ta[0]
+                    # 检查是否嵌套了其他字段
+                    if isinstance(first, dict) and any(k in first for k in ['user_profile', 'user_research', 'selling_points', 'critical_bugs']):
+                        # 提取嵌套的 insight
+                        extracted = []
+                        for item in ta:
+                            if isinstance(item, dict):
+                                for key, value in item.items():
+                                    if isinstance(value, list):
+                                        extracted.extend(value)
+                                    elif isinstance(value, dict) and 'insight' in value:
+                                        extracted.append(value)
+                        result["target_audience"] = extracted if extracted else [{"insight": "目标受众数据格式异常", "confidence": "low", "evidence": []}]
+                        logger.info(f"[格式修复] target_audience: 修复嵌套结构")
+                elif isinstance(ta, dict):
+                    # 对象转数组
+                    result["target_audience"] = [ta] if ta else []
+            
+            # 修复 competitor_analysis：如果是嵌套结构，提取出来
+            if "competitor_analysis" in result:
+                ca = result["competitor_analysis"]
+                if isinstance(ca, list) and len(ca) > 0:
+                    first = ca[0]
+                    # 检查是否嵌套了其他字段
+                    if isinstance(first, dict) and any(k in first for k in ['usage_context_analysis', 'material_defects', 'supplier_issues', 'qc_checklist']):
+                        # 提取嵌套的 insight/issue
+                        extracted = []
+                        for item in ca:
+                            if isinstance(item, dict):
+                                for key, value in item.items():
+                                    if isinstance(value, list):
+                                        for v in value:
+                                            if isinstance(v, dict) and ('insight' in v or 'issue' in v):
+                                                # 确保有 insight
+                                                if 'issue' in v and 'insight' not in v:
+                                                    v['insight'] = v['issue']
+                                                extracted.append(v)
+                        result["competitor_analysis"] = extracted if extracted else []
+                        logger.info(f"[格式修复] competitor_analysis: 修复嵌套结构")
+                elif isinstance(ca, dict):
+                    result["competitor_analysis"] = [ca] if ca else []
+            
+            # 修复 selling_points, marketing_risks 等数组字段
+            for field in ["selling_points", "marketing_risks", "listing_optimization", "review_response_templates"]:
+                if field in result and isinstance(result[field], list):
+                    for item in result[field]:
+                        if isinstance(item, dict):
+                            # 确保有内容字段
+                            if 'insight' not in item and 'issue' not in item:
+                                for alt in ['point', 'description', 'content', 'element', 'suggestion', 'response']:
+                                    if alt in item:
+                                        item['insight'] = item[alt]
+                                        break
+                            if 'confidence' not in item:
+                                item['confidence'] = 'medium'
+                            if 'evidence' not in item:
+                                item['evidence'] = []
+            
+            # 修复 executive_summary：如果是数组，提取第一个的 insight
+            if "executive_summary" in result:
+                es = result["executive_summary"]
+                if isinstance(es, list) and len(es) > 0:
+                    first = es[0]
+                    if isinstance(first, dict) and 'insight' in first:
+                        result["executive_summary"] = first['insight']
+                        logger.info(f"[格式修复] executive_summary: 数组转字符串")
+        
+        # ==========================================
+        # 产品报告专用修复
+        # ==========================================
+        if report_type == "product":
+            # 修复数组字段
+            for field in ["critical_bugs", "unmet_needs", "usability_issues", "design_recommendations"]:
+                if field in result and isinstance(result[field], list):
+                    for item in result[field]:
+                        if isinstance(item, dict):
+                            # issue/insight 互换
+                            if field == "critical_bugs":
+                                if 'insight' in item and 'issue' not in item:
+                                    item['issue'] = item['insight']
+                            else:
+                                if 'issue' in item and 'insight' not in item:
+                                    item['insight'] = item['issue']
+                            if 'confidence' not in item:
+                                item['confidence'] = 'medium'
+                            if 'evidence' not in item:
+                                item['evidence'] = []
+        
+        # ==========================================
+        # 供应链报告专用修复：qc_checklist 的 insight -> issue
+        # ==========================================
+        if report_type == "supply_chain" and "qc_checklist" in result:
+            items = result["qc_checklist"]
+            if isinstance(items, list):
+                for item in items:
+                    if isinstance(item, dict):
+                        # insight -> issue 转换（前端期望 issue）
+                        if 'insight' in item and 'issue' not in item:
+                            item['issue'] = item['insight']
+                            logger.info(f"[格式修复] qc_checklist: insight -> issue")
         
         logger.info(f"[格式修复] 完成 {report_type} 报告格式标准化")
         return result

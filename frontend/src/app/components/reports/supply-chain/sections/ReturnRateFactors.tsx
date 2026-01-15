@@ -33,14 +33,15 @@ export const ReturnRateFactors = memo(function ReturnRateFactors({ data }: Retur
               <ConfidenceBadge confidence={factor.confidence} />
             </div>
             
+            {/* 🔧 [FIX] 支持多种字段名作为主要内容 */}
             <p className="text-sm text-gray-700 dark:text-gray-300 mb-2 font-medium">
-              {factor.factor}
+              {factor.factor || factor.insight || factor.issue || factor.description || factor.point || ''}
             </p>
             
-            {/* 支持 description, insight, impact_analysis */}
-            {(factor.description || factor.insight || factor.impact_analysis) && (
+            {/* 次要描述信息 */}
+            {factor.impact_analysis && (
               <p className="text-sm text-gray-600 dark:text-gray-400 mb-2">
-                {factor.description || factor.insight || factor.impact_analysis}
+                {factor.impact_analysis}
               </p>
             )}
             

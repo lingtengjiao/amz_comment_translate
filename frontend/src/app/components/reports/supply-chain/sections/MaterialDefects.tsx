@@ -35,8 +35,9 @@ export const MaterialDefects = memo(function MaterialDefects({ data }: MaterialD
               </div>
             </div>
             
+            {/* 🔧 [FIX] 支持多种字段名：issue, insight, description, defect */}
             <p className="text-sm text-gray-700 dark:text-gray-300 mb-2">
-              {defect.issue}
+              {defect.issue || defect.insight || defect.description || defect.defect || ''}
             </p>
             
             {defect.impact && (

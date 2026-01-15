@@ -32,8 +32,9 @@ export const PackagingIssues = memo(function PackagingIssues({ data }: Packaging
               <ConfidenceBadge confidence={issue.confidence} />
             </div>
             
+            {/* 🔧 [FIX] 支持多种字段名 */}
             <p className="text-sm text-gray-700 dark:text-gray-300 mb-2">
-              {issue.issue}
+              {issue.issue || issue.insight || issue.description || issue.point || ''}
             </p>
             
             {issue.impact && (
