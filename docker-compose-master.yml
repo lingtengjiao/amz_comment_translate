@@ -160,7 +160,7 @@ services:
   # Worker 2: VIP 建模员 (Learning Worker)
   # ==========================================================================
   # 队列：learning（专属快车道）
-  # 模式：Gevent, 30 协程
+  # 模式：Gevent, 100 协程 (40K RPM 优化：30→100)
   # 职责：维度学习 + 5W建模，新产品秒级响应
   worker-vip:
     build:
@@ -168,7 +168,7 @@ services:
       dockerfile: Dockerfile
     container_name: voc-worker-vip
     restart: unless-stopped
-    command: celery -A app.worker worker --loglevel=info --pool=gevent --concurrency=30 -Q learning -n vip@%h
+    command: celery -A app.worker worker --loglevel=info --pool=gevent --concurrency=100 -Q learning -n vip@%h
     environment:
       - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-vocmaster}:${POSTGRES_PASSWORD:-vocmaster123}@db-postgres:5432/${POSTGRES_DB:-vocmaster}
       - REDIS_URL=redis://db-redis:6379/0
@@ -198,7 +198,7 @@ services:
   # Worker 3: 翻译主力 (Translation Worker)
   # ==========================================================================
   # 队列：translation（专属）
-  # 模式：Gevent, 60 协程
+  # 模式：Gevent, 150 协程 (40K RPM 优化：60→150)
   # 职责：翻译主力军，处理大部分翻译任务
   worker-trans:
     build:
@@ -206,7 +206,7 @@ services:
       dockerfile: Dockerfile
     container_name: voc-worker-trans
     restart: unless-stopped
-    command: celery -A app.worker worker --loglevel=info --pool=gevent --concurrency=60 -Q translation -n trans@%h
+    command: celery -A app.worker worker --loglevel=info --pool=gevent --concurrency=150 -Q translation -n trans@%h
     environment:
       - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-vocmaster}:${POSTGRES_PASSWORD:-vocmaster123}@db-postgres:5432/${POSTGRES_DB:-vocmaster}
       - REDIS_URL=redis://db-redis:6379/0
