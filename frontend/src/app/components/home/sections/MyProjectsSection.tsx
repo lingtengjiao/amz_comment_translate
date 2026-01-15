@@ -43,8 +43,10 @@ export function MyProjectsSection() {
       const response = await apiService.getMyProjects(favoritesOnly);
       setProjects(response.projects || []);
     } catch (err: any) {
-      setError(err.message || '加载失败');
-      toast.error('加载项目列表失败');
+      console.error('[MyProjects] 加载失败:', err);
+      const errorMessage = err?.response?.data?.detail || err?.message || '加载项目列表失败，请稍后重试';
+      setError(errorMessage);
+      // 不显示 toast，避免重复提示
     } finally {
       setLoading(false);
     }
@@ -157,13 +159,15 @@ export function MyProjectsSection() {
       {/* 错误状态 */}
       {error && !loading && (
         <div className="text-center py-20">
-          <p className="text-red-500 mb-4">{error}</p>
-          <button 
-            onClick={loadProjects}
-            className="text-rose-600 hover:underline"
-          >
-            重试
-          </button>
+          <div className="max-w-md mx-auto">
+            <p className="text-red-500 mb-4 text-sm">{error}</p>
+            <button 
+              onClick={loadProjects}
+              className="px-4 py-2 bg-rose-500 text-white rounded-lg hover:bg-rose-600 transition-colors"
+            >
+              重试
+            </button>
+          </div>
         </div>
       )}
 

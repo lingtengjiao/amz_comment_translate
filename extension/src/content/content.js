@@ -559,10 +559,13 @@ async function startCollection(config) {
   });
 
   // Use background service worker for collection to maintain context
+  // [NEW] 传递 workflowMode 到后台
+  const workflowMode = config.workflowMode || 'one_step_insight';
+  
   chrome.runtime.sendMessage({
     type: 'START_TAB_COLLECTION',
     asin,
-    config: { stars: starsToCollect, pagesPerStar, mediaType, speedMode },
+    config: { stars: starsToCollect, pagesPerStar, mediaType, speedMode, workflowMode },
     productInfo: {
       title, imageUrl, averageRating, price, bulletPoints, categories,
       marketplace: detectMarketplace()
@@ -698,6 +701,23 @@ function createOverlay() {
               <label><input type="radio" name="voc-speed-mode" value="stable"> 🛡️ 稳定模式</label>
             </div>
           </div>
+          <div class="voc-config-row voc-workflow-section">
+            <label>分析模式:</label>
+            <div class="voc-workflow-options">
+              <label class="voc-workflow-card voc-workflow-selected" data-mode="one_step_insight">
+                <input type="radio" name="voc-workflow-mode" value="one_step_insight" checked>
+                <span class="voc-workflow-icon">⚡</span>
+                <span class="voc-workflow-title">一步到位</span>
+                <span class="voc-workflow-desc">采集→翻译→分析→报告</span>
+              </label>
+              <label class="voc-workflow-card" data-mode="translate_only">
+                <input type="radio" name="voc-workflow-mode" value="translate_only">
+                <span class="voc-workflow-icon">📝</span>
+                <span class="voc-workflow-title">只翻译</span>
+                <span class="voc-workflow-desc">仅翻译，稍后手动分析</span>
+              </label>
+            </div>
+          </div>
         </div>
         
         <div class="voc-actions" id="voc-actions">
@@ -729,6 +749,22 @@ function createOverlay() {
           expandBtn.innerHTML = overlay.classList.contains('voc-fullscreen') ? '⤢' : '⛶';
       });
   }
+  
+  // [NEW] 绑定工作流模式选择卡片的点击事件
+  const workflowCards = document.querySelectorAll('.voc-workflow-card');
+  workflowCards.forEach(card => {
+    card.addEventListener('click', () => {
+      // 移除所有卡片的选中状态
+      workflowCards.forEach(c => c.classList.remove('voc-workflow-selected'));
+      // 添加当前卡片的选中状态
+      card.classList.add('voc-workflow-selected');
+      // 选中对应的 radio
+      const radio = card.querySelector('input[type="radio"]');
+      if (radio) radio.checked = true;
+      // 日志
+      console.log('[VOC-Master] 选择工作流模式:', card.dataset.mode);
+    });
+  });
 }
 
 function toggleFullscreen() {
@@ -796,13 +832,18 @@ function handleStartClick() {
   // 获取选中的速度模式 radio
   const speedModeRadio = document.querySelector('input[name="voc-speed-mode"]:checked');
   const speedMode = speedModeRadio ? speedModeRadio.value : 'fast';
+  
+  // [NEW] 获取工作流模式
+  const workflowModeRadio = document.querySelector('input[name="voc-workflow-mode"]:checked');
+  const workflowMode = workflowModeRadio ? workflowModeRadio.value : 'one_step_insight';
+  console.log('[VOC-Master] 工作流模式:', workflowMode);
 
   if (!stars.length) {
     alert('请至少选择一个星级');
     return;
   }
 
-  const config = { stars, pagesPerStar, mediaType, speedMode };
+  const config = { stars, pagesPerStar, mediaType, speedMode, workflowMode };
   startCollection(config);
 }
 
@@ -877,7 +918,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       status: msg.success ? 'complete' : 'error',
       message: msg.success ? `采集完成! 共 ${g_displayCount} 条` : `失败: ${msg.error}`,
       reviewCount: g_displayCount, // 确保完成态也传这个数
-      dashboardUrl: `${CONFIG.DASHBOARD_URL}/products/${asin}`
+      // [FIXED] 跳转到"我的洞察"页面，而不是产品详情页
+      dashboardUrl: `${CONFIG.DASHBOARD_URL}/home/my-projects`
     });
     
     // 注意：不立即重置 g_displayCount，保留显示直到用户关闭面板或开始新的采集

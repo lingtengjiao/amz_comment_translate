@@ -16,8 +16,10 @@ export interface ThemeTag {
 }
 
 /**
- * [UPDATED] 5W 营销模型主题类型配置
- * - Who: 使用者/人群
+ * [UPDATED 2026-01-14] 5W 营销模型主题类型配置 - 扩展版：Who 拆分为 Buyer + User
+ * - Buyer: 购买者身份（谁付钱）- [NEW]
+ * - User: 使用者身份（谁使用）- [NEW]
+ * - Who: 人群（向后兼容旧数据）
  * - Where: 使用地点/场景
  * - When: 使用时刻/时机
  * - Why: 购买动机 (Purchase Driver)
@@ -25,14 +27,34 @@ export interface ThemeTag {
  */
 export const themeTagsPreset: ThemeTag[] = [
   {
-    id: 'who',
-    label: 'Who（使用者/人群）',
+    id: 'buyer',
+    label: 'Buyer（购买者）',
     color: 'text-blue-900',
     bgColor: 'bg-blue-100/90',
     darkBgColor: 'dark:bg-blue-500/30',
     darkTextColor: 'dark:text-blue-200',
     patterns: [], // 由后端 AI 动态填充
-    question: '谁在使用？如：老年人、宠物主、学生'
+    question: '谁付钱购买？如：妈妈、送礼者、企业采购'
+  },
+  {
+    id: 'user',
+    label: 'User（使用者）',
+    color: 'text-cyan-900',
+    bgColor: 'bg-cyan-100/90',
+    darkBgColor: 'dark:bg-cyan-500/30',
+    darkTextColor: 'dark:text-cyan-200',
+    patterns: [],
+    question: '谁实际使用？如：孩子、老人、员工'
+  },
+  {
+    id: 'who',
+    label: 'Who（人群）',
+    color: 'text-slate-700',
+    bgColor: 'bg-slate-100/90',
+    darkBgColor: 'dark:bg-slate-500/30',
+    darkTextColor: 'dark:text-slate-200',
+    patterns: [],
+    question: '（历史数据）用户人群'
   },
   {
     id: 'where',

@@ -27,6 +27,9 @@ class Settings(BaseSettings):
     QWEN_MODEL: str = "qwen-plus"  # 默认模型（翻译、洞察提取等）
     QWEN_ANALYSIS_MODEL: str = "qwen3-max"  # 对比分析专用模型（更强推理能力）
     
+    # Keepa API Configuration
+    KEEPA_API_KEY: Optional[str] = None
+    
     # CORS
     CORS_ORIGINS: list[str] = ["http://localhost:3000", "http://127.0.0.1:3000"]
     

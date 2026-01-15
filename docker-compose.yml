@@ -83,6 +83,7 @@ services:
       - REDIS_URL=redis://db-redis:6379/0
       - QWEN_API_KEY=${QWEN_API_KEY}
       - QWEN_API_BASE=${QWEN_API_BASE:-https://dashscope.aliyuncs.com/compatible-mode/v1}
+      - KEEPA_API_KEY=${KEEPA_API_KEY}
     ports:
       - "8000:8000"
     depends_on:
@@ -165,6 +166,7 @@ services:
       - REDIS_URL=redis://db-redis:6379/0
       - QWEN_API_KEY=${QWEN_API_KEY}
       - QWEN_API_BASE=${QWEN_API_BASE:-https://dashscope.aliyuncs.com/compatible-mode/v1}
+      - KEEPA_API_KEY=${KEEPA_API_KEY}
     depends_on:
       db-postgres:
         condition: service_healthy
@@ -204,6 +206,7 @@ services:
       - REDIS_URL=redis://db-redis:6379/0
       - QWEN_API_KEY=${QWEN_API_KEY}
       - QWEN_API_BASE=${QWEN_API_BASE:-https://dashscope.aliyuncs.com/compatible-mode/v1}
+      - KEEPA_API_KEY=${KEEPA_API_KEY}
     depends_on:
       db-postgres:
         condition: service_healthy
@@ -243,6 +246,7 @@ services:
       - REDIS_URL=redis://db-redis:6379/0
       - QWEN_API_KEY=${QWEN_API_KEY}
       - QWEN_API_BASE=${QWEN_API_BASE:-https://dashscope.aliyuncs.com/compatible-mode/v1}
+      - KEEPA_API_KEY=${KEEPA_API_KEY}
     depends_on:
       db-postgres:
         condition: service_healthy
@@ -282,6 +286,7 @@ services:
       - REDIS_URL=redis://db-redis:6379/0
       - QWEN_API_KEY=${QWEN_API_KEY}
       - QWEN_API_BASE=${QWEN_API_BASE:-https://dashscope.aliyuncs.com/compatible-mode/v1}
+      - KEEPA_API_KEY=${KEEPA_API_KEY}
     depends_on:
       db-postgres:
         condition: service_healthy
@@ -321,6 +326,7 @@ services:
       - REDIS_URL=redis://db-redis:6379/0
       - QWEN_API_KEY=${QWEN_API_KEY}
       - QWEN_API_BASE=${QWEN_API_BASE:-https://dashscope.aliyuncs.com/compatible-mode/v1}
+      - KEEPA_API_KEY=${KEEPA_API_KEY}
     depends_on:
       db-postgres:
         condition: service_healthy

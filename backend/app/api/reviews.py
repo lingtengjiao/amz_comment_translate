@@ -699,8 +699,24 @@ async def get_product_stats(
     total = product_data.get("total_reviews", 0)
     
     if total > 0:
-        # 翻译进度
-        trans_progress = int((product_data.get("translated_reviews", 0) / total) * 100)
+        # [FIXED] 翻译进度：已翻译 + 已跳过 = 已处理（避免 skipped 评论导致无限循环）
+        translated = product_data.get("translated_reviews", 0)
+        
+        # 查询 skipped 评论数量
+        skipped_result = await db.execute(
+            select(func.count(Review.id)).where(
+                and_(
+                    Review.product_id == product.id,
+                    Review.translation_status == TranslationStatus.SKIPPED.value,
+                    Review.is_deleted == False
+                )
+            )
+        )
+        skipped_count = skipped_result.scalar() or 0
+        
+        # 已处理 = 已翻译 + 已跳过
+        processed = translated + skipped_count
+        trans_progress = int((processed / total) * 100)
         active_tasks.translation_progress = min(100, trans_progress)
         active_tasks.translation = ActiveTaskStatus.COMPLETED if trans_progress >= 100 else (
             ActiveTaskStatus.PROCESSING if trans_progress > 0 else ActiveTaskStatus.IDLE
@@ -912,25 +928,29 @@ async def start_deep_analysis(
     db: AsyncSession = Depends(get_db)
 ):
     """
-    🚀 一键深度分析接口 (Start Deep Analysis)
+    🚀 一键深度分析接口 (模式B：只翻译 → 后洞察)
     
-    当采集完成，调用此接口启动科学学习和全量分析。
+    当用户选择"只翻译"模式完成采集后，点击此接口启动完整的AI分析流水线。
+    这是一键操作，包含与"一步到位"模式相同的全部分析步骤。
     
     流程：
     1. 科学采样（基于英文原文，不等待翻译完成）
     2. 跨语言零样本学习（维度 + 5W标签）
     3. 全量洞察回填
     4. 全量主题回填
+    5. 自动生成综合战略报告
     
     注意：这是一个重量级任务，执行时间可能较长（1-5分钟）
     
     Returns:
-        - status: "started" 表示任务已启动
+        - task_id: 分析任务 ID（用于追踪进度）
+        - status: "started" / "already_running"
         - message: 进度信息
     """
-    from sqlalchemy import select, func, and_
+    from sqlalchemy import select, func, and_, delete
     from app.models.product import Product
     from app.models.review import Review
+    from app.models.task import Task, TaskType, TaskStatus
     
     # 获取产品
     product_result = await db.execute(
@@ -956,18 +976,77 @@ async def start_deep_analysis(
     if review_count < 10:
         raise HTTPException(
             status_code=400, 
-            detail=f"数据量不足：当前仅有 {review_count} 条评论，需要至少 10 条才能进行科学分析"
+            detail=f"数据量不足：当前仅有 {review_count} 条评论，需要至少 10 条才能进行分析"
         )
     
-    # 启动科学学习与分析任务
-    task_scientific_learning_and_analysis.delay(str(product.id))
+    # ==========================================
+    # 检查是否已有 AUTO_ANALYSIS 任务在运行
+    # ==========================================
+    existing_task_result = await db.execute(
+        select(Task).where(
+            and_(
+                Task.product_id == product.id,
+                Task.task_type == TaskType.AUTO_ANALYSIS.value,
+                Task.status.in_([TaskStatus.PENDING.value, TaskStatus.PROCESSING.value])
+            )
+        )
+    )
+    existing_task = existing_task_result.scalar_one_or_none()
     
-    logger.info(f"[深度分析] 产品 {asin} 已启动，当前 {review_count} 条评论")
+    if existing_task:
+        logger.info(f"[模式B-一键分析] 产品 {asin} 已有运行中的任务: {existing_task.id}")
+        return {
+            "success": True,
+            "status": "already_running",
+            "message": f"分析任务已在运行中，进度: {existing_task.processed_items}/{existing_task.total_items}",
+            "task_id": str(existing_task.id),
+            "product_id": str(product.id),
+            "asin": asin,
+            "review_count": review_count
+        }
+    
+    # ==========================================
+    # 删除旧的 AUTO_ANALYSIS 任务（如果存在）
+    # ==========================================
+    await db.execute(
+        delete(Task).where(
+            and_(
+                Task.product_id == product.id,
+                Task.task_type == TaskType.AUTO_ANALYSIS.value
+            )
+        )
+    )
+    
+    # ==========================================
+    # 创建新的全自动分析任务
+    # ==========================================
+    new_task = Task(
+        product_id=product.id,
+        task_type=TaskType.AUTO_ANALYSIS.value,
+        status=TaskStatus.PENDING.value,
+        total_items=4,  # 4 个步骤：学习 → 触发提取 → 等待三任务并行 → 报告
+        processed_items=0
+    )
+    db.add(new_task)
+    await db.commit()
+    await db.refresh(new_task)
+    
+    # ==========================================
+    # 触发 Celery 任务 - 使用 task_full_auto_analysis
+    # ==========================================
+    celery_task = task_full_auto_analysis.delay(str(product.id), str(new_task.id))
+    
+    # 更新 Celery 任务 ID
+    new_task.celery_task_id = celery_task.id
+    await db.commit()
+    
+    logger.info(f"[模式B-一键分析] 产品 {asin} 全自动分析启动成功，任务 ID: {new_task.id}")
     
     return {
         "success": True,
         "status": "started",
-        "message": f"正在基于 {review_count} 条评论进行科学分析...",
+        "message": f"全自动分析已启动（含报告生成），共 {review_count} 条评论待处理...",
+        "task_id": str(new_task.id),
         "product_id": str(product.id),
         "asin": asin,
         "review_count": review_count
@@ -981,23 +1060,33 @@ async def start_deep_analysis(
 @products_router.post("/{asin}/collection-complete")
 async def collection_complete(
     asin: str,
+    workflow_mode: str = Query(
+        default="one_step_insight",
+        description="工作流模式: one_step_insight(一步到位) / translate_only(只翻译)"
+    ),
     db: AsyncSession = Depends(get_db)
 ):
     """
     🚀 采集完成触发接口 (Collection Complete Trigger)
     
-    当 Chrome 插件采集完成后，自动调用此接口触发全自动分析流程。
+    当 Chrome 插件采集完成后，调用此接口触发后续流程。
     
-    流程（全自动，无需用户二次点击）：
-    1. 等待所有翻译完成
-    2. 科学学习（维度 + 5W标签）
-    3. 洞察提取
-    4. 主题提取
-    5. 生成综合战略版报告
+    **两种工作流模式：**
+    
+    1. **one_step_insight** (一步到位，默认)：
+       - 流程：翻译 → 科学学习 → 洞察提取 → 主题提取 → 生成报告
+       - 全自动，无需用户二次点击
+       - 适合：快速获取分析结果
+    
+    2. **translate_only** (只翻译)：
+       - 流程：仅完成翻译，状态变为"待分析"
+       - 用户稍后可手动点击"开始分析"按钮
+       - 适合：需要先查看翻译结果，或自定义维度后再分析
     
     Returns:
-        - task_id: 全自动分析任务 ID（可用于轮询进度）
-        - status: "started"
+        - task_id: 任务 ID（仅 one_step_insight 模式）
+        - status: "started" / "ready_for_analysis"
+        - workflow_mode: 当前使用的模式
     """
     from sqlalchemy import select, func, and_
     from celery import current_app
@@ -1057,6 +1146,39 @@ async def collection_complete(
     )
     review_count = review_count_result.scalar() or 0
     
+    # ==========================================
+    # [NEW] 根据 workflow_mode 决定后续流程
+    # ==========================================
+    from app.api.schemas import WorkflowMode
+    
+    # 验证 workflow_mode
+    valid_modes = [m.value for m in WorkflowMode]
+    if workflow_mode not in valid_modes:
+        workflow_mode = WorkflowMode.ONE_STEP_INSIGHT.value
+    
+    logger.info(f"[采集完成] 产品 {asin}，模式: {workflow_mode}，评论数: {review_count}")
+    
+    # ==========================================
+    # 模式 B: TRANSLATE_ONLY - 只翻译，等待用户手动分析
+    # ==========================================
+    if workflow_mode == WorkflowMode.TRANSLATE_ONLY.value:
+        logger.info(f"[TRANSLATE_ONLY] 产品 {asin} 采集完成，仅翻译模式，跳过自动分析")
+        
+        return {
+            "success": True,
+            "status": "ready_for_analysis",
+            "workflow_mode": workflow_mode,
+            "message": f"采集完成！共 {review_count} 条评论，翻译进行中。稍后可手动启动深度分析。",
+            "product_id": str(product.id),
+            "asin": asin,
+            "review_count": review_count,
+            "next_action": "点击「开始分析」按钮进行深度洞察"
+        }
+    
+    # ==========================================
+    # 模式 A: ONE_STEP_INSIGHT - 一步到位，全自动分析
+    # ==========================================
+    
     if review_count < 10:
         raise HTTPException(
             status_code=400, 
@@ -1076,10 +1198,11 @@ async def collection_complete(
     existing_task = existing_task_result.scalar_one_or_none()
     
     if existing_task:
-        logger.info(f"[全自动分析] 产品 {asin} 已有运行中的任务: {existing_task.id}")
+        logger.info(f"[ONE_STEP_INSIGHT] 产品 {asin} 已有运行中的任务: {existing_task.id}")
         return {
             "success": True,
             "status": "already_running",
+            "workflow_mode": workflow_mode,
             "message": f"分析任务已在运行中，进度: {existing_task.processed_items}/{existing_task.total_items}",
             "task_id": str(existing_task.id),
             "product_id": str(product.id),
@@ -1088,15 +1211,6 @@ async def collection_complete(
         }
     
     # 删除旧的 AUTO_ANALYSIS 任务（如果存在）
-    await db.execute(
-        select(Task).where(
-            and_(
-                Task.product_id == product.id,
-                Task.task_type == TaskType.AUTO_ANALYSIS.value
-            )
-        )
-    )
-    # 创建新的全自动分析任务
     from sqlalchemy import delete
     await db.execute(
         delete(Task).where(
@@ -1107,6 +1221,7 @@ async def collection_complete(
         )
     )
     
+    # 创建新的全自动分析任务
     new_task = Task(
         product_id=product.id,
         task_type=TaskType.AUTO_ANALYSIS.value,
@@ -1125,11 +1240,12 @@ async def collection_complete(
     new_task.celery_task_id = celery_task.id
     await db.commit()
     
-    logger.info(f"[全自动分析] 产品 {asin} 启动成功，任务 ID: {new_task.id}，评论数: {review_count}")
+    logger.info(f"[ONE_STEP_INSIGHT] 产品 {asin} 全自动分析启动成功，任务 ID: {new_task.id}")
     
     return {
         "success": True,
         "status": "started",
+        "workflow_mode": workflow_mode,
         "message": f"全自动分析已启动，共 {review_count} 条评论待处理...",
         "task_id": str(new_task.id),
         "product_id": str(product.id),
@@ -1447,18 +1563,17 @@ async def trigger_insight_extraction(
     if not product:
         raise HTTPException(status_code=404, detail="Product not found")
     
-    # Count total translated reviews
-    translated_count_result = await db.execute(
+    # [UPDATED] 跨语言模式：统计有原文的评论数（不再依赖翻译）
+    review_count_result = await db.execute(
         select(func.count(Review.id)).where(
             and_(
                 Review.product_id == product.id,
-                Review.translation_status == TranslationStatus.COMPLETED.value,
-                Review.body_translated.isnot(None),
+                Review.body_original.isnot(None),  # [UPDATED] 只需有原文即可
                 Review.is_deleted == False
             )
         )
     )
-    total_translated = translated_count_result.scalar() or 0
+    total_reviews = review_count_result.scalar() or 0
     
     # Count reviews that already have insights (processed)
     already_processed_result = await db.execute(
@@ -1474,12 +1589,12 @@ async def trigger_insight_extraction(
     already_processed = already_processed_result.scalar() or 0
     
     # Calculate remaining to process
-    remaining_to_process = total_translated - already_processed
+    remaining_to_process = total_reviews - already_processed
     
-    if total_translated == 0:
+    if total_reviews == 0:
         raise HTTPException(
             status_code=400, 
-            detail="No translated reviews available for insight extraction"
+            detail="该产品暂无评论数据，无法进行洞察提取"  # [UPDATED] 更新错误信息
         )
     
     if remaining_to_process <= 0:
@@ -1489,13 +1604,13 @@ async def trigger_insight_extraction(
             "product_id": str(product.id),
             "asin": asin,
             "reviews_to_process": 0,
-            "total_reviews": total_translated,
+            "total_reviews": total_reviews,
             "already_processed": already_processed
         }
     
     # Dispatch async task to Celery
     task_extract_insights.delay(str(product.id))
-    logger.info(f"Triggered insight extraction: {remaining_to_process} remaining (total={total_translated}, done={already_processed}) for {asin}")
+    logger.info(f"[跨语言洞察] Triggered insight extraction: {remaining_to_process} remaining (total={total_reviews}, done={already_processed}) for {asin}")
     
     return {
         "success": True,
@@ -1503,7 +1618,7 @@ async def trigger_insight_extraction(
         "product_id": str(product.id),
         "asin": asin,
         "reviews_to_process": remaining_to_process,  # 待处理数
-        "total_reviews": total_translated,           # 总数
+        "total_reviews": total_reviews,              # [UPDATED] 总数（不再是已翻译数）
         "already_processed": already_processed       # 已处理数
     }
 
@@ -1611,14 +1726,13 @@ async def trigger_theme_extraction(
     if not product:
         raise HTTPException(status_code=404, detail="Product not found")
     
-    # Count translated reviews without theme highlights
+    # [UPDATED] 跨语言模式：统计有原文但无主题的评论数（不再依赖翻译）
     reviews_without_themes_result = await db.execute(
         select(func.count(Review.id))
         .where(
             and_(
                 Review.product_id == product.id,
-                Review.translation_status == TranslationStatus.COMPLETED.value,
-                Review.body_translated.isnot(None),
+                Review.body_original.isnot(None),  # [UPDATED] 只需有原文即可
                 Review.is_deleted == False,
                 ~exists(
                     select(1).where(ReviewThemeHighlight.review_id == Review.id)
@@ -1630,32 +1744,31 @@ async def trigger_theme_extraction(
     
     if reviews_to_process == 0:
         # Check if all reviews already have themes
-        total_translated_result = await db.execute(
+        total_reviews_result = await db.execute(
             select(func.count(Review.id)).where(
                 and_(
                     Review.product_id == product.id,
-                    Review.translation_status == TranslationStatus.COMPLETED.value,
-                    Review.body_translated.isnot(None),
+                    Review.body_original.isnot(None),  # [UPDATED] 只需有原文即可
                     Review.is_deleted == False
                 )
             )
         )
-        total_translated = total_translated_result.scalar() or 0
+        total_reviews = total_reviews_result.scalar() or 0
         
-        if total_translated == 0:
+        if total_reviews == 0:
             raise HTTPException(
                 status_code=400, 
-                detail="主题提取失败：该产品暂无已翻译的评论数据。请先进行评论翻译。"
+                detail="主题提取失败：该产品暂无评论数据。"  # [UPDATED] 更新错误信息
             )
         else:
             raise HTTPException(
                 status_code=400, 
-                detail="主题提取失败：所有已翻译评论均已提取过主题关键词。"
+                detail="主题提取失败：所有评论均已提取过主题关键词。"  # [UPDATED] 更新错误信息
             )
     
     # Dispatch async task to Celery
     task_extract_themes.delay(str(product.id))
-    logger.info(f"Triggered theme extraction for {reviews_to_process} translated reviews of {asin}")
+    logger.info(f"[跨语言5W] Triggered theme extraction for {reviews_to_process} reviews of {asin}")
     
     return {
         "success": True,
@@ -2207,6 +2320,145 @@ async def get_all_reports(
 
 # ============== Report Generation API ==============
 
+@products_router.post("/{asin}/report/generate-async")
+async def generate_product_report_async(
+    asin: str,
+    report_type: str = Query(
+        default="comprehensive",
+        description="报告类型: comprehensive(综合版), operations(运营版), product(产品版), supply_chain(供应链版)"
+    ),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    🚀 异步生成报告（推荐使用）
+    
+    触发后台 Celery 任务生成报告，立即返回任务 ID。
+    用户可以离开页面，报告会在后台继续生成。
+    
+    使用流程：
+    1. 调用此 API 触发报告生成，获取 task_id
+    2. 轮询 GET /products/{asin}/report/task/{task_id} 获取状态
+    3. 状态为 completed 时，从响应中获取 report_id
+    4. 使用 report_id 查看报告
+    """
+    from sqlalchemy import select
+    from app.models.product import Product
+    from app.services.summary_service import validate_report_type, get_report_type_config, REPORT_TYPE_CONFIGS
+    from app.worker import task_generate_report
+    
+    # 验证报告类型
+    if not validate_report_type(report_type):
+        available_types = ", ".join(REPORT_TYPE_CONFIGS.keys())
+        raise HTTPException(
+            status_code=400, 
+            detail=f"无效的报告类型: '{report_type}'。可用类型: {available_types}"
+        )
+    
+    # 获取产品
+    product_result = await db.execute(
+        select(Product).where(Product.asin == asin)
+    )
+    product = product_result.scalar_one_or_none()
+    
+    if not product:
+        raise HTTPException(status_code=404, detail="产品不存在")
+    
+    # 触发异步任务
+    task = task_generate_report.delay(str(product.id), report_type)
+    
+    type_config = get_report_type_config(report_type)
+    
+    logger.info(f"[异步报告] 已触发任务 {task.id} 为产品 {asin} 生成 {report_type} 报告")
+    
+    # ReportTypeConfig 是 dataclass，使用属性访问
+    config_dict = {}
+    if type_config:
+        config_dict = {
+            "label": type_config.short_name,
+            "description": type_config.description,
+            "icon": type_config.icon
+        }
+    
+    return {
+        "success": True,
+        "status": "started",
+        "message": f"报告生成任务已启动，请等待完成",
+        "task_id": task.id,
+        "product_id": str(product.id),
+        "asin": asin,
+        "report_type": report_type,
+        "report_type_config": config_dict
+    }
+
+
+@products_router.get("/{asin}/report/task/{task_id}")
+async def get_report_task_status(
+    asin: str,
+    task_id: str,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    查询异步报告生成任务的状态。
+    
+    状态说明：
+    - pending: 任务等待中
+    - started: 任务已开始
+    - processing: 正在生成
+    - completed: 生成完成（包含 report_id）
+    - failed: 生成失败（包含 error）
+    """
+    from celery.result import AsyncResult
+    from app.worker import celery_app
+    
+    result = AsyncResult(task_id, app=celery_app)
+    
+    response = {
+        "task_id": task_id,
+        "asin": asin,
+        "status": result.status.lower() if result.status else "unknown",
+        "progress": 0,
+        "current_step": "准备中..."
+    }
+    
+    if result.ready():
+        if result.successful():
+            task_result = result.result
+            # 检查任务是否真正成功
+            if task_result and task_result.get("success", False):
+                response["status"] = "completed"
+                response["report_id"] = task_result.get("report_id")
+                response["success"] = True
+                response["progress"] = 100
+                response["current_step"] = "报告生成完成"
+            else:
+                # 任务执行完成但失败（如报告生成失败）
+                response["status"] = "failed"
+                response["error"] = task_result.get("error") if task_result else "报告生成失败"
+                response["progress"] = 0
+                response["current_step"] = "生成失败"
+        else:
+            response["status"] = "failed"
+            response["error"] = str(result.result) if result.result else "未知错误"
+            response["progress"] = 0
+            response["current_step"] = "生成失败"
+    elif result.status == "PROGRESS":
+        # 读取进度信息
+        response["status"] = "processing"
+        if result.info:
+            response["progress"] = result.info.get("progress", 50)
+            response["current_step"] = result.info.get("current_step", "正在生成...")
+    elif result.status == "STARTED":
+        response["status"] = "processing"
+        response["progress"] = 10
+        response["current_step"] = "任务已启动..."
+    elif result.status == "PENDING":
+        response["status"] = "pending"
+        response["progress"] = 0
+        response["current_step"] = "等待中..."
+    
+    return response
+
+
 @products_router.post("/{asin}/report/generate", response_model=ProductReportCreateResponse)
 async def generate_product_report(
     asin: str,
@@ -2563,6 +2815,71 @@ async def get_report_by_id(
     except Exception as e:
         logger.error(f"获取报告失败: {e}")
         raise HTTPException(status_code=500, detail=f"获取报告失败: {str(e)}")
+
+
+@products_router.get("/{asin}/reports/{report_id}/pdf")
+async def export_report_pdf(
+    asin: str,
+    report_id: str,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    导出报告为 PDF 文件。
+    
+    使用 Playwright 将报告页面渲染为高质量 PDF，包含：
+    - 网站 Logo 和名称
+    - 产品信息
+    - 完整报告内容
+    - 页眉页脚（含页码）
+    
+    返回：PDF 文件流（application/pdf）
+    """
+    from fastapi.responses import Response
+    from sqlalchemy import select
+    from uuid import UUID as PyUUID
+    from app.models.product import Product
+    from app.services.summary_service import SummaryService
+    from app.services.pdf_service import generate_report_pdf_with_retry
+    
+    # 验证产品存在
+    product_result = await db.execute(
+        select(Product).where(Product.asin == asin)
+    )
+    product = product_result.scalar_one_or_none()
+    
+    if not product:
+        raise HTTPException(status_code=404, detail="产品不存在")
+    
+    # 验证报告存在
+    summary_service = SummaryService(db)
+    report = await summary_service.get_report_by_id(PyUUID(report_id))
+    
+    if not report:
+        raise HTTPException(status_code=404, detail="报告不存在")
+    
+    if report.product_id != product.id:
+        raise HTTPException(status_code=404, detail="报告不属于该产品")
+    
+    try:
+        # 生成 PDF
+        pdf_bytes = await generate_report_pdf_with_retry(asin, report_id)
+        
+        # 生成文件名
+        from datetime import datetime
+        filename = f"产品分析报告_{asin}_{datetime.now().strftime('%Y%m%d')}.pdf"
+        
+        return Response(
+            content=pdf_bytes,
+            media_type="application/pdf",
+            headers={
+                "Content-Disposition": f'attachment; filename="{filename}"',
+                "Content-Length": str(len(pdf_bytes))
+            }
+        )
+        
+    except Exception as e:
+        logger.error(f"PDF 导出失败: {e}")
+        raise HTTPException(status_code=500, detail=f"PDF 导出失败: {str(e)}")
 
 
 @products_router.delete("/{asin}/reports/{report_id}")

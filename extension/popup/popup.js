@@ -20,6 +20,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   const loginBtn = document.getElementById('login-btn');
   const logoutBtn = document.getElementById('logout-btn');
   const userName = document.getElementById('user-name');
+  const myInsightsLink = document.getElementById('my-insights-link');
 
   // ==========================================
   // 检查登录状态
@@ -115,6 +116,18 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
     showLoginView();
   });
+
+  // ==========================================
+  // 配置（与 content.js 保持一致）
+  // ==========================================
+  const CONFIG = {
+    DASHBOARD_URL: 'http://localhost:3000'  // 本地前端地址
+  };
+
+  // 设置"进入我的洞察"链接
+  if (myInsightsLink) {
+    myInsightsLink.href = `${CONFIG.DASHBOARD_URL}/home/my-projects`;
+  }
 
   // ==========================================
   // 初始化

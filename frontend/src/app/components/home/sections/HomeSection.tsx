@@ -42,6 +42,9 @@ export function HomeSection() {
   // 分析弹窗状态
   const [showAnalysisModal, setShowAnalysisModal] = useState(false);
   const [isCreatingAnalysis, setIsCreatingAnalysis] = useState(false);
+  
+  // 分析模式：一步到位 或 仅翻译
+  const [workflowMode, setWorkflowMode] = useState<'one_step_insight' | 'translate_only'>('one_step_insight');
 
   // 加载已选产品详情
   useEffect(() => {
@@ -126,7 +129,8 @@ export function HomeSection() {
           stars: crawlRating,           // [1, 2, 3, 4, 5] 或用户选择的星级
           pagesPerStar: crawlPages,     // 3, 5, 或 10
           speedMode: crawlMode,         // 'fast' 或 'stable'
-          mediaType: 'all_formats'      // 默认采集所有格式
+          mediaType: 'all_formats',     // 默认采集所有格式
+          workflowMode: workflowMode    // 'one_step_insight' 或 'translate_only'
         };
 
         // 模拟进度（实际进度由 Extension 提供）
@@ -160,20 +164,20 @@ export function HomeSection() {
         });
 
         clearInterval(progressInterval);
-        setCrawlProgress(100);
-
-          setTimeout(() => {
-            setIsCrawling(false);
-            setCrawlProgress(0);
-            
-            if (result && (result as any).success) {
-              toast.success(
-                `已添加 ${asins.length} 个产品到采集队列，扩展正在后台采集数据，请稍后在"我的洞察"中查看`
-              );
-            } else {
-              toast.error('采集失败：' + ((result as any)?.error || '未知错误'));
-            }
-          }, 500);
+        
+        // 任务提交成功，立即重置状态
+        setIsCrawling(false);
+        setCrawlProgress(0);
+        
+        if (result && (result as any).success) {
+          toast.success(
+            `已添加 ${asins.length} 个产品到采集队列，扩展正在后台采集数据，请稍后在"我的洞察"中查看`
+          );
+          // 清空输入框，防止用户再次点击发送相同的 ASIN
+          setCrawlInput('');
+        } else {
+          toast.error('采集失败：' + ((result as any)?.error || '未知错误'));
+        }
 
       } catch (err) {
         setIsCrawling(false);
@@ -321,13 +325,11 @@ export function HomeSection() {
             </div>
           </div>
 
-          {/* Main Card */}
-          <div className="bg-white rounded-2xl border border-slate-200 shadow-lg p-8 max-h-[480px] flex flex-col">
-            {/* Scrollable Content */}
-            <div className="flex-1 overflow-y-auto -mx-6 px-6">
+          {/* Main Card - 固定高度确保两个模式一致 */}
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-lg p-8 h-[340px] flex flex-col">
               {/* Input Section - Product Analyze Mode */}
               {homeMode === "analyze" && (
-                <div className="mb-6 h-[200px] flex flex-col">
+                <div className="flex-1 flex flex-col">
                   <div className="flex items-center justify-between mb-2 flex-shrink-0">
                     <label className="text-sm font-medium text-slate-900">
                       输入亚马逊链接或 ASIN <span className="text-rose-600">（最多支持5个）</span>
@@ -343,7 +345,7 @@ export function HomeSection() {
                   <textarea
                     value={crawlInput}
                     onChange={(e) => setCrawlInput(e.target.value)}
-                    className="flex-1 px-4 py-3 border border-slate-300 rounded-2xl focus:outline-none focus:ring-2 focus:ring-rose-500 focus:border-transparent text-sm resize-none"
+                    className="flex-1 px-4 py-3 border border-slate-300 rounded-2xl focus:outline-none focus:ring-2 focus:ring-rose-500 focus:border-transparent text-sm resize-none mb-4"
                     placeholder={`粘贴亚马逊链接或 ASIN，每行一个...
 
 支持格式：
@@ -351,12 +353,38 @@ export function HomeSection() {
 • https://www.amazon.com/gp/product/B09V3KXJPB
 • B09V3KXJPB`}
                   />
+                  
+                  {/* 分析模式选择 - 二选一 */}
+                  <div className="flex gap-2 mb-4 flex-shrink-0">
+                    <button
+                      onClick={() => setWorkflowMode('one_step_insight')}
+                      className={`flex-1 h-9 rounded-lg text-sm font-medium transition-all flex items-center justify-center gap-2 ${
+                        workflowMode === 'one_step_insight'
+                          ? "bg-rose-500 text-white"
+                          : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+                      }`}
+                    >
+                      <Zap className="w-3.5 h-3.5" />
+                      一步到位
+                    </button>
+                    <button
+                      onClick={() => setWorkflowMode('translate_only')}
+                      className={`flex-1 h-9 rounded-lg text-sm font-medium transition-all flex items-center justify-center gap-2 ${
+                        workflowMode === 'translate_only'
+                          ? "bg-rose-500 text-white"
+                          : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+                      }`}
+                    >
+                      <Package className="w-3.5 h-3.5" />
+                      仅翻译
+                    </button>
+                  </div>
                 </div>
               )}
 
               {/* Input Section - Compare Mode */}
               {homeMode === "compare" && (
-                <div className="mb-6 h-[200px] flex flex-col">
+                <div className="flex-1 flex flex-col mb-4">
                   <label className="text-sm font-medium text-slate-900 mb-2 block flex-shrink-0">
                     选择对比产品 <span className="text-slate-500">（2-5个产品）</span>
                   </label>
@@ -423,17 +451,18 @@ export function HomeSection() {
                   )}
                 </div>
               )}
-            </div>
 
             {/* Submit Button or Progress */}
             {!isCrawling ? (
               <Button 
-                className="w-full h-12 text-base bg-gradient-to-r from-rose-500 to-pink-500 hover:from-rose-600 hover:to-pink-600 text-white font-semibold shadow-lg hover:shadow-xl transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                className="w-full h-12 text-base bg-gradient-to-r from-rose-500 to-pink-500 hover:from-rose-600 hover:to-pink-600 text-white font-semibold shadow-lg hover:shadow-xl transition-all disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0"
                 disabled={homeMode === "analyze" ? !crawlInput.trim() : compareProducts.length < 2}
                 onClick={handleStartAnalysis}
               >
                 <Zap className="w-4 h-4 mr-2" />
-                {homeMode === "analyze" ? "开始分析" : "开始对比"}
+                {homeMode === "analyze" 
+                  ? (workflowMode === 'one_step_insight' ? "开始分析" : "开始翻译") 
+                  : "开始对比"}
               </Button>
             ) : (
               <div className="space-y-3">

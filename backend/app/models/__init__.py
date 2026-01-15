@@ -14,6 +14,7 @@ from app.models.analysis import AnalysisProject, AnalysisProjectItem, AnalysisTy
 from app.models.user import User
 from app.models.user_project import UserProject
 from app.models.analysis_lock import ProductAnalysisLock, LockStatus
+from app.models.product_time_series import ProductTimeSeries
 
 __all__ = [
     "Product", 
@@ -40,5 +41,6 @@ __all__ = [
     "UserProject",
     "ProductAnalysisLock",
     "LockStatus",
+    "ProductTimeSeries",
 ]
 

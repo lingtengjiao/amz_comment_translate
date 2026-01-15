@@ -143,42 +143,46 @@ export function AdvancedOptionsDialog() {
             </div>
           </div>
 
-          {/* Rating Filter */}
+          {/* Rating Filter - 紧凑横向样式 */}
           <div>
-            <label className="text-sm font-medium text-slate-900 mb-3 block">星级筛选</label>
-            <div className="bg-slate-50 rounded-xl p-4">
-              <div className="space-y-3">
-                {[5, 4, 3, 2, 1].map((star) => (
-                  <label key={star} className="flex items-center gap-3 cursor-pointer group">
-                    <Checkbox
-                      checked={crawlRating.includes(star)}
-                      onCheckedChange={(checked) => {
-                        if (checked) {
-                          setCrawlRating([...crawlRating, star].sort((a, b) => b - a));
-                        } else {
-                          setCrawlRating(crawlRating.filter(r => r !== star));
-                        }
-                      }}
-                    />
-                    <div className="flex items-center gap-2 flex-1">
-                      <div className="flex items-center">
-                        {Array.from({ length: star }).map((_, i) => (
-                          <Star key={i} className="w-4 h-4 fill-amber-400 text-amber-400" />
-                        ))}
-                        {Array.from({ length: 5 - star }).map((_, i) => (
-                          <Star key={i} className="w-4 h-4 text-slate-300" />
-                        ))}
-                      </div>
-                      <span className="text-sm text-slate-700 group-hover:text-slate-900 font-medium">
-                        {star} 星评价
-                      </span>
-                    </div>
-                  </label>
-                ))}
-              </div>
+            <div className="flex items-center justify-between mb-3">
+              <label className="text-sm font-medium text-slate-900">星级筛选</label>
+              <button
+                onClick={() => {
+                  if (crawlRating.length === 5) {
+                    setCrawlRating([]);
+                  } else {
+                    setCrawlRating([1, 2, 3, 4, 5]);
+                  }
+                }}
+                className="text-xs text-rose-600 hover:text-rose-700 font-medium"
+              >
+                {crawlRating.length === 5 ? '取消全选' : '全选'}
+              </button>
             </div>
-            <div className="mt-2 text-xs text-slate-500 px-1">
-              选择要采集的评价星级，建议全选以获得完整的用户反馈
+            <div className="flex gap-2">
+              {[5, 4, 3, 2, 1].map((star) => (
+                <button
+                  key={star}
+                  onClick={() => {
+                    if (crawlRating.includes(star)) {
+                      setCrawlRating(crawlRating.filter(r => r !== star));
+                    } else {
+                      setCrawlRating([...crawlRating, star].sort((a, b) => b - a));
+                    }
+                  }}
+                  className={`flex-1 py-2.5 rounded-lg text-sm font-medium transition-all border-2 flex flex-col items-center gap-1 ${
+                    crawlRating.includes(star)
+                      ? "bg-amber-50 border-amber-400 text-amber-700"
+                      : "bg-white border-slate-200 text-slate-500 hover:border-slate-300"
+                  }`}
+                >
+                  <div className="flex items-center">
+                    <Star className={`w-4 h-4 ${crawlRating.includes(star) ? 'fill-amber-400 text-amber-400' : 'text-slate-300'}`} />
+                  </div>
+                  <span className="text-xs">{star}星</span>
+                </button>
+              ))}
             </div>
           </div>
         </div>

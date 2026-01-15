@@ -2,8 +2,10 @@
 Product Context Label Model - Stores AI-learned 5W marketing element labels
 产品上下文标签模型 - 存储 AI 学习到的 5W 营销要素标准标签
 
-5W Model:
-- Who: 使用者/人群
+5W Model (扩展版):
+- Buyer: 购买者身份（谁付钱）- [NEW] 从 Who 拆分
+- User: 使用者身份（谁使用）- [NEW] 从 Who 拆分
+- Who: 人群（向后兼容旧数据）
 - Where: 使用地点/场景
 - When: 使用时刻/时机
 - Why: 购买动机
@@ -25,20 +27,32 @@ if TYPE_CHECKING:
 
 
 class ContextType(str, Enum):
-    """5W 上下文类型枚举"""
-    WHO = "who"      # 人群/角色
+    """5W 上下文类型枚举（扩展版：Who 拆分为 Buyer + User）"""
+    WHO = "who"      # [DEPRECATED] 保留向后兼容，新数据使用 buyer/user
+    BUYER = "buyer"  # [NEW] 购买者身份（谁付钱）
+    USER = "user"    # [NEW] 使用者身份（谁使用）
     WHERE = "where"  # 地点/场景
     WHEN = "when"    # 时刻/时机
     WHY = "why"      # 购买动机 (Purchase Driver)
     WHAT = "what"    # 待办任务 (Jobs to be Done)
 
 
-# 5W 类型配置（用于 UI 展示）
+# 5W 类型配置（用于 UI 展示）- 扩展版：Who 拆分为 Buyer + User
 CONTEXT_TYPE_CONFIG = {
-    ContextType.WHO: {
-        "label": "Who（使用者/人群）",
+    ContextType.BUYER: {
+        "label": "Buyer（购买者）",
         "color": "blue",
-        "description": "识别核心用户画像，如：独居老人、新手宝妈、宠物主、工程师等"
+        "description": "识别购买者身份（谁付钱），如：妈妈、送礼者、企业采购、丈夫给妻子买等"
+    },
+    ContextType.USER: {
+        "label": "User（使用者）",
+        "color": "cyan",
+        "description": "识别实际使用者身份（谁使用），如：3岁幼儿、老人、员工、宠物主自己等"
+    },
+    ContextType.WHO: {
+        "label": "Who（人群）",
+        "color": "blue",
+        "description": "[历史数据] 未区分购买者/使用者的人群标签"
     },
     ContextType.WHERE: {
         "label": "Where（使用地点）",

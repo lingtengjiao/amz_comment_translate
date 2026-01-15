@@ -76,6 +76,13 @@ class ReviewInsight(Base):
         nullable=True,
         comment="Product dimension: quality, price, appearance, etc."
     )
+    # [NEW 2026-01-15] 置信度 - 表示AI对该洞察的确定程度
+    confidence: Mapped[str | None] = mapped_column(
+        String(20),
+        nullable=True,
+        default="high",
+        comment="置信度：high(明确证据)/medium(合理推断)/low(弱关联)"
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now()

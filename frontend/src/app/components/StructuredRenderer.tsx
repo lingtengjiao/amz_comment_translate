@@ -16,21 +16,35 @@ import { Badge } from './ui/badge';
 import type { StructuredResultContent, ProductProfile, LabelDescItem, FiveWProfile } from '@/api/types';
 
 // ----------------------------------------------------------------------
-// 5W 维度配置
+// 5W 维度配置 - 扩展版：Who 拆分为 Buyer + User
 // ----------------------------------------------------------------------
-const FIVE_W_CONFIG: Record<keyof FiveWProfile, { 
+const FIVE_W_CONFIG: Record<string, { 
   icon: React.ReactNode; 
   emoji: string;
   label: string; 
   color: string;
   bgColor: string;
 }> = {
-  who: { 
+  buyer: { 
     icon: <Users className="size-4" />, 
     emoji: '👤',
-    label: '用户是谁', 
+    label: '购买者', 
     color: 'text-blue-600',
     bgColor: 'bg-blue-50 dark:bg-blue-900/20'
+  },
+  user: { 
+    icon: <Users className="size-4" />, 
+    emoji: '👶',
+    label: '使用者', 
+    color: 'text-cyan-600',
+    bgColor: 'bg-cyan-50 dark:bg-cyan-900/20'
+  },
+  who: { 
+    icon: <Users className="size-4" />, 
+    emoji: '👥',
+    label: '人群', 
+    color: 'text-slate-600',
+    bgColor: 'bg-slate-50 dark:bg-slate-900/20'
   },
   when: { 
     icon: <Clock className="size-4" />, 
@@ -78,10 +92,11 @@ const LabelItem = memo(({ item, emoji }: { item: LabelDescItem; emoji: string })
 LabelItem.displayName = 'LabelItem';
 
 // ----------------------------------------------------------------------
-// 子组件：5W 用户画像区块
+// 子组件：5W 用户画像区块 - 支持 Buyer/User 拆分
 // ----------------------------------------------------------------------
 const FiveWSection = memo(({ fiveW }: { fiveW: FiveWProfile }) => {
-  const dimensions = Object.entries(FIVE_W_CONFIG) as [keyof FiveWProfile, typeof FIVE_W_CONFIG[keyof FiveWProfile]][];
+  // 定义展示顺序：buyer/user 优先，who 作为向后兼容
+  const displayOrder = ['buyer', 'user', 'who', 'when', 'where', 'why', 'what'];
   
   return (
     <div className="space-y-4">
@@ -91,8 +106,11 @@ const FiveWSection = memo(({ fiveW }: { fiveW: FiveWProfile }) => {
       </h3>
       
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
-        {dimensions.map(([key, config]) => {
-          const items = fiveW[key] || [];
+        {displayOrder.map((key) => {
+          const config = FIVE_W_CONFIG[key];
+          if (!config) return null;
+          
+          const items = (fiveW as Record<string, LabelDescItem[] | undefined>)[key] || [];
           if (items.length === 0) return null;
           
           return (

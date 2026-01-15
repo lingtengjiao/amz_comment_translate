@@ -13,7 +13,8 @@ import {
   StopCircle,
   AlertTriangle,
   FileText,
-  Sparkles
+  Sparkles,
+  Eye
 } from 'lucide-react';
 import { useState, useMemo, useRef, useEffect, useCallback } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
@@ -28,6 +29,7 @@ import { FilterBar } from './FilterBar';
 import { ThemeTagBar } from './ThemeTagBar';
 import { MediaTabContent } from './MediaTabContent';
 import { ProductReportDialog } from './ProductReportDialog';
+import { ViewReportDialog } from './ViewReportDialog';
 import { HiddenReviewsModal } from './HiddenReviewsModal';
 import { EditReviewModal } from './EditReviewModal';
 import { ConfirmDialog } from './ConfirmDialog';
@@ -35,6 +37,7 @@ import { InfoDialog } from './InfoDialog';
 import { Progress } from './ui/progress';
 import { themeTagsPreset, buildThemeTagsFromHighlights, type ThemeTag } from './ThemeHighlight';
 import { apiService, transformStatsToTask, transformReviews } from '@/api';
+import { getReportHistory } from '@/api/service';
 import type { Task, Review, FilterRating, FilterSentiment, SortOption, ReviewThemeHighlight } from '@/api/types';
 import { toast } from '../utils/toast';
 
@@ -93,6 +96,8 @@ export function ReviewReader() {
   const manuallyStoppedRef = useRef(false); // 用户手动停止标志
   const [isTaskStuck, setIsTaskStuck] = useState(false); // 任务是否卡住
   const [isReportDialogOpen, setIsReportDialogOpen] = useState(false); // 报告对话框
+  const [isViewReportDialogOpen, setIsViewReportDialogOpen] = useState(false); // 查看报告对话框
+  const [hasReports, setHasReports] = useState(false); // 是否有报告
   const [activeTab, setActiveTab] = useState<'reviews' | 'media'>('reviews'); // 当前激活的 Tab
   
   // [NEW] 存储后端返回的活跃任务状态
@@ -169,6 +174,7 @@ export function ReviewReader() {
           if (insights === 'processing') {
             console.log('Backend reports insights is processing, resuming polling');
             setIsExtractingInsights(true);
+            setAnalysisPhase('insights'); // 设置正确的分析阶段
             pollingRef.current.active = true;
             
             // 启动洞察轮询
@@ -202,6 +208,7 @@ export function ReviewReader() {
           if (themes === 'processing') {
             console.log('Backend reports themes is processing, resuming polling');
             setIsExtractingThemes(true);
+            setAnalysisPhase('themes'); // 设置正确的分析阶段
             pollingRef.current.active = true;
             
             // 启动主题轮询
@@ -243,6 +250,23 @@ export function ReviewReader() {
   useEffect(() => {
     fetchData();
   }, [fetchData]);
+
+  // 检查是否有报告
+  useEffect(() => {
+    if (!asin) return;
+    
+    const checkReports = async () => {
+      try {
+        const response = await getReportHistory(asin, 1);
+        setHasReports((response.reports || []).length > 0);
+      } catch (err) {
+        // 如果没有报告或出错，设置为 false
+        setHasReports(false);
+      }
+    };
+    
+    checkReports();
+  }, [asin]);
 
   // 清理轮询定时器（组件卸载或完整分析完成时）
   useEffect(() => {
@@ -715,62 +739,12 @@ export function ReviewReader() {
     }
   };
 
-  // 提取洞察
+  // [REMOVED] handleExtractInsights 和 handleExtractThemes 已移除
+  // 原因：单独触发会绕过"科学学习"步骤，导致数据质量差
+  // 请使用 handleFullAnalysis 触发完整的分析流程（通过 startDeepAnalysis API）
+  
+  // 状态变量保留：用于恢复后台任务状态（由 task_full_auto_analysis 触发）
   const [isExtractingInsights, setIsExtractingInsights] = useState(false);
-  
-  const handleExtractInsights = async () => {
-    if (!asin) return;
-    
-    // 清除手动停止标志，允许正常轮询
-    manuallyStoppedRef.current = false;
-    
-    setIsExtractingInsights(true);
-    
-    try {
-      const result = await apiService.triggerInsightExtraction(asin);
-      toast.success('洞察提取已启动', `正在处理 ${result.reviews_to_process} 条评论`);
-      
-      // 启动轮询检查进度
-      pollingRef.current.active = true;
-      const checkInsightProgress = async () => {
-        if (!pollingRef.current.active || manuallyStoppedRef.current) {
-          console.log('Insight polling stopped');
-          return;
-        }
-        
-        try {
-          const stats = await apiService.getProductStats(asin);
-          const total = stats.product.translated_reviews;
-          const withInsights = stats.product.reviews_with_insights || 0;
-          
-          setReviewsWithInsights(withInsights);
-          await updateReviewsIncrementally();
-          
-          if (withInsights >= total && total > 0) {
-            toast.success('洞察提取完成！', `已处理 ${total} 条评论`);
-            setIsExtractingInsights(false);
-            pollingRef.current.active = false;
-            fetchData();
-          } else if (pollingRef.current.active && !manuallyStoppedRef.current) {
-            pollingRef.current.timer = setTimeout(checkInsightProgress, 2000);
-          }
-        } catch (err) {
-          console.error('Failed to check insight progress:', err);
-          if (pollingRef.current.active && !manuallyStoppedRef.current) {
-            pollingRef.current.timer = setTimeout(checkInsightProgress, 3000);
-          }
-        }
-      };
-      
-      pollingRef.current.timer = setTimeout(checkInsightProgress, 2000);
-    } catch (err) {
-      console.error('Failed to extract insights:', err);
-      setIsExtractingInsights(false);
-      toast.error('提取洞察失败', '请确保有已翻译的评论');
-    }
-  };
-  
-  // 提取主题高亮
   const [isExtractingThemes, setIsExtractingThemes] = useState(false);
   
   // 完整分析：一键处理翻译+洞察+主题
@@ -787,31 +761,25 @@ export function ReviewReader() {
     phase2TriggeredRef.current = false; // 重置 Phase 2 触发标志
     pollingRef.current.active = true; // 标记轮询为活跃状态
 
-    // Phase 2: 触发洞察和主题提取，并持续轮询更新
+    // Phase 2: 启动深度分析（科学学习 → 洞察+主题 → 报告）
     const triggerPhase2 = async () => {
       if (phase2TriggeredRef.current) return;
       phase2TriggeredRef.current = true;
       
-      console.log('Triggering Phase 2: insights and themes extraction');
+      console.log('Triggering Phase 2: deep analysis (learning → insights + themes → report)');
       setAnalysisPhase('insights');
-      toast.info('正在提取洞察和主题...', '数据将实时更新到页面');
+      toast.info('正在启动深度分析...', '将自动执行：科学学习 → 洞察+主题提取 → 报告生成');
       
       try {
-        // 同时触发洞察和主题提取
-        const [insightResult, themeResult] = await Promise.allSettled([
-          apiService.triggerInsightExtraction(asin),
-          apiService.triggerThemeExtraction(asin)
-        ]);
+        // 调用一键深度分析接口（包含科学学习 → 洞察+主题 → 报告）
+        const result = await apiService.startDeepAnalysis(asin);
         
-        // 检查结果
-        const insightSuccess = insightResult.status === 'fulfilled';
-        const themeSuccess = themeResult.status === 'fulfilled';
-        
-        if (!insightSuccess) {
-          console.error('Insight extraction failed:', insightResult);
-        }
-        if (!themeSuccess) {
-          console.error('Theme extraction failed:', themeResult);
+        if (result.status === 'already_running') {
+          console.log('Deep analysis already running, task_id:', result.task_id);
+          toast.info('分析任务已在运行中', result.message);
+        } else {
+          console.log('Deep analysis started, task_id:', result.task_id);
+          toast.success('深度分析已启动', `正在处理 ${result.review_count} 条评论`);
         }
         
         // 开始轮询洞察和主题进度，直到完成
@@ -1000,57 +968,6 @@ export function ReviewReader() {
     }
   };
 
-  const handleExtractThemes = async () => {
-    if (!asin) return;
-    
-    // 清除手动停止标志，允许正常轮询
-    manuallyStoppedRef.current = false;
-    
-    setIsExtractingThemes(true);
-    
-    try {
-      const result = await apiService.triggerThemeExtraction(asin);
-      toast.success('主题提取已启动', `正在处理 ${result.reviews_to_process} 条评论`);
-      
-      // 启动轮询检查进度
-      pollingRef.current.active = true;
-      const checkThemeProgress = async () => {
-        if (!pollingRef.current.active || manuallyStoppedRef.current) {
-          console.log('Theme polling stopped');
-          return;
-        }
-        
-        try {
-          const stats = await apiService.getProductStats(asin);
-          const total = stats.product.translated_reviews;
-          const withThemes = stats.product.reviews_with_themes || 0;
-          
-          setReviewsWithThemes(withThemes);
-          await updateReviewsIncrementally();
-          
-          if (withThemes >= total && total > 0) {
-            toast.success('主题提取完成！', `已处理 ${total} 条评论`);
-            setIsExtractingThemes(false);
-            pollingRef.current.active = false;
-            fetchData();
-          } else if (pollingRef.current.active && !manuallyStoppedRef.current) {
-            pollingRef.current.timer = setTimeout(checkThemeProgress, 2000);
-          }
-        } catch (err) {
-          console.error('Failed to check theme progress:', err);
-          if (pollingRef.current.active && !manuallyStoppedRef.current) {
-            pollingRef.current.timer = setTimeout(checkThemeProgress, 3000);
-          }
-        }
-      };
-      
-      pollingRef.current.timer = setTimeout(checkThemeProgress, 2000);
-    } catch (err) {
-      console.error('Failed to extract themes:', err);
-      setIsExtractingThemes(false);
-      toast.error('提取主题失败', '请确保有已翻译的评论');
-    }
-  };
 
   // 停止分析任务（前端停止轮询 + 后端终止任务）
   const handleStopAnalysis = useCallback(async () => {
@@ -1223,23 +1140,41 @@ export function ReviewReader() {
                       分析完成
                     </Button>
                   );
-                } else if (isFullAnalysis || (isTranslating && isFullAnalysis)) {
+                } else if (isFullAnalysis || isExtractingInsights || isExtractingThemes || isTranslating ||
+                           activeTasks.translation === 'processing' || 
+                           activeTasks.insights === 'processing' || 
+                           activeTasks.themes === 'processing') {
+                  // 🔥 统一显示"AI分析中"，计算综合进度
+                  // 综合进度 = (翻译进度 + 洞察进度 + 主题进度) / 3
+                  const transProgress = translatedCount > 0 && totalReviews > 0 
+                    ? Math.round((translatedCount / totalReviews) * 100) : 0;
+                  const insightProgress = translatedCount > 0 
+                    ? Math.round((reviewsWithInsights / translatedCount) * 100) : 0;
+                  const themeProgress = translatedCount > 0 
+                    ? Math.round((reviewsWithThemes / translatedCount) * 100) : 0;
+                  const overallProgress = Math.round((transProgress + insightProgress + themeProgress) / 3);
+                  
                   return (
-                    <Button disabled size="sm" className="gap-2 min-w-[100px] bg-gradient-to-r from-rose-500 to-pink-500">
+                    <Button disabled size="sm" className="gap-2 min-w-[120px] bg-gradient-to-r from-rose-500 to-pink-500">
                       <PlayCircle className="size-4 animate-spin" />
-                      分析中
+                      AI分析中 {overallProgress}%
                     </Button>
                   );
-                } else if (!allTranslated && !isTranslating) {
+                } else if (!allAnalyzed) {
+                  // 未完成分析 → 显示"继续分析"或"开始分析"
+                  const hasStarted = translatedCount > 0 || reviewsWithInsights > 0 || reviewsWithThemes > 0;
                   return (
                     <Button 
                       onClick={handleFullAnalysis}
                       size="sm"
-                      className="gap-2 min-w-[120px] bg-gradient-to-r from-rose-500 to-pink-500 hover:from-rose-600 hover:to-pink-600"
-                      title="一键完成翻译、洞察提取和主题提取（推荐）"
+                      className={`gap-2 min-w-[120px] ${hasStarted 
+                        ? 'bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600'
+                        : 'bg-gradient-to-r from-rose-500 to-pink-500 hover:from-rose-600 hover:to-pink-600'
+                      }`}
+                      title="触发AI分析流程（翻译→学习→洞察→主题→报告）"
                     >
-                      <Languages className="size-4" />
-                      完整分析
+                      <Sparkles className="size-4" />
+                      {hasStarted ? '继续分析' : '开始分析'}
                     </Button>
                   );
                 }
@@ -1293,88 +1228,16 @@ export function ReviewReader() {
                 }
                 return null;
               })()}
-              {/* 提取洞察按钮 - 对应 insights */}
-              {(() => {
-                const allAnalyzed = totalReviews > 0 && 
-                                   translatedCount >= totalReviews && 
-                                   bulletPointsTranslated &&
-                                   reviewsWithInsights >= translatedCount && 
-                                   reviewsWithThemes >= translatedCount;
-                const needsInsights = translatedCount > 0 && reviewsWithInsights < translatedCount;
+              {/* 
+                [REMOVED] 提取洞察按钮 和 完善洞察按钮
                 
-                // 已全部完成或正在完整分析中，不显示
-                if (allAnalyzed || isFullAnalysis || isTranslating) {
-                  return null;
-                }
+                原因：
+                1. 洞察提取和主题提取必须在"科学学习"之后执行
+                2. 单独触发会绕过学习步骤，导致降级模式（AI自由判断，数据质量差）
+                3. 正确流程：采集完成 → task_full_auto_analysis → 自动学习 → 自动提取
                 
-                // 只有在有翻译评论且洞察未完成时才显示
-                if (needsInsights) {
-                  return (
-                    <Button 
-                      onClick={handleExtractInsights}
-                      disabled={isExtractingInsights}
-                      variant="outline"
-                      size="sm"
-                      className="gap-2"
-                      title="提取洞察"
-                    >
-                      {isExtractingInsights ? (
-                        <>
-                          <RefreshCw className="size-4 animate-spin" />
-                          提取中
-                        </>
-                      ) : (
-                        <>
-                          <RefreshCw className="size-4" />
-                          提取洞察
-                        </>
-                      )}
-                    </Button>
-                  );
-                }
-                return null;
-              })()}
-              {/* 完善洞察按钮 - 对应 themes */}
-              {(() => {
-                const allAnalyzed = totalReviews > 0 && 
-                                   translatedCount >= totalReviews && 
-                                   bulletPointsTranslated &&
-                                   reviewsWithInsights >= translatedCount && 
-                                   reviewsWithThemes >= translatedCount;
-                const needsThemes = translatedCount > 0 && reviewsWithThemes < translatedCount;
-                
-                // 已全部完成或正在完整分析中，不显示
-                if (allAnalyzed || isFullAnalysis || isTranslating) {
-                  return null;
-                }
-                
-                // 只有在有翻译评论且主题未完成时才显示
-                if (needsThemes) {
-                  return (
-                    <Button 
-                      onClick={handleExtractThemes}
-                      disabled={isExtractingThemes}
-                      variant="outline"
-                      size="sm"
-                      className="gap-2"
-                      title="完善洞察"
-                    >
-                      {isExtractingThemes ? (
-                        <>
-                          <RefreshCw className="size-4 animate-spin" />
-                          完善中
-                        </>
-                      ) : (
-                        <>
-                          <Tag className="size-4" />
-                          完善洞察
-                        </>
-                      )}
-                    </Button>
-                  );
-                }
-                return null;
-              })()}
+                用户应该使用"开始分析"按钮触发完整的分析流程
+              */}
               
               {/* 停止按钮 - 仅在任务运行时显示 */}
               {(isTranslating || isFullAnalysis || isExtractingInsights || isExtractingThemes) && (
@@ -1399,71 +1262,69 @@ export function ReviewReader() {
                 
                 if (!canGenerateReport) return null;
                 return (
-                  <Button
-                    size="sm"
-                    onClick={() => setIsReportDialogOpen(true)}
-                    className="gap-2 bg-gradient-to-r from-rose-500 to-pink-500 hover:from-rose-600 hover:to-pink-600"
-                    title="生成产品深度分析报告"
-                  >
-                    <FileText className="size-4" />
-                    生成报告
-                    <Sparkles className="size-3.5 text-yellow-200" />
-                  </Button>
+                  <>
+                    <Button
+                      size="sm"
+                      onClick={() => setIsReportDialogOpen(true)}
+                      className="gap-2 bg-gradient-to-r from-rose-500 to-pink-500 hover:from-rose-600 hover:to-pink-600"
+                      title="生成产品深度分析报告"
+                    >
+                      <FileText className="size-4" />
+                      生成报告
+                      <Sparkles className="size-3.5 text-yellow-200" />
+                    </Button>
+                    {/* 查看报告按钮 - 只在有报告时显示 */}
+                    {hasReports && (
+                      <Button
+                        size="sm"
+                        onClick={() => setIsViewReportDialogOpen(true)}
+                        variant="outline"
+                        className="gap-2 border-rose-500 text-rose-600 hover:bg-rose-50"
+                        title="查看历史报告"
+                      >
+                        <Eye className="size-4" />
+                        查看报告
+                      </Button>
+                    )}
+                  </>
                 );
               })()}
             </div>
           </div>
 
-          {/* Translation/Analysis Progress Bar */}
-          {(isTranslating || isFullAnalysis) && (
+          {/* AI分析进度条 - 统一显示 */}
+          {(isTranslating || isFullAnalysis || isExtractingInsights || isExtractingThemes ||
+            activeTasks.translation === 'processing' || 
+            activeTasks.insights === 'processing' || 
+            activeTasks.themes === 'processing') && (
             <div className="mt-3 space-y-2">
-              {/* 翻译进度 */}
-              {analysisPhase === 'translating' && (
-                <>
-              <div className="flex items-center justify-between text-sm">
-                    <span className="text-gray-600">
-                      {isFullAnalysis ? '📝 正在翻译评论...' : '正在翻译评论...'}
-                    </span>
-                <span className="text-gray-900 font-medium">{translationProgress}%</span>
-              </div>
-              <Progress value={translationProgress} className="h-2" />
-                </>
-              )}
-              
-              {/* 洞察和主题提取进度 */}
-              {(analysisPhase === 'insights' || analysisPhase === 'themes') && (
-                <>
-                  <div className="flex items-center justify-between text-sm">
-                    <span className="text-gray-600">
-                      🔍 正在提取洞察和主题...
-                    </span>
-                    <span className="text-gray-900 font-medium">
-                      洞察: {reviewsWithInsights}/{translatedCount} | 主题: {reviewsWithThemes}/{translatedCount}
-                    </span>
-            </div>
-                  <div className="flex gap-2">
-                    <Progress 
-                      value={translatedCount > 0 ? (reviewsWithInsights / translatedCount) * 100 : 0} 
-                      className="h-2 flex-1" 
-                    />
-                    <Progress 
-                      value={translatedCount > 0 ? (reviewsWithThemes / translatedCount) * 100 : 0} 
-                      className="h-2 flex-1" 
-                    />
-                  </div>
-                  <p className="text-xs text-gray-500">
-                    数据正在实时更新到页面...
-                  </p>
-                </>
-              )}
-              
-              {/* 完成状态 */}
-              {analysisPhase === 'complete' && (
-                <div className="flex items-center gap-2 text-sm text-green-600">
-                  <Check className="size-4" />
-                  <span>完整分析已完成！</span>
-                </div>
-              )}
+              {(() => {
+                // 计算综合进度
+                const transProgress = translatedCount > 0 && totalReviews > 0 
+                  ? (translatedCount / totalReviews) * 100 : 0;
+                const insightProgress = translatedCount > 0 
+                  ? (reviewsWithInsights / translatedCount) * 100 : 0;
+                const themeProgress = translatedCount > 0 
+                  ? (reviewsWithThemes / translatedCount) * 100 : 0;
+                const overallProgress = (transProgress + insightProgress + themeProgress) / 3;
+                
+                return (
+                  <>
+                    <div className="flex items-center justify-between text-sm">
+                      <span className="text-gray-600">
+                        🤖 正在进行AI分析...
+                      </span>
+                      <span className="text-gray-900 font-medium">
+                        洞察: {reviewsWithInsights}/{translatedCount} | 主题: {reviewsWithThemes}/{translatedCount}
+                      </span>
+                    </div>
+                    <Progress value={overallProgress} className="h-2" />
+                    <p className="text-xs text-gray-500">
+                      数据正在实时更新到页面...
+                    </p>
+                  </>
+                );
+              })()}
             </div>
           )}
         </div>
@@ -1675,6 +1536,13 @@ export function ReviewReader() {
           reviewsWithInsights,
           reviewsWithThemes,
         }}
+      />
+
+      {/* View Report Dialog */}
+      <ViewReportDialog
+        isOpen={isViewReportDialogOpen}
+        onClose={() => setIsViewReportDialogOpen(false)}
+        asin={task?.asin || ''}
       />
     </div>
   );

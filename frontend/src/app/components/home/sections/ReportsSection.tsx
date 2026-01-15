@@ -177,7 +177,7 @@ export function ReportsSection() {
               <Card 
                 key={report.id}
                 className="border border-slate-200 hover:border-slate-300 hover:shadow-md transition-all cursor-pointer group bg-white"
-                onClick={() => navigate(`/report/${report.product?.asin}/${report.id}`)}
+                onClick={() => navigate(`/report/${report.product?.asin}/${report.id}`, { state: { from: 'reports' } })}
               >
                 <CardContent className="p-4">
                   {/* 类型标签 */}
@@ -230,7 +230,7 @@ export function ReportsSection() {
                     <button
                       onClick={(e) => {
                         e.stopPropagation();
-                        navigate(`/report/${report.product?.asin}/${report.id}`);
+                        navigate(`/report/${report.product?.asin}/${report.id}`, { state: { from: 'reports' } });
                       }}
                       className="text-sm text-blue-600 hover:text-blue-700 flex items-center gap-1"
                     >

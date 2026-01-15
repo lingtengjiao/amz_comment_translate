@@ -24,6 +24,7 @@ class TranslationStatus(str, Enum):
     PROCESSING = "processing"
     COMPLETED = "completed"
     FAILED = "failed"
+    SKIPPED = "skipped"  # 内容审查失败或不可翻译的内容，不再重试
 
 
 class Sentiment(str, Enum):

@@ -468,7 +468,14 @@ export async function triggerBulletPointsTranslation(asin: string): Promise<{
 }
 
 /**
- * 触发洞察提取（为已翻译的评论提取 AI 深度解读）
+ * @deprecated 已废弃 - 请使用 startDeepAnalysis() 替代
+ * 
+ * 原因：单独触发洞察提取会绕过"科学学习"步骤，导致AI使用降级模式（自由判断维度），
+ * 数据质量差，难以聚合统计。
+ * 
+ * 正确流程：startDeepAnalysis() → 自动执行学习 → 自动提取洞察+主题 → 自动生成报告
+ * 
+ * 此函数仅保留用于后端自动恢复机制，不应由前端UI直接调用。
  */
 export async function triggerInsightExtraction(asin: string): Promise<{
   success: boolean;
@@ -487,7 +494,14 @@ export async function triggerInsightExtraction(asin: string): Promise<{
 }
 
 /**
- * 触发主题高亮提取（为已翻译的评论提取8个主题的关键词）
+ * @deprecated 已废弃 - 请使用 startDeepAnalysis() 替代
+ * 
+ * 原因：单独触发主题提取会绕过"科学学习"步骤，导致AI使用降级模式（自由判断5W标签），
+ * 数据质量差，难以聚合统计。
+ * 
+ * 正确流程：startDeepAnalysis() → 自动执行学习 → 自动提取洞察+主题 → 自动生成报告
+ * 
+ * 此函数仅保留用于后端自动恢复机制，不应由前端UI直接调用。
  */
 export async function triggerThemeExtraction(asin: string): Promise<{
   success: boolean;
@@ -501,6 +515,35 @@ export async function triggerThemeExtraction(asin: string): Promise<{
   });
   if (!response.ok) {
     throw new ApiError(response.status, response.statusText);
+  }
+  return response.json();
+}
+
+/**
+ * 🚀 一键深度分析（模式B：只翻译 → 后洞察）
+ * 
+ * 调用此接口启动完整的AI分析流水线：
+ * 1. 科学学习（维度 + 5W标签）
+ * 2. 洞察 + 主题提取（并行）
+ * 3. 自动生成报告
+ * 
+ * 注意：这是推荐的分析触发方式，包含必要的学习步骤
+ */
+export async function startDeepAnalysis(asin: string): Promise<{
+  success: boolean;
+  status: 'started' | 'already_running';
+  message: string;
+  task_id?: string;
+  product_id: string;
+  asin: string;
+  review_count: number;
+}> {
+  const response = await fetch(`${API_BASE}/products/${asin}/start-analysis`, {
+    method: 'POST',
+  });
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    throw new ApiError(response.status, errorData.detail || response.statusText);
   }
   return response.json();
 }
@@ -573,6 +616,66 @@ import type {
  * 
  * @param asin - 产品 ASIN
  * @param reportType - 报告类型: comprehensive(综合版), operations(运营版), product(产品版), supply_chain(供应链版)
+ */
+/**
+ * 异步生成报告（推荐使用）
+ * 触发后台任务，立即返回任务 ID，用户可以离开页面
+ */
+export async function generateReportAsync(
+  asin: string, 
+  reportType: string = 'comprehensive'
+): Promise<{
+  success: boolean;
+  status: string;
+  message: string;
+  task_id: string;
+  product_id: string;
+  asin: string;
+  report_type: string;
+  report_type_config?: { label: string; description: string; icon: string };
+}> {
+  const response = await fetch(`${API_BASE}/products/${asin}/report/generate-async?report_type=${reportType}`, {
+    method: 'POST',
+  });
+  if (!response.ok) {
+    const errorText = await response.text();
+    let message = response.statusText;
+    try {
+      const errorJson = JSON.parse(errorText);
+      message = errorJson.detail || errorJson.message || message;
+    } catch {
+      message = errorText || message;
+    }
+    throw new ApiError(response.status, message);
+  }
+  return response.json();
+}
+
+/**
+ * 查询异步报告生成任务的状态
+ */
+export async function getReportTaskStatus(
+  asin: string,
+  taskId: string
+): Promise<{
+  task_id: string;
+  asin: string;
+  status: 'pending' | 'processing' | 'completed' | 'failed' | 'unknown';
+  report_id?: string;
+  success?: boolean;
+  error?: string;
+}> {
+  const response = await fetch(`${API_BASE}/products/${asin}/report/task/${taskId}`);
+  if (!response.ok) {
+    throw new ApiError(response.status, response.statusText);
+  }
+  return response.json();
+}
+
+/**
+ * 同步生成报告（保留向后兼容，会阻塞直到完成）
+ * 注意：此方法需要 30-60 秒，用户不能离开页面
+ * 推荐使用 generateReportAsync
  */
 export async function generateReport(
   asin: string, 
@@ -1103,10 +1206,13 @@ const apiService = {
   exportReviewsByAsin,
   getTaskStatus,
   
-  // 洞察提取
+  // 🚀 一键深度分析（推荐）
+  startDeepAnalysis,
+  
+  // [DEPRECATED] 洞察提取 - 请使用 startDeepAnalysis 替代
   triggerInsightExtraction,
   
-  // 主题高亮提取
+  // [DEPRECATED] 主题高亮提取 - 请使用 startDeepAnalysis 替代
   triggerThemeExtraction,
   
   // 停止分析任务
@@ -1118,6 +1224,8 @@ const apiService = {
   
   // 报告生成（支持持久化）
   generateReport,
+  generateReportAsync,  // 🚀 异步生成（推荐）
+  getReportTaskStatus,  // 查询任务状态
   getReportPreview,
   getReportHistory,
   getAllReports,

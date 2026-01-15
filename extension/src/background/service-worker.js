@@ -948,13 +948,16 @@ async function getNextPageUrl(tabId) {
  * - 后端接收后立即触发翻译
  * - 用户可以"边采边看"翻译结果
  */
-async function collectReviewsWithTab(asin, stars, pagesPerStar, mediaType, speedMode, sendProgress, initialProductInfo = null) {
+async function collectReviewsWithTab(asin, stars, pagesPerStar, mediaType, speedMode, sendProgress, initialProductInfo = null, workflowMode = 'one_step_insight') {
   const allReviews = [];
   const seenReviewIds = new Set();
   let originalTabId = null;
   let totalUploaded = 0;  // [NEW] 累计上传计数
   // [UPDATED] 优先使用传入的 productInfo（已包含 categories），否则后面自动爬取
   let scrapedProductInfo = initialProductInfo;
+  
+  // [NEW] 记录工作流模式
+  console.log(`[Collector] Workflow mode: ${workflowMode}`);
   
   // 根据速度模式设置等待时间
   // ⚡ 极速模式：激进但不踩红线，依赖 DOM 变化检测而非固定等待
@@ -1351,8 +1354,8 @@ async function collectReviewsWithTab(asin, stars, pagesPerStar, mediaType, speed
       const triggerAutoAnalysis = async (maxRetries = 10, delay = 3000) => {
         for (let attempt = 1; attempt <= maxRetries; attempt++) {
           try {
-            console.log(`[Collector] 🚀 Triggering auto analysis (attempt ${attempt}/${maxRetries})...`);
-            const response = await fetch(`${API_BASE_URL}/products/${asin}/collection-complete`, {
+            console.log(`[Collector] 🚀 Triggering auto analysis (attempt ${attempt}/${maxRetries}), mode: ${workflowMode}...`);
+            const response = await fetch(`${API_BASE_URL}/products/${asin}/collection-complete?workflow_mode=${workflowMode}`, {
               method: 'POST',
               headers: getAuthHeaders()
             });
@@ -1452,8 +1455,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       originTabId = sender.tab?.id;
       const { asin, config, productInfo } = message;
       
+      // [NEW] 读取工作流模式
+      const workflowMode = config.workflowMode || 'one_step_insight';
+      
       console.log('[Background] Starting tab-based collection for:', asin);
       console.log('[Background] Speed mode:', config.speedMode || 'fast');
+      console.log('[Background] Workflow mode:', workflowMode);
       console.log('[Background] ProductInfo categories:', productInfo?.categories?.length || 0);
       
       // Run collection asynchronously
@@ -1472,7 +1479,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             }).catch(() => {});
           }
         },
-        productInfo  // [NEW] 传入 productInfo（包含 categories）
+        productInfo,  // [NEW] 传入 productInfo（包含 categories）
+        workflowMode  // [NEW] 传入工作流模式
       ).then(async (reviews) => {
         console.log('[Background] Collection completed:', reviews.length, 'reviews');
         
@@ -1752,24 +1760,54 @@ chrome.runtime.onMessageExternal.addListener((message, sender, sendResponse) => 
 
 /**
  * 处理批量采集请求
+ * [FIXED] 添加防重逻辑，避免相同 ASIN 被多次添加到队列
  */
 function handleBatchStart(message, sendResponse) {
   const { asins, config } = message;
-  
+
   if (!asins || !Array.isArray(asins) || asins.length === 0) {
     sendResponse({ success: false, error: 'No valid ASINs provided' });
     return;
   }
+
+  // [FIXED] 记录接收到的配置（包括 workflowMode）
+  console.log('[Queue] Received config:', config);
+  console.log('[Queue] Workflow mode:', config?.workflowMode || 'one_step_insight (default)');
   
   // 将新任务加入队列
   const defaultConfig = {
     stars: [1, 2, 3, 4, 5],
     pagesPerStar: 5,
     mediaType: 'all_formats',
-    speedMode: 'fast'
+    speedMode: 'fast',
+    workflowMode: 'one_step_insight'  // [FIXED] 添加默认工作流模式
   };
   
-  const newTasks = asins.map(asin => ({
+  // [FIXED] 获取当前队列中已存在的 ASIN（包括正在运行的任务）
+  const existingAsins = new Set(taskQueue.map(t => t.asin));
+  
+  // [FIXED] 过滤掉已经在队列中的 ASIN
+  const uniqueAsins = asins.filter(asin => {
+    const trimmedAsin = asin.trim();
+    if (existingAsins.has(trimmedAsin)) {
+      console.log(`[Queue] ⚠️ ASIN ${trimmedAsin} already in queue, skipping`);
+      return false;
+    }
+    return true;
+  });
+  
+  if (uniqueAsins.length === 0) {
+    console.log('[Queue] All ASINs already in queue');
+    sendResponse({ 
+      success: true, 
+      queueLength: taskQueue.length,
+      addedCount: 0,
+      message: '这些产品已在采集队列中，无需重复添加' 
+    });
+    return;
+  }
+  
+  const newTasks = uniqueAsins.map(asin => ({
     asin: asin.trim(),
     config: { ...defaultConfig, ...config },
     addedAt: Date.now(),
@@ -1786,11 +1824,17 @@ function handleBatchStart(message, sendResponse) {
     processQueue();
   }
 
+  const skippedCount = asins.length - uniqueAsins.length;
+  const responseMessage = skippedCount > 0 
+    ? `已添加 ${newTasks.length} 个任务到队列（${skippedCount} 个已存在，跳过）`
+    : `已添加 ${newTasks.length} 个任务到队列`;
+
   sendResponse({ 
     success: true, 
     queueLength: taskQueue.length,
     addedCount: newTasks.length,
-    message: `已添加 ${newTasks.length} 个任务到队列` 
+    skippedCount: skippedCount,
+    message: responseMessage
   });
 }
 
@@ -1815,6 +1859,10 @@ async function processQueue() {
   console.log(`[Queue] ========================================`);
 
   try {
+    // [FIXED] 读取工作流模式
+    const workflowMode = currentTask.config.workflowMode || 'one_step_insight';
+    console.log(`[Queue] Workflow mode: ${workflowMode}`);
+    
     // 使用自动抓取产品信息模式采集评论
     const reviews = await collectReviewsWithTabAuto(
       currentTask.asin,
@@ -1824,7 +1872,8 @@ async function processQueue() {
       currentTask.config.speedMode,
       (progress) => {
         console.log(`[Queue Progress] ${currentTask.asin}: ${progress.message}`);
-      }
+      },
+      workflowMode  // [FIXED] 传递工作流模式
     );
 
     console.log(`[Queue] Task ${currentTask.asin} Success. Reviews: ${reviews.length}`);
@@ -1857,7 +1906,7 @@ async function processQueue() {
  * 自动模式采集 - 从 ASIN 开始，自动抓取产品信息
  * 与 collectReviewsWithTab 类似，但会自动获取产品标题和图片
  */
-async function collectReviewsWithTabAuto(asin, stars, pagesPerStar, mediaType, speedMode, sendProgress) {
+async function collectReviewsWithTabAuto(asin, stars, pagesPerStar, mediaType, speedMode, sendProgress, workflowMode = 'one_step_insight') {
   const allReviews = [];
   const seenReviewIds = new Set();
   let scrapedProductInfo = null; // 存储自动抓取的产品信息
@@ -1890,6 +1939,9 @@ async function collectReviewsWithTabAuto(asin, stars, pagesPerStar, mediaType, s
   
   const timing = SPEED_CONFIG[speedMode] || SPEED_CONFIG.fast;
   let autoCollectorTabId = null;
+  
+  // [NEW] 记录工作流模式
+  console.log(`[AutoCollector] Workflow mode: ${workflowMode}`);
   
   console.log('[AutoCollector] ========================================');
   console.log('[AutoCollector] Starting AUTO collection for ASIN:', asin);
@@ -2234,8 +2286,9 @@ async function collectReviewsWithTabAuto(asin, stars, pagesPerStar, mediaType, s
         const triggerAutoAnalysisWithRetry = async (maxRetries = 10, delay = 3000) => {
           for (let attempt = 1; attempt <= maxRetries; attempt++) {
             try {
-              console.log(`[AutoCollector] 🚀 Triggering auto analysis (attempt ${attempt}/${maxRetries})...`);
-              const response = await fetch(`${API_BASE_URL}/products/${asin}/collection-complete`, {
+              // [FIXED] 使用传入的 workflowMode 参数
+              console.log(`[AutoCollector] 🚀 Triggering auto analysis (attempt ${attempt}/${maxRetries}), mode: ${workflowMode}...`);
+              const response = await fetch(`${API_BASE_URL}/products/${asin}/collection-complete?workflow_mode=${workflowMode}`, {
                 method: 'POST',
                 headers: getAuthHeaders()
               });

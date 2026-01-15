@@ -419,7 +419,7 @@ async def get_comparison_preview(
 @router.get("/products/{asin}/reviews-by-label")
 async def get_reviews_by_label(
     asin: str,
-    dimension: str = Query(..., description="维度类型: who/when/where/why/what/strength/weakness/suggestion/scenario/emotion"),
+    dimension: str = Query(..., description="维度类型: buyer/user/who/when/where/why/what/strength/weakness/suggestion/scenario/emotion"),
     label: str = Query(..., description="标签名称"),
     limit: int = Query(50, ge=1, le=200, description="返回数量"),
     db: AsyncSession = Depends(get_db)
@@ -430,7 +430,7 @@ async def get_reviews_by_label(
     用于对比分析页面和报告详情页点击标签时显示相关评论
     
     维度类型:
-    - 5W用户画像: who/when/where/why/what
+    - 5W用户画像: buyer/user/who/when/where/why/what (2026-01-14: buyer/user 替代 who)
     - 5类口碑洞察: strength/weakness/suggestion/scenario/emotion
     """
     from app.models.product import Product
@@ -446,19 +446,18 @@ async def get_reviews_by_label(
     if not product:
         raise HTTPException(status_code=404, detail="产品不存在")
     
-    reviews = []
+    review_data = []  # 存储 (review, confidence, explanation) 元组
     
     # "General" 标签在数据库中对应 "其他"、"Other"、"其它" 等值
     # summary_service.py 在聚合时将这些值统一映射为 "General"
     general_labels = ["General", "其他", "Other", "其它"]
     
-    # 根据维度类型查询
-    if dimension in ['who', 'when', 'where', 'why', 'what']:
-        # 5W 维度 - 从 theme_highlights 表查询
+    # 根据维度类型查询（同时获取 confidence 和 explanation）
+    if dimension in ['buyer', 'user', 'who', 'when', 'where', 'why', 'what']:
+        # 5W 维度 - 从 theme_highlights 表查询 (2026-01-14: 添加 buyer/user 支持)
         if label == "General":
-            # General 标签需要匹配多个可能的值
             stmt = (
-                select(Review)
+                select(Review, ReviewThemeHighlight.confidence, ReviewThemeHighlight.explanation)
                 .join(ReviewThemeHighlight, ReviewThemeHighlight.review_id == Review.id)
                 .where(
                     Review.product_id == product.id,
@@ -469,7 +468,7 @@ async def get_reviews_by_label(
             )
         else:
             stmt = (
-                select(Review)
+                select(Review, ReviewThemeHighlight.confidence, ReviewThemeHighlight.explanation)
                 .join(ReviewThemeHighlight, ReviewThemeHighlight.review_id == Review.id)
                 .where(
                     Review.product_id == product.id,
@@ -479,15 +478,13 @@ async def get_reviews_by_label(
                 .limit(limit)
             )
         result = await db.execute(stmt)
-        reviews = list(result.scalars().all())
+        review_data = [(row[0], row[1], row[2]) for row in result.all()]
         
     elif dimension in ['strength', 'weakness', 'suggestion', 'scenario', 'emotion']:
         # 5类口碑洞察 - 从 insights 表查询
-        # dimension 参数就是 insight_type，label 参数就是 dimension 字段
         if label == "General":
-            # General 标签需要匹配多个可能的值
             stmt = (
-                select(Review)
+                select(Review, ReviewInsight.confidence, ReviewInsight.analysis)
                 .join(ReviewInsight, ReviewInsight.review_id == Review.id)
                 .where(
                     Review.product_id == product.id,
@@ -498,7 +495,7 @@ async def get_reviews_by_label(
             )
         else:
             stmt = (
-                select(Review)
+                select(Review, ReviewInsight.confidence, ReviewInsight.analysis)
                 .join(ReviewInsight, ReviewInsight.review_id == Review.id)
                 .where(
                     Review.product_id == product.id,
@@ -508,14 +505,14 @@ async def get_reviews_by_label(
                 .limit(limit)
             )
         result = await db.execute(stmt)
-        reviews = list(result.scalars().all())
+        review_data = [(row[0], row[1], row[2]) for row in result.all()]
     
     elif dimension in ['pros', 'cons']:
         # 兼容旧的 pros/cons 参数（映射到 strength/weakness）
         insight_type = 'strength' if dimension == 'pros' else 'weakness'
         if label == "General":
             stmt = (
-                select(Review)
+                select(Review, ReviewInsight.confidence, ReviewInsight.analysis)
                 .join(ReviewInsight, ReviewInsight.review_id == Review.id)
                 .where(
                     Review.product_id == product.id,
@@ -526,7 +523,7 @@ async def get_reviews_by_label(
             )
         else:
             stmt = (
-                select(Review)
+                select(Review, ReviewInsight.confidence, ReviewInsight.analysis)
                 .join(ReviewInsight, ReviewInsight.review_id == Review.id)
                 .where(
                     Review.product_id == product.id,
@@ -536,12 +533,12 @@ async def get_reviews_by_label(
                 .limit(limit)
             )
         result = await db.execute(stmt)
-        reviews = list(result.scalars().all())
+        review_data = [(row[0], row[1], row[2]) for row in result.all()]
     
-    # 转换为响应格式
+    # 转换为响应格式（包含置信度和解释）
     return {
         "success": True,
-        "total": len(reviews),
+        "total": len(review_data),
         "reviews": [
             {
                 "id": str(r.id),
@@ -553,8 +550,10 @@ async def get_reviews_by_label(
                 "body_original": r.body_original,
                 "body_translated": r.body_translated,
                 "verified_purchase": r.verified_purchase,
+                "confidence": confidence or "high",  # 置信度：high/medium/low
+                "explanation": explanation,  # 归类理由或洞察内容
             }
-            for r in reviews
+            for r, confidence, explanation in review_data
         ]
     }
 

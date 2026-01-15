@@ -127,6 +127,7 @@ Output JSON only, no other text."""
 
 
 # [NEW] 跨语言5W标签发现 Prompt (英文输入 → 中文标签输出)
+# [UPDATED 2026-01-14] Who 拆分为 Buyer + User
 CONTEXT_DISCOVERY_RAW_PROMPT = """You are a senior marketing expert and user researcher.
 Based on the following **English product information** and **English user review samples**,
 build a "5W User & Market Model" for this product.
@@ -140,29 +141,38 @@ build a "5W User & Market Model" for this product.
 {reviews_text}
 
 # Task
-Synthesize official positioning and user feedback to identify 5 categories of core elements.
+Synthesize official positioning and user feedback to identify 6 categories of core elements.
 Extract **Top 5-8 typical labels per category**. **Output all labels in Chinese**.
 
-1. **Who (人群)**: Who are the main users?
-   - Reference official positioning (e.g.: "Perfect for seniors")
-   - Combine with actual user feedback (e.g.: "bought for my mom")
-   - Roles: 老年人、新手妈妈、学生、宠物主
-   - Family: 给父母买的、送给妻子、孩子的礼物
+**CRITICAL: Distinguish Buyer vs User**
+- **Buyer**: The person who PAYS for the product (e.g., mom buying for child, gift giver)
+- **User**: The person who actually USES the product (e.g., child, gift recipient)
+- If Buyer and User are the same person, put in **User** category only.
 
-2. **Where (地点)**: Where is it used?
+1. **Buyer (购买者)**: Who pays for the product?
+   - Look for phrases: "I bought this for...", "Gift for...", "Ordered for my..."
+   - Examples: 妈妈、送礼者、丈夫、企业采购、女儿(为父母买)
+   - Focus on the purchasing decision maker
+
+2. **User (使用者)**: Who actually uses the product?
+   - Look for phrases: "My son loves it", "Works great for my elderly mom", "I use it daily"
+   - Examples: 3岁幼儿、老人、员工、敏感肌人群、游戏玩家
+   - If buyer = user (e.g., "I bought this for myself"), put here
+
+3. **Where (地点)**: Where is it used?
    - Reference official positioning (e.g.: "for Home Office, Garage")
    - Physical spaces: 卧室、办公室、厨房、车上、房车(RV)、户外露营
 
-3. **When (时刻)**: When is it used?
+4. **When (时刻)**: When is it used?
    - Time points: 早上、睡前、深夜
    - Triggers: 停电时、旅行时、运动后、节假日
 
-4. **Why (动机)**: What triggers the purchase? (Purchase Driver)
+5. **Why (动机)**: What triggers the purchase? (Purchase Driver)
    - Replacement: 旧的坏了、升级换代
    - Gift: 生日礼物、圣诞礼物、乔迁送礼
    - External: 被种草、看了评测、朋友推荐
 
-5. **What (任务)**: What specific task does the user try to accomplish? (Jobs to be Done)
+6. **What (任务)**: What specific task does the user try to accomplish? (Jobs to be Done)
    - Focus on core uses from official promotion
    - Note: Specific tasks, not product features
    - Examples: 清理地毯上的宠物毛、缓解背痛、哄孩子睡觉、去除异味
@@ -176,9 +186,13 @@ Extract **Top 5-8 typical labels per category**. **Output all labels in Chinese*
 
 # Output Format (JSON Only, Chinese output)
 {{
-  "who": [
-    {{ "name": "老年人", "description": "官方定位的核心用户群体" }},
-    {{ "name": "宠物主", "description": "养猫或养狗的用户" }}
+  "buyer": [
+    {{ "name": "宝妈", "description": "为孩子购买产品的母亲" }},
+    {{ "name": "送礼者", "description": "购买产品作为礼物送人的用户" }}
+  ],
+  "user": [
+    {{ "name": "3岁幼儿", "description": "实际使用产品的低龄儿童" }},
+    {{ "name": "老年人", "description": "实际使用产品的老年人群" }}
   ],
   "where": [
     {{ "name": "卧室", "description": "卧室/睡眠场景下使用" }}
@@ -232,106 +246,141 @@ DIMENSION_DISCOVERY_PROMPT = """你是一位资深的产品经理和用户研究
 请只输出 JSON，不要有其他解释文字。"""
 
 
-# [UPDATED] 动态维度提取 Prompt - 5类洞察系统
+# [UPDATED] 跨语言洞察提取 Prompt - 5类洞察系统 (英文输入 → 中文输出)
+# [UPDATED 2026-01-15] 添加置信度字段
 INSIGHT_EXTRACTION_PROMPT_DYNAMIC = """# Role
-亚马逊评论深度分析师
+Amazon Review Analyst (Cross-language Expert) with STRICT evidence standards
 
 # Task
-分析评论，提取关键洞察，并将其**严格归类**到指定的产品维度中。
+Analyze the following **English review** and extract key insights. Categorize each insight into the specified product dimensions.
 
-# Input
-原文: {original_text}
-译文: {translated_text}
+**CRITICAL Language Rules:**
+- **Input**: The review text is in **English**.
+- **Output**: All `analysis` and `quote_translated` fields must be in **Simplified Chinese (简体中文)**.
+- **Quote**: Keep the `quote` field in **Original English** (for evidence tracing).
 
-# 必须遵循的维度标准 (Schema)
-请只使用以下维度进行归类。如果内容完全不属于以下任何维度，请归类为 "其他"。
+# Input (English Review)
+{original_text}
+
+# Dimension Schema (Must Use)
+Only categorize insights into the following dimensions. If content doesn't fit any dimension, use "其他".
 {schema_str}
 
-# 5类洞察类型定义 (CRITICAL - 请严格区分)
-请将评论拆解为具体的洞察点，并归类为以下 5 种类型之一：
+# ⚠️ CONFIDENCE LEVELS (Must include in output)
+- **high**: Insight is explicitly stated in the review with clear evidence
+  - ✅ "The battery lasts only 2 hours" → weakness about 续航 (high)
+  - ✅ "I love the compact design" → strength about 外观设计 (high)
+  
+- **medium**: Insight can be reasonably inferred from context
+  - ✅ "Works as expected" → general satisfaction (medium)
+  
+- **low**: Use for fallback when review is too vague
+  - ⚠️ Only use for very short reviews like "Good" or "OK"
+  - For specific claims, always use high or medium
 
-1. **strength (产品优势/卖点)**: 用户明确表扬的功能或体验。
-   - 示例: "吸力非常强劲"、"续航比预期长"、"外观漂亮"
-   - 用途: 提炼为 Listing 卖点
+# 5 Insight Types (CRITICAL - Distinguish Carefully)
+Break down the review into specific insights and categorize into one of these 5 types:
 
-2. **weakness (改进空间/痛点)**: 用户吐槽的缺陷、Bug 或不满。
-   - 示例: "电池续航太短了"、"塑料感强"、"噪音太大"
-   - 用途: 产品改进依据
+1. **strength (Product Advantage)**: Features or experiences explicitly praised by the user.
+   - Example insights: "吸力非常强劲", "续航超出预期", "外观精美"
+   - Use: Extract for Listing selling points
 
-3. **suggestion (用户建议/Feature Request)**: 用户主动提出的改进建议或期望功能。
-   - 示例: "如果能加个LED灯就好了"、"希望增加定时功能"
-   - 用途: 产品经理直接需求来源
+2. **weakness (Pain Point)**: Defects, bugs, or complaints mentioned by the user.
+   - Example insights: "电池续航太短", "塑料感强", "噪音过大"
+   - Use: Product improvement basis
 
-4. **scenario (具体使用场景/行为故事)**: 描述**具体的**使用过程或行为故事。
-   - 示例: "我试图用来清理车库的锯末，但是吸嘴被堵住了"、"给宝宝用着非常方便，晚上喂奶时一键开启"
-   - ⚠️ 重要区别：与5W标签（Where/When）不同！
-     - 5W标签是**简单名词**: "卧室"、"厨房"、"早上"
-     - scenario是**动态行为描述**: "在厨房做饭时试图清理面粉"
-   - 如果只是简单的地点/时间名词，**不要**提取为 scenario
+3. **suggestion (Feature Request)**: Improvement suggestions or desired features.
+   - Example insights: "如果能加LED灯就好了", "希望增加定时功能"
+   - Use: Direct PM requirements
 
-5. **emotion (强烈情感洞察)**: 用户表达的强烈情绪（愤怒/惊喜/失望/感动）。
-   - 示例: "我对此感到极其失望"、"这是我买过最好的东西"、"后悔没早点买"
-   - 用途: 运营团队情绪预警、好评素材
+4. **scenario (Usage Scenario)**: **Specific** usage processes or behavioral stories.
+   - Example insights: "尝试清理车库锯末时吸嘴被堵", "晚上喂奶时一键开启很方便"
+   - ⚠️ Important: Different from 5W tags!
+     - 5W tags are **simple nouns**: "卧室", "厨房"
+     - Scenario is **dynamic behavior**: "在厨房做饭时清理面粉"
+   - If it's just a simple place/time noun, do NOT extract as scenario
+
+5. **emotion (Emotional Insight)**: Strong emotions expressed (anger/surprise/disappointment/gratitude).
+   - Example insights: "对此极其失望", "这是我买过最好的东西", "后悔没早点买"
+   - Use: Operations team sentiment alerts
 
 # Output Format (JSON Array)
 [
   {{
     "type": "weakness", 
-    "dimension": "从上述维度中选择一个", 
-    "quote": "原文引用", 
-    "quote_translated": "引用翻译",
-    "analysis": "简要分析",
-    "sentiment": "positive/negative/neutral"
+    "dimension": "选择上述维度之一", 
+    "quote": "Original English quote from the review",
+    "quote_translated": "引用的中文翻译",
+    "analysis": "简要分析（中文）",
+    "sentiment": "positive/negative/neutral",
+    "confidence": "high"
   }}
 ]
 
-# 重要规则
-1. **每条评论必须至少提取1个洞察**，即使评论很短。
-2. **dimension 字段必须从维度标准中选择**，不能自己编造新维度。
-3. 对于简短的正面评论（如"Amazing!"），提取为 emotion 类型。
-4. 对于简短的负面评论（如"Terrible"），提取为 weakness 类型。
-5. 提取要"颗粒度细"，不要笼统地说"质量不好"，要说"塑料感强"或"按键松动"。
-6. 绝对不要返回空数组 []，至少要有1个洞察。
-7. scenario 必须是**具体的行为描述**，不能是简单的地点/时间名词。
+# Critical Rules
+1. **每条评论必须至少提取1个洞察**, even for very short reviews.
+2. **dimension must be from the schema**, do not invent new dimensions.
+3. For short positive reviews (e.g., "Amazing!"), extract as emotion type with dimension "整体满意度".
+4. For short negative reviews (e.g., "Terrible"), extract as weakness type with dimension "整体满意度".
+5. Be specific: not "质量不好" but "塑料感强" or "按键松动".
+6. NEVER return empty array []. At least 1 insight required.
+7. Scenario must be **dynamic behavior**, not simple place/time nouns.
+8. **All Chinese output must be natural, fluent Simplified Chinese.**
+9. **Always include confidence field** (high/medium/low) for each insight.
 """
 
 
-# [UPDATED] Insight extraction prompt - 5类洞察系统 (无维度 Schema 版本)
+# [UPDATED] 跨语言洞察提取 Prompt - 5类洞察系统 (无维度 Schema 版本，英文输入 → 中文输出)
+# [UPDATED 2026-01-15] 添加置信度字段
 INSIGHT_EXTRACTION_PROMPT = """# Role
-亚马逊评论深度分析师
+Amazon Review Analyst (Cross-language Expert) with STRICT evidence standards
 
 # Task
-分析以下评论，提取关键的用户洞察。**每条评论必须至少提取1个洞察**。
+Analyze the following **English review** and extract key user insights. **At least 1 insight must be extracted per review.**
 
-# Input
-原文: {original_text}
-译文: {translated_text}
+**CRITICAL Language Rules:**
+- **Input**: The review text is in **English**.
+- **Output**: All `analysis` and `quote_translated` fields must be in **Simplified Chinese (简体中文)**.
+- **Quote**: Keep the `quote` field in **Original English** (for evidence tracing).
 
-# 5类洞察类型定义 (CRITICAL - 请严格区分)
-请将评论拆解为具体的洞察点，并归类为以下 5 种类型之一：
+# Input (English Review)
+{original_text}
 
-1. **strength (产品优势/卖点)**: 用户明确表扬的功能或体验。
-   - 示例: "吸力非常强劲"、"续航比预期长"
-   - 用途: 提炼为 Listing 卖点
+# ⚠️ CONFIDENCE LEVELS (Must include in output)
+- **high**: Insight is explicitly stated with clear evidence
+  - ✅ "Battery dies after 2 hours" → weakness (high)
+  
+- **medium**: Reasonably inferred from context
+  - ✅ "Works as expected" → satisfaction (medium)
+  
+- **low**: Fallback for very vague reviews
+  - ⚠️ Only for "Good", "OK", "Nice" with no details
 
-2. **weakness (改进空间/痛点)**: 用户吐槽的缺陷、Bug 或不满。
-   - 示例: "电池续航太短了"、"塑料感强"
-   - 用途: 产品改进依据
+# 5 Insight Types (CRITICAL - Distinguish Carefully)
+Break down the review into specific insights and categorize into one of these 5 types:
 
-3. **suggestion (用户建议/Feature Request)**: 用户主动提出的改进建议或期望功能。
-   - 示例: "如果能加个LED灯就好了"
-   - 用途: 产品经理直接需求来源
+1. **strength (Product Advantage)**: Features or experiences explicitly praised.
+   - Example insights: "吸力强劲", "续航超出预期"
+   - Use: Listing selling points
 
-4. **scenario (具体使用场景/行为故事)**: 描述**具体的**使用过程或行为故事。
-   - 示例: "我试图用来清理车库的锯末，但是吸嘴被堵住了"
-   - ⚠️ 重要：不要和简单的地点/时间名词混淆！
+2. **weakness (Pain Point)**: Defects, bugs, or complaints.
+   - Example insights: "电池续航太短", "塑料感强"
+   - Use: Product improvement
 
-5. **emotion (强烈情感洞察)**: 用户表达的强烈情绪。
-   - 示例: "我对此感到极其失望"、"这是我买过最好的东西"
-   - 用途: 运营团队情绪预警
+3. **suggestion (Feature Request)**: Improvement suggestions.
+   - Example insights: "如果能加LED灯就好了"
+   - Use: PM requirements
 
-# 维度判断
-请根据评论内容自动判断维度（如：整体满意度、产品质量、使用体验、物流服务、性价比等）。
+4. **scenario (Usage Scenario)**: **Specific** usage processes.
+   - Example insights: "清理车库锯末时吸嘴被堵"
+   - ⚠️ Must be dynamic behavior, not simple nouns!
+
+5. **emotion (Emotional Insight)**: Strong emotions expressed.
+   - Example insights: "极其失望", "这是买过最好的东西"
+   - Use: Sentiment alerts
+
+# Dimension Detection
+Auto-detect dimension based on review content (e.g.: 整体满意度, 产品质量, 使用体验, 物流服务, 性价比).
 
 # Output Format (JSON Array)
 [
@@ -339,27 +388,31 @@ INSIGHT_EXTRACTION_PROMPT = """# Role
     "type": "strength", 
     "dimension": "整体满意度",
     "quote": "Amazing toy", 
-    "quote_translated": "太棒了",
-    "analysis": "用户对产品高度认可，表达了强烈的正面情感",
-    "sentiment": "positive"
+    "quote_translated": "太棒的玩具了",
+    "analysis": "用户对产品高度认可，表达强烈正面情感",
+    "sentiment": "positive",
+    "confidence": "high"
   }},
   {{
     "type": "emotion",
     "dimension": "购买体验",
     "quote": "Great buy",
-    "quote_translated": "买得值",
+    "quote_translated": "买得太值了",
     "analysis": "用户认为这次购买物超所值",
-    "sentiment": "positive"
+    "sentiment": "positive",
+    "confidence": "high"
   }}
 ]
 
-# 重要规则
-1. **每条评论必须至少提取1个洞察**，即使评论很短。
-2. 对于简短的正面评论（如"Amazing!"、"Love it!"），提取为 emotion 类型。
-3. 对于简短的负面评论（如"Terrible"），提取为 weakness 类型。
-4. 提取要"颗粒度细"，不要笼统地说"质量不好"，要说"塑料感强"或"按键松动"。
-5. 绝对不要返回空数组 []，至少要有1个洞察。
-6. scenario 必须是**具体的行为描述**，不能是简单的地点/时间名词。
+# Critical Rules
+1. **每条评论必须至少提取1个洞察**, even for very short reviews.
+2. For short positive reviews (e.g., "Amazing!", "Love it!"), extract as emotion type with dimension "整体满意度".
+3. For short negative reviews (e.g., "Terrible"), extract as weakness type with dimension "整体满意度".
+4. Be specific: not "质量不好" but "塑料感强" or "按键松动".
+5. NEVER return empty array []. At least 1 insight required.
+6. Scenario must be **dynamic behavior**, not simple place/time nouns.
+7. **All Chinese output must be natural, fluent Simplified Chinese.**
+8. **Always include confidence field** (high/medium/low) for each insight.
 """
 
 
@@ -375,48 +428,96 @@ class InsightType(str, Enum):
 
 
 
-# [UPDATED] 5W Model Extraction Prompt (无标签库模式 - 开放提取)
-THEME_EXTRACTION_PROMPT = """你是一位专业的市场营销分析专家。请基于"5W分析法"分析以下商品评论，提取关键的市场要素。
+# [UPDATED 2026-01-14] 跨语言5W Model Extraction Prompt (Who 拆分为 Buyer + User)
+# [UPDATED 2026-01-15] 添加置信度字段和严格证据要求
+THEME_EXTRACTION_PROMPT = """You are a professional marketing analyst with STRICT evidence standards.
+Analyze the following **English review** using the "5W Analysis Framework" and extract key market elements.
 
-评论原文（英文）：
+**CRITICAL Language Rules:**
+- **Input**: The review text is in **English**.
+- **Output**: All `content`, `content_translated`, and `explanation` fields must be in **Simplified Chinese (简体中文)**.
+- **content_original**: Keep in **Original English** (for evidence tracing).
+
+# Input (English Review)
 {original_text}
 
-评论翻译（中文）：
-{translated_text}
+# ⚠️ EVIDENCE STANDARDS (MOST CRITICAL)
 
-请从评论中提取以下 5 类核心要素（如果某类没有提及，则留空）：
+**The "Courage to Say Nothing" Rule:**
+It is FAR BETTER to return an empty array than to make a weak or speculative extraction!
 
-1. **who（使用者/人群）**: 
-   - 定义: 谁在使用产品？
-   - 示例: 老年人、学生、宠物主、妻子、工程师。
-2. **where（使用地点）**: 
-   - 定义: 在什么物理空间使用？
-   - 示例: 卧室、办公室、房车(RV)、车库、户外露营。
-3. **when（使用时刻）**: 
-   - 定义: 在什么时间或特定情境下使用？
-   - 示例: 睡前、紧急停电时、圣诞节早晨、运动后。
-4. **why（购买动机）**: 
-   - 定义: 促使用户下单的触发点是什么？(Purchase Driver)
-   - 示例: 旧的坏了(替代)、作为生日礼物、为了省钱、搬新家、被广告种草。
-5. **what（待办任务/用途）**: 
-   - 定义: 用户用它来解决什么具体问题？(Jobs to be Done)
-   - 注意: 不是列举功能，而是列举任务。
-   - 示例: 清理地毯上的猫毛(而不是"吸力大")、缓解背痛(而不是"人体工学")、哄孩子睡觉。
+## Confidence Levels (MUST include in output)
+- **high**: Reviewer EXPLICITLY states the information
+  - ✅ "I bought this for my mom" → buyer with confidence: "high"
+  - ✅ "I'm a heavy sleeper" → user with confidence: "high"
+  
+- **medium**: Information can be REASONABLY INFERRED from clear context
+  - ✅ "Works great for my morning routine" → when: "早晨" with confidence: "medium"
+  
+- **low**: DO NOT OUTPUT! If evidence is weak, do not extract at all.
+  - ❌ Product is an alarm clock → assuming user is "深睡人群" (WRONG!)
+  - ❌ General praise like "Great product!" → extracting any 5W (WRONG!)
 
-注意事项：
-- 提取的内容必须简练、准确。
-- 尽量提取完整语义，如"清理猫毛"优于"猫毛"。
-- 必须基于评论事实，不可编造。
-- 如果内容来自英文原文，请同时提供英文原文和中文翻译。
+## When NOT to Extract (Return Empty Array Instead)
+1. Review only talks about product quality (e.g., "Great product!", "Love it!")
+2. No direct evidence in the review text for that category
+3. Extraction would be based on product type assumptions, not review content
+4. The connection requires more than one logical leap
 
-请以JSON格式返回：
+**Remember: An empty array [] is a VALID and often CORRECT answer!**
+
+# Extract the following 6 core elements (leave empty array if not mentioned):
+
+**CRITICAL: Distinguish Buyer vs User**
+- **Buyer**: The person who PAYS (e.g., "I bought this for my son" → Buyer is "妈妈/爸爸")
+- **User**: The person who USES (e.g., "my son loves it" → User is "孩子")
+- If same person, put in **User** only
+
+1. **buyer (Purchaser/Gift Giver)**: 
+   - Definition: Who is paying for the product?
+   - Look for: "I bought this for...", "Gift for...", "Ordered for my..."
+   - Output examples (Chinese): 妈妈, 送礼者, 丈夫, 企业采购
+
+2. **user (Actual User)**: 
+   - Definition: Who is actually using the product?
+   - Look for: "My son uses it", "Works great for my elderly mom", "I use it daily"
+   - Output examples (Chinese): 3岁幼儿, 老年人, 员工, 游戏玩家
+
+3. **where (Location)**: 
+   - Definition: In what physical space is it used?
+   - Output examples (Chinese): 卧室, 办公室, 房车, 车库, 户外露营
+
+4. **when (Timing)**: 
+   - Definition: At what time or specific situation is it used?
+   - Output examples (Chinese): 睡前, 停电时, 圣诞节早晨, 运动后
+
+5. **why (Purchase Motivation)**: 
+   - Definition: What triggered the purchase decision? (Purchase Driver)
+   - Output examples (Chinese): 旧的坏了, 作为生日礼物, 为了省钱, 搬新家
+
+6. **what (Jobs to be Done)**: 
+   - Definition: What specific task is the user trying to accomplish?
+   - Note: Focus on tasks, not product features.
+   - Output examples (Chinese): 清理猫毛, 缓解背痛, 哄孩子睡觉
+
+# Output Format (JSON)
 {{
-  "who": [
+  "buyer": [
     {{
-      "content": "孩子",
-      "content_original": "for kids",
-      "content_translated": "给孩子",
-      "explanation": "用户买给孩子作为礼物"
+      "content": "宝妈",
+      "content_original": "I bought this for my son",
+      "content_translated": "我给儿子买的",
+      "confidence": "high",
+      "explanation": "评论明确说'给儿子买的'，证明购买者是母亲"
+    }}
+  ],
+  "user": [
+    {{
+      "content": "3岁男童",
+      "content_original": "my 3 year old loves it",
+      "content_translated": "我3岁的孩子很喜欢",
+      "confidence": "high",
+      "explanation": "评论明确提到'3岁的孩子'是使用者"
     }}
   ],
   "what": [],
@@ -424,10 +525,15 @@ THEME_EXTRACTION_PROMPT = """你是一位专业的市场营销分析专家。请
   "where": [],
   "when": []
 }}
+
+# Example of CORRECT Behavior for Short Reviews
+Input: "Amazing alarm clock! Works perfectly!"
+Output: {{ "buyer": [], "user": [], "where": [], "when": [], "why": [], "what": [] }}
+Reason: Review only praises product quality, no 5W elements mentioned.
 """
 
 
-# [UPDATED] 5W 标签发现 Prompt (学习阶段 - 结合产品官方信息 + 用户评论)
+# [UPDATED 2026-01-14] 5W 标签发现 Prompt (学习阶段 - Who 拆分为 Buyer + User)
 CONTEXT_DISCOVERY_PROMPT = """你是一位资深的市场营销专家和用户研究员。请基于以下**产品官方信息**和**用户评论样本**，构建该产品的"5W 用户与市场模型"。
 
 # 产品官方信息（卖家定义）
@@ -439,29 +545,38 @@ CONTEXT_DISCOVERY_PROMPT = """你是一位资深的市场营销专家和用户�
 {reviews_text}
 
 # 任务
-请综合官方定位与用户反馈，识别并归纳出以下 5 类核心要素，每类提取 **Top 5-8 个典型标签**：
+请综合官方定位与用户反馈，识别并归纳出以下 **6 类核心要素**，每类提取 **Top 5-8 个典型标签**：
 
-1. **Who (人群)**: 谁是主要用户？
-   - 优先参考官方定位（如: "Perfect for seniors"）
-   - 结合用户实际反馈（如: "bought for my mom"）
-   - 角色/身份，如: 老年人、新手妈妈、学生、宠物主
-   - 家庭关系，如: 给父母买的、送给妻子、孩子的礼物
+**重要：必须区分购买者和使用者**
+- **购买者(Buyer)**: 付钱买产品的人（如：妈妈给孩子买、送礼者）
+- **使用者(User)**: 实际使用产品的人（如：孩子、收礼者、老人）
+- 如果购买者和使用者是同一人，只填入**使用者**类别
 
-2. **Where (地点)**: 在哪里使用？
+1. **Buyer (购买者)**: 谁是购买决策者？谁付钱？
+   - 关注表述如："I bought this for..."、"Gift for..."、"Ordered for my..."
+   - 示例标签：妈妈、送礼者、丈夫、企业采购、女儿(为父母买)
+   - 重点识别购买决策者的身份
+
+2. **User (使用者)**: 谁实际使用产品？
+   - 关注表述如："My son loves it"、"Works great for my elderly mom"、"I use it daily"
+   - 示例标签：3岁幼儿、老年人、员工、敏感肌人群、游戏玩家
+   - 如果买家自用（如"I bought this for myself"），放入此类别
+
+3. **Where (地点)**: 在哪里使用？
    - 优先参考官方定位（如: "for Home Office, Garage"）
    - 结合用户实际使用场景
    - 物理空间，如: 卧室、办公室、厨房、车上、房车(RV)、户外露营
 
-3. **When (时刻)**: 什么时候使用？
+4. **When (时刻)**: 什么时候使用？
    - 时间点，如: 早上、睡前、深夜
    - 触发时机，如: 停电时、旅行时、运动后、节假日
 
-4. **Why (动机)**: 购买的触发点是什么？(Purchase Driver)
+5. **Why (动机)**: 购买的触发点是什么？(Purchase Driver)
    - 替代需求，如: 旧的坏了、升级换代
    - 送礼需求，如: 生日礼物、圣诞礼物、乔迁送礼
    - 外部驱动，如: 被种草、看了评测、朋友推荐
 
-5. **What (任务)**: 用户试图用它完成什么具体任务？(Jobs to be Done)
+6. **What (任务)**: 用户试图用它完成什么具体任务？(Jobs to be Done)
    - **重点关注官方宣传的核心用途**（如: "remove pet hair", "eliminate odors"）
    - 注意: 是具体任务，不是产品功能
    - 如: 清理地毯上的宠物毛、缓解背痛、哄孩子睡觉、去除异味
@@ -475,9 +590,13 @@ CONTEXT_DISCOVERY_PROMPT = """你是一位资深的市场营销专家和用户�
 
 # 输出格式 (JSON Only)
 {{
-  "who": [
-    {{ "name": "老年人", "description": "官方定位的核心用户群体，适合需要照顾的老人" }},
-    {{ "name": "宠物主", "description": "养猫或养狗的用户" }}
+  "buyer": [
+    {{ "name": "宝妈", "description": "为孩子购买产品的母亲" }},
+    {{ "name": "送礼者", "description": "购买产品作为礼物送人的用户" }}
+  ],
+  "user": [
+    {{ "name": "3岁幼儿", "description": "实际使用产品的低龄儿童" }},
+    {{ "name": "老年人", "description": "实际使用产品的老年人群" }}
   ],
   "where": [
     {{ "name": "卧室", "description": "卧室/睡眠场景下使用" }},
@@ -499,33 +618,81 @@ CONTEXT_DISCOVERY_PROMPT = """你是一位资深的市场营销专家和用户�
 请只输出 JSON，不要有其他解释文字。"""
 
 
-# [UPDATED] 5W 定向提取 Prompt (执行阶段 - Execution，带证据的可解释强制归类)
-THEME_EXTRACTION_PROMPT_WITH_SCHEMA = """你是一位专业的市场营销分析专家。请分析以下商品评论，识别其中涉及的 5W 要素。
+# [UPDATED 2026-01-14] 跨语言5W 定向提取 Prompt (执行阶段 - Who 拆分为 Buyer + User)
+# [UPDATED 2026-01-15] 添加置信度字段和严格证据要求
+THEME_EXTRACTION_PROMPT_WITH_SCHEMA = """You are a professional marketing analyst with STRICT evidence standards.
+Analyze the following **English review** and identify the 5W elements it contains.
 
-评论原文（英文）：
+**CRITICAL Language Rules:**
+- **Input**: The review text is in **English**.
+- **Output**: `quote_translated` and `explanation` fields must be in **Simplified Chinese (简体中文)**.
+- **quote**: Keep in **Original English** (for evidence tracing).
+- **tag**: Must match exactly with the provided Schema labels (Chinese).
+
+# Input (English Review)
 {original_text}
 
-评论翻译（中文）：
-{translated_text}
-
-# 标准标签库 (Schema - 只能从以下标签中选择)
+# Label Schema (MUST use these labels only)
 {schema_str}
 
-# 任务规则
-1. **强制归类**：你提取的 `tag` 字段必须严格等于上述标签库中的标签名。不要编造新标签。
-2. **证据留存**：必须引用原文 `quote`（英文）和 `quote_translated`（中文翻译）作为判断依据。
-3. **解释说明**：提供简短的 `explanation` 解释为什么这样归类。
-4. **多选**：如果评论涉及多个标签，请生成多个对象。
-5. **忽略无关**：如果评论内容不匹配某个类别的任何标签，该类别返回空数组。
+# ⚠️ EVIDENCE STANDARDS (MOST CRITICAL)
 
-# 输出格式 (JSON Only)
+**The "Courage to Say Nothing" Rule:**
+It is FAR BETTER to return an empty array than to make a weak or speculative categorization!
+
+## Confidence Levels (MUST include in output)
+- **high**: Reviewer EXPLICITLY states the information in the review text
+  - ✅ "I bought this for my mom" → buyer: 子女 (high)
+  - ✅ "I'm a heavy sleeper" → user: 深睡人群 (high)
+  
+- **medium**: Information can be REASONABLY INFERRED from clear context
+  - ✅ "Works great for my morning routine" → when: 早晨 (medium)
+  - ✅ "Perfect for the nursery" → where: 儿童房 (medium)
+  
+- **low**: DO NOT OUTPUT! If evidence is weak, do not categorize at all.
+  - ❌ Product is an alarm clock → assuming user is "深睡人群" (WRONG!)
+  - ❌ Product is a toy → assuming buyer is "家长" without evidence (WRONG!)
+
+## When NOT to Categorize (Return Empty Array Instead)
+1. Review only talks about product quality (e.g., "Great product!", "Love it!")
+2. No direct evidence in the review text for that category
+3. Categorization would be based on product type assumptions, not review content
+4. You're relying on stereotypes or common associations
+5. The connection requires more than one logical leap
+
+**Remember: An empty array [] is a VALID and often CORRECT answer!**
+
+# Task Rules
+1. **Evidence-First**: Only categorize when there is CLEAR evidence in the review text
+2. **Forced Labels**: The `tag` field must exactly match a label from the schema
+3. **Quote Required**: Must include the exact English quote that supports categorization
+4. **Confidence Required**: Must include confidence level (high/medium only, never low)
+5. **Explanation Required**: Explain WHY this quote supports this categorization
+
+**CRITICAL: Distinguish Buyer vs User**
+- **buyer**: The person who PAYS/purchases (e.g., "I bought this for my son" → Buyer is the parent)
+- **user**: The person who USES the product (e.g., "my son loves it" → User is the child)
+- If same person, put in **user** only
+- If unclear who pays vs uses, put in **user** only
+
+# Output Format (JSON Only)
 {{
-  "who": [
+  "buyer": [
     {{
-      "tag": "老年人", 
-      "quote": "bought this for my 80yo dad",
-      "quote_translated": "给我80岁的父亲买的",
-      "explanation": "评论明确提及买给80岁的父亲"
+      "tag": "宝妈", 
+      "quote": "I bought this for my son",
+      "quote_translated": "我给儿子买的",
+      "confidence": "high",
+      "explanation": "评论明确说'给儿子买的'，证明购买者是母亲"
+    }}
+  ],
+  "user": [
+    {{
+      "tag": "3岁男童", 
+      "quote": "my 3 year old loves it",
+      "quote_translated": "我3岁的孩子很喜欢",
+      "confidence": "high",
+      "explanation": "评论明确提到'3岁的孩子'是使用者"
     }}
   ],
   "where": [],
@@ -535,20 +702,32 @@ THEME_EXTRACTION_PROMPT_WITH_SCHEMA = """你是一位专业的市场营销分析
       "tag": "送礼",
       "quote": "as a gift for my mom",
       "quote_translated": "作为礼物送给妈妈",
-      "explanation": "用户明确说是作为礼物送给母亲"
+      "confidence": "high",
+      "explanation": "评论明确说'作为礼物'，购买动机是送礼"
     }}
   ],
-  "what": [
-    {{
-      "tag": "缓解背痛",
-      "quote": "helps with my lower back pain",
-      "quote_translated": "帮助缓解我的腰痛",
-      "explanation": "用户使用该产品来解决背痛问题"
-    }}
-  ]
+  "what": []
 }}
 
-请只输出 JSON，不要有其他解释文字。"""
+# Examples of CORRECT Behavior
+
+Example 1 - Short positive review with no 5W info:
+Input: "Amazing alarm clock! Works perfectly!"
+Output: {{ "buyer": [], "user": [], "where": [], "when": [], "why": [], "what": [] }}
+Reason: Review only praises product quality, no 5W elements mentioned.
+
+Example 2 - Review with clear evidence:
+Input: "Bought this for my elderly mother who has trouble hearing. The loud alarm helps her wake up in the morning."
+Output: {{
+  "buyer": [{{"tag": "子女", "quote": "Bought this for my elderly mother", "quote_translated": "给年迈的母亲买的", "confidence": "high", "explanation": "明确说是给母亲购买"}}],
+  "user": [{{"tag": "老年人", "quote": "my elderly mother who has trouble hearing", "quote_translated": "年迈的母亲听力不好", "confidence": "high", "explanation": "明确说使用者是年迈的母亲"}}],
+  "where": [],
+  "when": [{{"tag": "早晨", "quote": "wake up in the morning", "quote_translated": "早上起床", "confidence": "high", "explanation": "明确说早上使用"}}],
+  "why": [],
+  "what": [{{"tag": "起床", "quote": "helps her wake up", "quote_translated": "帮助她起床", "confidence": "high", "explanation": "明确说用途是帮助起床"}}]
+}}
+
+Output JSON only, no other text."""
 
 
 # [NEW] Helper function for robust JSON parsing
@@ -1176,7 +1355,8 @@ class TranslationService:
                 logger.warning(f"跨语言 5W 标签发现返回格式不正确: {type(parsed)}")
                 return {}
             
-            valid_types = {"who", "where", "when", "why", "what"}
+            # [UPDATED 2026-01-14] 扩展 valid_types: buyer/user 替代 who，同时兼容旧的 who
+            valid_types = {"buyer", "user", "who", "where", "when", "why", "what"}
             valid_result = {}
             
             for context_type in valid_types:
@@ -1292,8 +1472,8 @@ class TranslationService:
                 logger.warning(f"5W 标签发现返回格式不正确: {type(parsed)}")
                 return {}
             
-            # 验证和清理每个 5W 类型的标签
-            valid_types = {"who", "where", "when", "why", "what"}
+            # [UPDATED 2026-01-14] 验证和清理每个 5W 类型的标签（扩展版：buyer/user 替代 who）
+            valid_types = {"buyer", "user", "who", "where", "when", "why", "what"}
             valid_result = {}
             
             for context_type in valid_types:
@@ -1328,20 +1508,23 @@ class TranslationService:
     def extract_insights(
         self,
         original_text: str,
-        translated_text: str,
+        translated_text: str = None,  # [UPDATED] 不再使用，保留参数仅为向后兼容
         dimension_schema: List[dict] = None
     ) -> List[dict]:
         """
-        Extract insights from a review.
+        Extract insights from a review using cross-language analysis.
+        
+        [UPDATED] 跨语言洞察提取 - 直接从英文原文提取洞察，输出中文结果。
+        不再依赖翻译后的文本，实现与翻译任务的完全解耦。
         
         Args:
-            original_text: 原始评论文本
-            translated_text: 翻译后的文本
+            original_text: 原始评论文本（英文）
+            translated_text: [DEPRECATED] 不再使用，保留仅为向后兼容
             dimension_schema: 可选的维度模式列表，用于限定 AI 只使用这些维度进行归类
                              格式: [{"name": "维度名", "description": "维度定义"}, ...]
         
         Returns:
-            洞察列表，每个洞察包含 type, dimension, quote, analysis 等字段
+            洞察列表，每个洞察包含 type, dimension, quote(英文), quote_translated(中文), analysis(中文) 等字段
         """
         if not self._check_client():
             return []
@@ -1353,6 +1536,7 @@ class TranslationService:
         
         try:
             # 根据是否有维度模式选择不同的 Prompt
+            # [UPDATED] 跨语言模式：只传入英文原文，AI 输出中文分析
             if dimension_schema and len(dimension_schema) > 0:
                 # 使用动态维度 Prompt - 强制 AI 按指定维度归类
                 schema_str = "\n".join([
@@ -1361,15 +1545,13 @@ class TranslationService:
                 ])
                 prompt = INSIGHT_EXTRACTION_PROMPT_DYNAMIC.format(
                     original_text=original_text,
-                    translated_text=translated_text or original_text,
                     schema_str=schema_str
                 )
-                logger.debug(f"使用动态维度 Prompt，共 {len(dimension_schema)} 个维度")
+                logger.debug(f"[跨语言洞察] 使用动态维度 Prompt，共 {len(dimension_schema)} 个维度")
             else:
-                # 使用原有 Prompt - 兼容旧逻辑
+                # 使用无维度 Prompt - 自动检测维度
                 prompt = INSIGHT_EXTRACTION_PROMPT.format(
-                    original_text=original_text,
-                    translated_text=translated_text or original_text
+                    original_text=original_text
                 )
             
             response = self.client.chat.completions.create(
@@ -1403,12 +1585,18 @@ class TranslationService:
                 if not insight.get("quote") or not insight.get("analysis"):
                     continue
                 
+                # [UPDATED 2026-01-15] 添加 confidence 字段支持
+                confidence = insight.get("confidence", "high")
+                if confidence not in ("high", "medium", "low"):
+                    confidence = "high"
+                
                 valid_insights.append({
                     "type": insight["type"],
                     "quote": insight["quote"],
                     "quote_translated": insight.get("quote_translated"),
                     "analysis": insight["analysis"],
-                    "dimension": insight.get("dimension")
+                    "dimension": insight.get("dimension"),
+                    "confidence": confidence  # [NEW] 置信度
                 })
             
             logger.debug(f"Extracted {len(valid_insights)} insights from review")
@@ -1696,19 +1884,22 @@ class TranslationService:
     def extract_themes(
         self, 
         original_text: str, 
-        translated_text: str,
+        translated_text: str = None,  # [UPDATED] 不再使用，保留参数仅为向后兼容
         context_schema: dict = None
     ) -> dict:
         """
-        Extract 5W theme content from a review.
+        Extract 5W theme content from a review using cross-language analysis.
+        
+        [UPDATED] 跨语言5W主题提取 - 直接从英文原文提取5W要素，输出中文结果。
+        不再依赖翻译后的文本，实现与翻译任务的完全解耦。
         
         支持两种模式：
         1. 开放提取模式（无 context_schema）：AI 自由提取 5W 要素
         2. 强制归类模式（有 context_schema）：AI 只能输出标签库中已有的标签
         
         Args:
-            original_text: 评论原文
-            translated_text: 评论翻译
+            original_text: 评论原文（英文）
+            translated_text: [DEPRECATED] 不再使用，保留仅为向后兼容
             context_schema: 可选的 5W 标签库，格式：
                 {
                     "who": [{"name": "老年人", "description": "..."}, ...],
@@ -1718,21 +1909,22 @@ class TranslationService:
                 
         Returns:
             提取的主题内容，格式：
-            - 开放模式：{"who": [{"content": "...", ...}], ...}
-            - 归类模式：{"who": ["老年人", "宠物主"], "where": [], ...}
+            - 开放模式：{"who": [{"content": "中文内容", "content_original": "English quote", ...}], ...}
+            - 归类模式：{"who": [{"content": "老年人", "quote": "English quote", ...}], ...}
         """
         if not self._check_client():
             return {}
         
-        # Skip very short reviews
-        if not translated_text or len(translated_text.strip()) < 10:
+        # [UPDATED] 使用原文检查长度，跳过过短的评论
+        if not original_text or len(original_text.strip()) < 10:
             return {}
         
-        # [UPDATED] Valid theme types for 5W model
-        valid_themes = {"who", "where", "when", "why", "what"}
+        # [UPDATED] Valid theme types for 5W model (2026-01-14: 添加 buyer/user 拆分)
+        valid_themes = {"buyer", "user", "who", "where", "when", "why", "what"}
         
         try:
             # 根据是否有标签库选择不同的 Prompt
+            # [UPDATED] 跨语言模式：只传入英文原文，AI 输出中文分析
             if context_schema and any(context_schema.get(t) for t in valid_themes):
                 # 强制归类模式 - 使用标签库
                 schema_lines = []
@@ -1747,17 +1939,15 @@ class TranslationService:
                 
                 prompt = THEME_EXTRACTION_PROMPT_WITH_SCHEMA.format(
                     original_text=original_text or "",
-                    translated_text=translated_text,
                     schema_str=schema_str
                 )
-                logger.debug(f"使用强制归类模式，标签库包含 {len(schema_lines)} 个类型")
+                logger.debug(f"[跨语言5W] 使用强制归类模式，标签库包含 {len(schema_lines)} 个类型")
             else:
                 # 开放提取模式 - 自由提取
                 prompt = THEME_EXTRACTION_PROMPT.format(
-                    original_text=original_text or "",
-                    translated_text=translated_text
+                    original_text=original_text or ""
                 )
-                logger.debug("使用开放提取模式")
+                logger.debug("[跨语言5W] 使用开放提取模式")
             
             response = self.client.chat.completions.create(
                 model=self.model,
@@ -1798,15 +1988,21 @@ class TranslationService:
                     valid_items = []
                     for item in items:
                         if isinstance(item, dict):
-                            # 新格式: 带 tag/quote/quote_translated/explanation 的对象
+                            # 新格式: 带 tag/quote/quote_translated/confidence/explanation 的对象
                             tag = item.get("tag") or item.get("content")
                             if tag and tag.strip() in allowed_labels:
+                                # [UPDATED 2026-01-15] 添加 confidence 字段支持
+                                confidence = item.get("confidence", "high")
+                                # 验证 confidence 值
+                                if confidence not in ("high", "medium", "low"):
+                                    confidence = "high"
                                 valid_items.append({
                                     "content": tag.strip(),  # 标准标签名
                                     "content_original": item.get("quote") or item.get("content_original"),  # 原文证据
                                     "quote_translated": item.get("quote_translated"),  # [NEW] 中文翻译证据
                                     "content_translated": item.get("content_translated"),  # 翻译（可选，向后兼容）
-                                    "explanation": item.get("explanation")  # 归类理由
+                                    "explanation": item.get("explanation"),  # 归类理由
+                                    "confidence": confidence  # [NEW] 置信度
                                 })
                         elif isinstance(item, str):
                             # 兼容旧格式: 纯字符串
@@ -1815,7 +2011,8 @@ class TranslationService:
                                     "content": item.strip(),
                                     "content_original": None,
                                     "content_translated": None,
-                                    "explanation": f"命中标签库: {item.strip()}"
+                                    "explanation": f"命中标签库: {item.strip()}",
+                                    "confidence": "high"  # 旧格式默认高置信度
                                 })
                     
                     if valid_items:
@@ -1836,12 +2033,17 @@ class TranslationService:
                             # Ensure content is a non-empty string
                             content = item.get("content", "").strip()
                             if content:
+                                # [UPDATED 2026-01-15] 添加 confidence 字段支持
+                                confidence = item.get("confidence", "high")
+                                if confidence not in ("high", "medium", "low"):
+                                    confidence = "high"
                                 # Build valid item
                                 valid_item = {
                                     "content": content,
                                     "content_original": item.get("content_original") or None,
                                     "content_translated": item.get("content_translated") or None,
-                                    "explanation": item.get("explanation") or None
+                                    "explanation": item.get("explanation") or None,
+                                    "confidence": confidence  # [NEW] 置信度
                                 }
                                 valid_items.append(valid_item)
                         elif isinstance(item, str):
@@ -1851,7 +2053,8 @@ class TranslationService:
                                     "content": item.strip(),
                                     "content_original": None,
                                     "content_translated": None,
-                                    "explanation": None
+                                    "explanation": None,
+                                    "confidence": "high"  # 旧格式默认高置信度
                                 })
                     
                     if valid_items:

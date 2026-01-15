@@ -205,43 +205,80 @@ class IngestionService:
         product = result.scalar_one_or_none()
         
         if product:
-            # 更新缺失的字段
-            if info.get("title") and not product.title:
-                product.title = info["title"]
+            # 🔧 [FIX] 智能更新字段：允许用更完整的数据覆盖占位数据
+            # 更新 title：如果新数据更长（说明更完整），就更新
+            if info.get("title"):
+                if not product.title or len(info["title"]) > len(product.title):
+                    product.title = info["title"]
+                    product.title_translated = None  # 清空翻译
             if info.get("image_url") and not product.image_url:
                 product.image_url = info["image_url"]
             if info.get("average_rating") is not None:
                 product.average_rating = str(info["average_rating"])
             if info.get("price") and not product.price:
                 product.price = info["price"]
-            if info.get("bullet_points") and not product.bullet_points:
+            # 🔧 [FIX] 智能更新 bullet_points：
+            # 1. 如果没有旧数据，直接使用新数据
+            # 2. 如果旧数据是占位数据（总字符数<100），用新数据覆盖
+            # 3. 如果新数据比旧数据内容更丰富（总字符数多2倍以上），用新数据覆盖
+            if info.get("bullet_points"):
                 bp = info["bullet_points"]
-                # 统一存储为 JSON 字符串格式
+                new_bp_json = None
+                
+                # 统一转换为 JSON 字符串格式
                 if isinstance(bp, list):
-                    product.bullet_points = json.dumps(bp, ensure_ascii=False)
+                    new_bp_json = json.dumps(bp, ensure_ascii=False)
                 elif isinstance(bp, str):
-                    # 验证是否为有效 JSON 数组
                     try:
                         parsed = json.loads(bp)
                         if isinstance(parsed, list):
-                            product.bullet_points = bp
+                            new_bp_json = bp
                         else:
-                            product.bullet_points = json.dumps([bp], ensure_ascii=False)
+                            new_bp_json = json.dumps([bp], ensure_ascii=False)
                     except json.JSONDecodeError:
-                        product.bullet_points = json.dumps([bp], ensure_ascii=False) if bp else None
-            # [NEW] 更新类目信息
-            if info.get("categories") and not product.categories:
+                        new_bp_json = json.dumps([bp], ensure_ascii=False) if bp else None
+                
+                if new_bp_json:
+                    should_update = False
+                    
+                    if not product.bullet_points:
+                        # 没有旧数据，直接使用新数据
+                        should_update = True
+                    else:
+                        # 判断旧数据是否是占位数据
+                        old_len = len(product.bullet_points)
+                        new_len = len(new_bp_json)
+                        
+                        # 占位数据判断：旧数据总长度 < 100 字符（如 '["Feature 1","Feature 2"]'）
+                        if old_len < 100:
+                            should_update = True
+                        # 新数据明显更丰富：是旧数据的 2 倍以上
+                        elif new_len > old_len * 2:
+                            should_update = True
+                    
+                    if should_update:
+                        product.bullet_points = new_bp_json
+                        # 清空翻译，等待重新翻译
+                        product.bullet_points_translated = None
+            # 🔧 [FIX] 智能更新类目信息：允许用更完整的数据覆盖
+            if info.get("categories"):
                 cats = info["categories"]
+                new_cats_json = None
+                
                 # 确保 categories 是 JSON 字符串格式
                 if isinstance(cats, list):
-                    product.categories = json.dumps(cats, ensure_ascii=False)
+                    new_cats_json = json.dumps(cats, ensure_ascii=False)
                 elif isinstance(cats, str):
                     try:
-                        # 验证是否为有效 JSON
                         json.loads(cats)
-                        product.categories = cats
+                        new_cats_json = cats
                     except json.JSONDecodeError:
                         pass
+                
+                if new_cats_json:
+                    # 如果没有旧数据，或新数据更丰富，就更新
+                    if not product.categories or len(new_cats_json) > len(product.categories):
+                        product.categories = new_cats_json
             self.db.flush()
             return product
         

@@ -398,6 +398,11 @@ celery_app.conf.update(
             "task": "app.worker.task_check_pending_translations",
             "schedule": 15.0,
         },
+        # 🛡️ 每 5 分钟运行补全巡检（最后一道防线，确保无遗漏）
+        "analysis-completion-patrol": {
+            "task": "app.worker.task_analysis_completion_patrol",
+            "schedule": 300.0,  # 5 分钟
+        },
     },
 )
 
@@ -1029,19 +1034,18 @@ def task_extract_insights(self, product_id: str):
         else:
             logger.info(f"产品暂无定义维度，使用通用洞察提取逻辑")
         
-        # [FIX] 先获取总评论数（已翻译的评论）
-        total_translated_result = db.execute(
+        # [UPDATED] 跨语言模式：获取总评论数（有原文的评论，不再依赖翻译）
+        total_reviews_result = db.execute(
             select(func.count(Review.id))
             .where(
                 and_(
                     Review.product_id == product_id,
-                    Review.translation_status == "completed",
-                    Review.body_translated.isnot(None),
+                    Review.body_original.isnot(None),  # [UPDATED] 只需有原文即可
                     Review.is_deleted == False
                 )
             )
         )
-        total_translated = total_translated_result.scalar() or 0
+        total_reviews = total_reviews_result.scalar() or 0
         
         # [FIX] 获取已有洞察的评论数（processed_items）
         already_processed_result = db.execute(
@@ -1061,13 +1065,13 @@ def task_extract_insights(self, product_id: str):
             db=db,
             product_id=product_id,
             task_type=TaskType.INSIGHTS.value,
-            total_items=total_translated,  # 总评论数（固定值）
+            total_items=total_reviews,  # [UPDATED] 总评论数（不再是已翻译数）
             celery_task_id=self.request.id
         )
         # 设置已处理数为当前已有洞察的评论数
         task_record.processed_items = already_processed
         db.commit()
-        logger.info(f"Task record: total_items={total_translated}, processed_items={already_processed}, remaining={total_translated - already_processed}")
+        logger.info(f"[跨语言洞察] Task record: total_items={total_reviews}, processed_items={already_processed}, remaining={total_reviews - already_processed}")
         
         # [FIX] 使用 NOT EXISTS 子查询排除已有洞察的评论，避免重复处理
         insight_exists_subquery = (
@@ -1076,14 +1080,13 @@ def task_extract_insights(self, product_id: str):
             .exists()
         )
         
-        # Get translated reviews that DON'T have insights yet - ordered by review_date to match page display order
+        # [UPDATED] 跨语言模式：获取有原文的评论（不再依赖翻译），排除已有洞察的评论
         result = db.execute(
             select(Review)
             .where(
                 and_(
                     Review.product_id == product_id,
-                    Review.translation_status == "completed",
-                    Review.body_translated.isnot(None),
+                    Review.body_original.isnot(None),  # [UPDATED] 只需有原文即可，不再依赖翻译
                     Review.is_deleted == False,
                     ~insight_exists_subquery  # [FIX] Only process reviews without insights
                 )
@@ -1106,16 +1109,16 @@ def task_extract_insights(self, product_id: str):
         BATCH_SIZE = PARALLEL_SIZE
         pending_insights = []  # 待提交的洞察列表
         
-        logger.info(f"Found {reviews_to_process} reviews remaining for insight extraction (total={total_translated}, already_done={already_processed})")
+        logger.info(f"[跨语言洞察] Found {reviews_to_process} reviews remaining for insight extraction (total={total_reviews}, already_done={already_processed})")
         logger.info(f"[并行优化-洞察] 使用 PARALLEL_SIZE={PARALLEL_SIZE} 并行处理, BATCH_SIZE={BATCH_SIZE} 批量入库")
         
-        # 定义单条评论的处理函数
+        # [UPDATED] 跨语言模式：只使用英文原文进行洞察提取
         def process_single_insight(review):
-            """并行处理单条评论的洞察提取"""
+            """并行处理单条评论的洞察提取（跨语言模式：英文输入→中文输出）"""
             try:
                 insights = translation_service.extract_insights(
                     original_text=review.body_original or "",
-                    translated_text=review.body_translated or "",
+                    # [UPDATED] 不再传入 translated_text，跨语言模式直接从原文提取
                     dimension_schema=dimension_schema
                 )
                 return {
@@ -1124,7 +1127,7 @@ def task_extract_insights(self, product_id: str):
                     "success": True
                 }
             except Exception as e:
-                logger.error(f"Failed to extract insights for review {review.id}: {e}")
+                logger.error(f"[跨语言洞察] Failed to extract insights for review {review.id}: {e}")
                 return {
                     "review_id": review.id,
                     "insights": None,
@@ -1146,27 +1149,61 @@ def task_extract_insights(self, product_id: str):
             
             # 处理结果
             for result in results:
-                if result["success"] and result["insights"]:
-                    for insight_data in result["insights"]:
-                        insight = ReviewInsight(
-                            review_id=result["review_id"],
-                            insight_type=insight_data.get('type', 'emotion'),
-                            quote=insight_data.get('quote', ''),
-                            quote_translated=insight_data.get('quote_translated'),
-                            analysis=insight_data.get('analysis', ''),
-                            dimension=insight_data.get('dimension')
-                        )
-                        pending_insights.append(insight)
-                    insights_extracted += len(result["insights"])
+                # [FIX 2026-01-15] 区分"成功但空结果"和"失败"
+                # 注意：洞察提取Prompt要求至少1个洞察，所以空结果理论上不应该发生
+                # 但如果发生，应该记录警告而不是当作失败
+                if result["success"]:
+                    insights = result.get("insights", [])
+                    if insights:  # 有洞察，正常处理
+                        for insight_data in insights:
+                            # [UPDATED 2026-01-15] 添加 confidence 字段支持
+                            confidence = insight_data.get('confidence', 'high')
+                            if confidence not in ('high', 'medium', 'low'):
+                                confidence = 'high'
+                            
+                            insight = ReviewInsight(
+                                review_id=result["review_id"],
+                                insight_type=insight_data.get('type', 'emotion'),
+                                quote=insight_data.get('quote', ''),
+                                quote_translated=insight_data.get('quote_translated'),
+                                analysis=insight_data.get('analysis', ''),
+                                dimension=insight_data.get('dimension'),
+                                confidence=confidence  # [NEW] 置信度
+                            )
+                            pending_insights.append(insight)
+                        insights_extracted += len(insights)
+                    else:
+                        # 成功但空结果（虽然Prompt要求至少1个，但AI可能返回空）
+                        logger.warning(f"[跨语言洞察] 评论 {result['review_id']} AI返回空洞察数组（不符合Prompt要求，但视为成功）")
                 else:
-                    # 标记为已处理（即使没有洞察或失败）
-                    empty_marker = ReviewInsight(
-                        review_id=result["review_id"],
-                        insight_type="_empty",
-                        quote="",
-                        analysis=""
-                    )
-                    pending_insights.append(empty_marker)
+                    # 🛡️ [FIX v3] 基于重试次数判断，避免无限循环
+                    from app.core.redis import get_sync_redis
+                    redis_client = get_sync_redis()
+                    review_id_str = str(result["review_id"])
+                    retry_key = f"insight_retry:{review_id_str}"
+                    
+                    # 增加失败计数
+                    retry_count = redis_client.incr(retry_key)
+                    redis_client.expire(retry_key, 86400)  # 24小时后过期
+                    
+                    if retry_count >= 3:
+                        # 已重试 3 次，AI 仍无法提取，标记为"已处理"
+                        review_obj = next((r for r in reviews if str(r.id) == review_id_str), None)
+                        review_text = review_obj.body_original[:100] if review_obj and review_obj.body_original else None
+                        
+                        empty_marker = ReviewInsight(
+                            review_id=result["review_id"],
+                            insight_type="_ai_no_content",
+                            quote=review_text or "",
+                            analysis=f"AI多次尝试后判定无法提取有意义洞察（重试{retry_count}次）"
+                        )
+                        pending_insights.append(empty_marker)
+                        redis_client.delete(retry_key)  # 清除计数
+                        logger.info(f"[跨语言洞察] ⏭️ 评论 {review_id_str} 重试{retry_count}次后AI判定无法提取，标记为已处理")
+                    else:
+                        # 未达到重试上限，允许下次重试
+                        error_msg = result.get("error", "Unknown error")
+                        logger.warning(f"[跨语言洞察] ⚠️ 评论 {review_id_str} 提取失败(第{retry_count}次): {error_msg}，将在下次任务中重试")
                 
                 processed += 1
             
@@ -1191,7 +1228,7 @@ def task_extract_insights(self, product_id: str):
             db.commit()
             logger.info(f"[并行入库] 最终提交 {len(pending_insights)} 条洞察")
         
-        logger.info(f"Insight extraction completed: processed {processed} new reviews (total={total_translated}, now_done={already_processed + processed}), {insights_extracted} insights extracted")
+        logger.info(f"[跨语言洞察] Insight extraction completed: processed {processed} new reviews (total={total_reviews}, now_done={already_processed + processed}), {insights_extracted} insights extracted")
         
         # 🚀 缓存失效 - 洞察提取完成后清除产品相关缓存
         if insights_extracted > 0:
@@ -1207,6 +1244,31 @@ def task_extract_insights(self, product_id: str):
             except Exception as cache_error:
                 logger.warning(f"[Cache] Failed to invalidate cache: {cache_error}")
         
+        # 🛡️ [NEW] 末尾补全检查：确保没有遗漏的评论
+        # 重新查询是否有遗漏（可能因为时序问题或处理失败）
+        final_check_result = db.execute(
+            select(func.count(Review.id))
+            .where(
+                and_(
+                    Review.product_id == product_id,
+                    Review.body_original.isnot(None),
+                    Review.is_deleted == False,
+                    ~insight_exists_subquery
+                )
+            )
+        )
+        remaining = final_check_result.scalar() or 0
+        
+        if remaining > 0:
+            logger.warning(f"[跨语言洞察] ⚠️ 发现 {remaining} 条遗漏评论，5秒后触发补全任务...")
+            # 短暂延迟后触发补全任务（避免立即递归导致资源争抢）
+            time.sleep(5)
+            task_extract_insights.apply_async(
+                args=[product_id],
+                countdown=10  # 10秒后执行，避免任务堆积
+            )
+            logger.info(f"[跨语言洞察] 🔄 补全任务已触发，将处理 {remaining} 条遗漏评论")
+        
         # [FIX] 更新 Task 状态为完成
         if task_record:
             task_record.status = TaskStatus.COMPLETED.value
@@ -1215,9 +1277,10 @@ def task_extract_insights(self, product_id: str):
         
         return {
             "product_id": product_id,
-            "total_reviews": total_translated,  # 修复：使用正确的变量名
+            "total_reviews": total_reviews,  # [UPDATED] 跨语言模式：总评论数（不再是已翻译数）
             "processed": processed,
-            "insights_extracted": insights_extracted
+            "insights_extracted": insights_extracted,
+            "remaining": remaining  # [NEW] 返回剩余未处理数
         }
         
     except Exception as e:
@@ -1336,8 +1399,8 @@ def task_extract_themes(self, product_id: str):
                     )
                     
                     if learned_labels:
-                        # 存入数据库
-                        for context_type in ["who", "where", "when", "why", "what"]:
+                        # 存入数据库（扩展版：buyer/user 替代 who）
+                        for context_type in ["buyer", "user", "who", "where", "when", "why", "what"]:
                             labels = learned_labels.get(context_type, [])
                             for item in labels:
                                 if isinstance(item, dict) and item.get("name"):
@@ -1384,7 +1447,7 @@ def task_extract_themes(self, product_id: str):
         else:
             logger.info(f"ℹ️ 未使用标签库，将使用开放提取模式")
         
-        # Get translated reviews that don't have theme highlights yet
+        # [UPDATED] 跨语言模式：获取有原文的评论（不再依赖翻译），排除已有主题的评论
         # Use a subquery to check for existing theme highlights
         theme_exists_subquery = (
             select(ReviewThemeHighlight.id)
@@ -1398,8 +1461,7 @@ def task_extract_themes(self, product_id: str):
             .where(
                 and_(
                     Review.product_id == product_id,
-                    Review.translation_status == "completed",
-                    Review.body_translated.isnot(None),
+                    Review.body_original.isnot(None),  # [UPDATED] 只需有原文即可，不再依赖翻译
                     Review.is_deleted == False,
                     ~theme_exists_subquery  # Reviews without theme highlights
                 )
@@ -1412,7 +1474,7 @@ def task_extract_themes(self, product_id: str):
         processed = 0
         themes_extracted = 0
         
-        logger.info(f"Found {total_reviews} translated reviews for theme extraction")
+        logger.info(f"[跨语言5W] Found {total_reviews} reviews for theme extraction (no translation required)")
         
         # [NEW] 创建/更新任务记录，启用心跳
         if total_reviews > 0:
@@ -1456,13 +1518,13 @@ def task_extract_themes(self, product_id: str):
         
         logger.info(f"[并行优化-主题] 使用 PARALLEL_SIZE={PARALLEL_SIZE} 并行处理, BATCH_SIZE={BATCH_SIZE} 批量入库")
         
-        # 定义单条评论的处理函数（闭包，捕获 context_schema）
+        # [UPDATED] 跨语言模式：只使用英文原文进行5W主题提取
         def process_single_theme(review):
-            """并行处理单条评论的主题提取"""
+            """并行处理单条评论的主题提取（跨语言模式：英文输入→中文输出）"""
             try:
                 themes = translation_service.extract_themes(
                     original_text=review.body_original or "",
-                    translated_text=review.body_translated or "",
+                    # [UPDATED] 不再传入 translated_text，跨语言模式直接从原文提取
                     context_schema=context_schema
                 )
                 return {
@@ -1471,7 +1533,7 @@ def task_extract_themes(self, product_id: str):
                     "success": True
                 }
             except Exception as e:
-                logger.error(f"Failed to extract themes for review {review.id}: {e}")
+                logger.error(f"[跨语言5W] Failed to extract themes for review {review.id}: {e}")
                 return {
                     "review_id": review.id,
                     "themes": None,
@@ -1494,43 +1556,92 @@ def task_extract_themes(self, product_id: str):
             # 处理结果
             batch_themes_count = 0
             for result in results:
-                if result["success"] and result["themes"]:
-                    for theme_type, items in result["themes"].items():
-                        if not items or len(items) == 0:
-                            continue
-                        
-                        for item in items:
-                            label_name = item.get("content", "").strip()
-                            quote = item.get("quote") or item.get("content_original") or None
-                            quote_translated = item.get("quote_translated") or item.get("content_translated") or None
-                            explanation = item.get("explanation") or None
-                            
-                            if not label_name:
+                # [FIX 2026-01-15] 区分"成功但空结果"和"失败"
+                # - success=True, themes={} → 成功但无主题（符合"有勇气说没有"规则），不创建记录
+                # - success=False → 真正的失败，需要重试
+                if result["success"]:
+                    # 成功：处理有主题的情况，空字典表示AI判定无主题，这是正确的
+                    themes = result.get("themes", {})
+                    if themes:  # 只有当themes非空时才处理
+                        for theme_type, items in themes.items():
+                            if not items or len(items) == 0:
                                 continue
                             
-                            context_label_id = label_id_map.get((theme_type, label_name))
-                            
-                            theme_highlight = ReviewThemeHighlight(
-                                review_id=result["review_id"],
-                                theme_type=theme_type,
-                                label_name=label_name,
-                                quote=quote,
-                                quote_translated=quote_translated,
-                                explanation=explanation,
-                                context_label_id=context_label_id,
-                                items=[item]
-                            )
-                            pending_themes.append(theme_highlight)
-                            batch_themes_count += 1
+                            for item in items:
+                                label_name = item.get("content", "").strip()
+                                quote = item.get("quote") or item.get("content_original") or None
+                                quote_translated = item.get("quote_translated") or item.get("content_translated") or None
+                                explanation = item.get("explanation") or None
+                                # [NEW 2026-01-15] 获取置信度
+                                confidence = item.get("confidence", "high")
+                                if confidence not in ("high", "medium", "low"):
+                                    confidence = "high"
+                                
+                                if not label_name:
+                                    continue
+                                
+                                context_label_id = label_id_map.get((theme_type, label_name))
+                                
+                                theme_highlight = ReviewThemeHighlight(
+                                    review_id=result["review_id"],
+                                    theme_type=theme_type,
+                                    label_name=label_name,
+                                    quote=quote,
+                                    quote_translated=quote_translated,
+                                    explanation=explanation,
+                                    confidence=confidence,  # [NEW] 置信度
+                                    context_label_id=context_label_id,
+                                    items=[item]
+                                )
+                                pending_themes.append(theme_highlight)
+                                batch_themes_count += 1
+                    else:
+                        # 🔥 [FIX 2026-01-15] themes为空字典，表示AI判定该评论无主题
+                        # 创建一个 skipped 类型的记录，避免被标记为"遗漏"而无限重试
+                        skipped_highlight = ReviewThemeHighlight(
+                            review_id=result["review_id"],
+                            theme_type="skipped",
+                            label_name="无主题",
+                            quote=None,
+                            quote_translated=None,
+                            explanation="AI判定该评论内容过短或无明确5W主题信息",
+                            confidence="high",
+                            context_label_id=None,
+                            items=[]
+                        )
+                        pending_themes.append(skipped_highlight)
+                        logger.debug(f"[跨语言5W] 评论 {result['review_id']} AI判定无主题，创建skipped标记")
                 else:
-                    # 标记为已处理
-                    empty_marker = ReviewThemeHighlight(
-                        review_id=result["review_id"],
-                        theme_type="_empty",
-                        label_name=None,
-                        items=None
-                    )
-                    pending_themes.append(empty_marker)
+                    # 🛡️ [FIX v3] 基于重试次数判断，避免无限循环
+                    # 使用 Redis 记录失败次数，超过 3 次就标记为"AI判定无法提取"
+                    from app.core.redis import get_sync_redis
+                    redis_client = get_sync_redis()
+                    review_id_str = str(result["review_id"])
+                    retry_key = f"theme_retry:{review_id_str}"
+                    
+                    # 增加失败计数
+                    retry_count = redis_client.incr(retry_key)
+                    redis_client.expire(retry_key, 86400)  # 24小时后过期
+                    
+                    if retry_count >= 3:
+                        # 已重试 3 次，AI 仍无法提取，标记为"已处理"
+                        review_obj = next((r for r in reviews if str(r.id) == review_id_str), None)
+                        review_text = review_obj.body_original[:100] if review_obj and review_obj.body_original else None
+                        
+                        empty_marker = ReviewThemeHighlight(
+                            review_id=result["review_id"],
+                            theme_type="skipped",
+                            label_name="_ai_no_content",
+                            quote=review_text,
+                            explanation=f"AI多次尝试后判定无法提取有意义主题（重试{retry_count}次）"
+                        )
+                        pending_themes.append(empty_marker)
+                        redis_client.delete(retry_key)  # 清除计数
+                        logger.info(f"[跨语言主题] ⏭️ 评论 {review_id_str} 重试{retry_count}次后AI判定无法提取，标记为已处理")
+                    else:
+                        # 未达到重试上限，允许下次重试
+                        error_msg = result.get("error", "Unknown error")
+                        logger.warning(f"[跨语言主题] ⚠️ 评论 {review_id_str} 提取失败(第{retry_count}次): {error_msg}，将在下次任务中重试")
                 
                 processed += 1
             
@@ -1558,6 +1669,39 @@ def task_extract_themes(self, product_id: str):
         
         logger.info(f"Theme extraction completed: {processed}/{total_reviews} reviews processed, {themes_extracted} theme entries created")
         
+        # 🔥 [NEW 2026-01-15] 同步更新 context_labels 的 count 值
+        # 根据 review_theme_highlights 表中的关联情况，更新统计数量
+        if themes_extracted > 0 and context_schema:
+            try:
+                from sqlalchemy import update as sql_update
+                
+                # 获取所有关联的 label 统计
+                count_result = db.execute(
+                    select(ReviewThemeHighlight.context_label_id, func.count(ReviewThemeHighlight.id))
+                    .join(Review, ReviewThemeHighlight.review_id == Review.id)
+                    .where(
+                        and_(
+                            Review.product_id == product_id,
+                            ReviewThemeHighlight.context_label_id.isnot(None)
+                        )
+                    )
+                    .group_by(ReviewThemeHighlight.context_label_id)
+                )
+                label_counts = {row[0]: row[1] for row in count_result.all()}
+                
+                # 批量更新 count 字段
+                if label_counts:
+                    for label_id, count in label_counts.items():
+                        db.execute(
+                            sql_update(ProductContextLabel)
+                            .where(ProductContextLabel.id == label_id)
+                            .values(count=count)
+                        )
+                    db.commit()
+                    logger.info(f"[5W标签同步] ✅ 已更新 {len(label_counts)} 个标签的 count 值")
+            except Exception as count_error:
+                logger.error(f"[5W标签同步] ❌ 更新 count 失败: {count_error}")
+        
         # 🚀 缓存失效 - 主题提取完成后清除产品相关缓存
         if themes_extracted > 0:
             try:
@@ -1572,6 +1716,31 @@ def task_extract_themes(self, product_id: str):
             except Exception as cache_error:
                 logger.warning(f"[Cache] Failed to invalidate cache: {cache_error}")
         
+        # 🛡️ [NEW] 末尾补全检查：确保没有遗漏的评论
+        # 重新查询是否有遗漏（可能因为时序问题或处理失败）
+        final_check_result = db.execute(
+            select(func.count(Review.id))
+            .where(
+                and_(
+                    Review.product_id == product_id,
+                    Review.body_original.isnot(None),
+                    Review.is_deleted == False,
+                    ~theme_exists_subquery
+                )
+            )
+        )
+        remaining = final_check_result.scalar() or 0
+        
+        if remaining > 0:
+            logger.warning(f"[跨语言主题] ⚠️ 发现 {remaining} 条遗漏评论，5秒后触发补全任务...")
+            # 短暂延迟后触发补全任务（避免立即递归导致资源争抢）
+            time.sleep(5)
+            task_extract_themes.apply_async(
+                args=[product_id],
+                countdown=10  # 10秒后执行，避免任务堆积
+            )
+            logger.info(f"[跨语言主题] 🔄 补全任务已触发，将处理 {remaining} 条遗漏评论")
+        
         # [NEW] 更新 Task 状态为完成
         if task_record:
             task_record.status = TaskStatus.COMPLETED.value
@@ -1583,7 +1752,8 @@ def task_extract_themes(self, product_id: str):
             "product_id": product_id,
             "total_reviews": total_reviews,
             "processed": processed,
-            "themes_extracted": themes_extracted
+            "themes_extracted": themes_extracted,
+            "remaining": remaining  # [NEW] 返回剩余未处理数
         }
         
     except Exception as e:
@@ -1724,15 +1894,13 @@ def task_ingest_translation_only(self, product_id: str):
         
         while True:
             # 🔒 获取待翻译评论（使用 PostgreSQL 行级锁）
+            # [FIXED] 只处理 pending 状态，不再自动重试 failed（避免内容审查失败无限循环）
             pending_result = db.execute(
                 select(Review)
                 .where(
                     and_(
                         Review.product_id == product_id,
-                        Review.translation_status.in_([
-                            TranslationStatus.PENDING.value,
-                            TranslationStatus.FAILED.value
-                        ]),
+                        Review.translation_status == TranslationStatus.PENDING.value,
                         Review.is_deleted == False
                     )
                 )
@@ -2013,7 +2181,8 @@ def task_scientific_learning_and_analysis(self, product_id: str):
             )
             
             if labels:
-                for context_type in ["who", "where", "when", "why", "what"]:
+                # [UPDATED 2026-01-14] 支持 buyer/user 拆分
+                for context_type in ["buyer", "user", "who", "where", "when", "why", "what"]:
                     type_labels = labels.get(context_type, [])
                     for item in type_labels:
                         if isinstance(item, dict) and item.get("name"):
@@ -2141,6 +2310,30 @@ def task_full_auto_analysis(self, product_id: str, task_id: str):
             logger.error(f"[全自动分析] 更新任务进度失败: {e}")
     
     try:
+        # ==========================================
+        # Step 0: 等待入库队列清空（确保所有评论都已入库）
+        # ==========================================
+        # 🛡️ 防护机制：避免因时序竞态导致评论遗漏
+        from app.core.redis import ReviewIngestionQueueSync, get_sync_redis
+        redis_cli = get_sync_redis()
+        queue = ReviewIngestionQueueSync(redis_cli)
+        
+        max_wait = 60  # 最多等待 60 秒
+        waited = 0
+        while waited < max_wait:
+            queue_len = queue.length()
+            if queue_len == 0:
+                logger.info("[全自动分析] ✅ 入库队列已清空，所有评论已入库")
+                break
+            logger.info(f"[全自动分析] ⏳ 等待入库队列清空... 剩余 {queue_len} 条")
+            time.sleep(5)
+            waited += 5
+        
+        # 额外等待 5 秒，确保数据库事务完全提交
+        if waited > 0:
+            logger.info("[全自动分析] ⏳ 等待事务提交...")
+            time.sleep(5)
+        
         # 获取产品信息
         product_result = db.execute(
             select(Product).where(Product.id == product_id)
@@ -2235,7 +2428,8 @@ def task_full_auto_analysis(self, product_id: str, task_id: str):
                     )
                     if labels:
                         labels_saved = 0
-                        for context_type in ["who", "where", "when", "why", "what"]:
+                        # [UPDATED 2026-01-14] 支持 buyer/user 拆分
+                        for context_type in ["buyer", "user", "who", "where", "when", "why", "what"]:
                             type_labels = labels.get(context_type, [])
                             for item in type_labels:
                                 if isinstance(item, dict) and item.get("name"):
@@ -2459,13 +2653,22 @@ def task_full_auto_analysis(self, product_id: str, task_id: str):
                     await async_db.commit()  # 确保提交
                     return result
             
-            # 运行异步函数
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
+            # 运行异步函数 - 修复事件循环问题
             try:
-                report_result = loop.run_until_complete(generate_report_async())
-            finally:
-                loop.close()
+                report_result = asyncio.run(generate_report_async())
+            except RuntimeError:
+                # 如果已有事件循环，使用备用方案
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                try:
+                    report_result = loop.run_until_complete(generate_report_async())
+                finally:
+                    pending = asyncio.all_tasks(loop)
+                    for task in pending:
+                        task.cancel()
+                    if pending:
+                        loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+                    loop.close()
             
             if report_result.get("success"):
                 report_id = report_result.get("report_id")
@@ -2533,15 +2736,13 @@ def task_check_pending_translations(self):
     
     try:
         # 查找有待翻译评论的产品（最多处理 5 个产品）
+        # [FIXED] 只检查 pending 状态，不再自动重试 failed 状态（避免无限循环）
         products_with_pending = db.execute(
             select(Product.id, func.count(Review.id).label("pending_count"))
             .join(Review, Review.product_id == Product.id)
             .where(
                 and_(
-                    Review.translation_status.in_([
-                        TranslationStatus.PENDING.value,
-                        TranslationStatus.FAILED.value
-                    ]),
+                    Review.translation_status == TranslationStatus.PENDING.value,
                     Review.is_deleted == False
                 )
             )
@@ -2582,7 +2783,157 @@ def task_check_pending_translations(self):
         db.close()
 
 
-# ============== [NEW] 任务9: 队列消费入库 ==============
+# ============== [NEW] 任务9: 异步报告生成 ==============
+
+@celery_app.task(bind=True, max_retries=2, default_retry_delay=30)
+def task_generate_report(self, product_id: str, report_type: str = "comprehensive"):
+    """
+    🚀 异步报告生成任务 (Async Report Generation)
+    
+    后台生成 AI 分析报告，用户可以离开页面，任务继续运行。
+    
+    参数：
+        product_id: 产品 UUID
+        report_type: 报告类型 (comprehensive/operations/product/supply_chain)
+    
+    返回：
+        生成结果，包含报告 ID
+    """
+    import asyncio
+    from app.services.summary_service import SummaryService
+    from app.models.task import Task, TaskType, TaskStatus
+    
+    logger.info(f"[报告生成] 开始为产品 {product_id} 生成 {report_type} 报告")
+    
+    # 报告进度 - 准备中
+    self.update_state(state='PROGRESS', meta={
+        'progress': 5,
+        'current_step': '准备中...'
+    })
+    
+    db = get_sync_db()
+    
+    try:
+        # 创建/更新任务记录
+        task_record = get_or_create_task(
+            db=db,
+            product_id=product_id,
+            task_type="report_generation",
+            total_items=1,
+            celery_task_id=self.request.id
+        )
+        task_record.status = TaskStatus.PROCESSING.value
+        db.commit()
+        
+        # 报告进度 - 开始生成
+        self.update_state(state='PROGRESS', meta={
+            'progress': 15,
+            'current_step': '正在收集评论数据...'
+        })
+        
+        # 异步生成报告 - 修复事件循环问题
+        # 在函数内部创建新的数据库引擎，避免使用全局的 async_session_maker
+        # 这样可以确保在正确的事件循环中创建连接
+        async def generate_report_async():
+            from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
+            from app.core.config import settings
+            
+            # 在函数内部创建新的引擎和会话，避免事件循环冲突
+            engine = create_async_engine(
+                settings.DATABASE_URL,
+                echo=False,
+                pool_pre_ping=True,
+                pool_size=5,
+                max_overflow=10,
+            )
+            async_session_maker = async_sessionmaker(
+                engine,
+                class_=AsyncSession,
+                expire_on_commit=False,
+            )
+            
+            try:
+                async with async_session_maker() as async_db:
+                    summary_service = SummaryService(async_db)
+                    # 报告进度 - 调用 AI
+                    self.update_state(state='PROGRESS', meta={
+                        'progress': 30,
+                        'current_step': 'AI 正在分析评论数据...'
+                    })
+                    result = await summary_service.generate_report(
+                        product_id=product_id,
+                        report_type=report_type,
+                        min_reviews=10,
+                        save_to_db=True
+                    )
+                    return result
+            finally:
+                # 关闭引擎，释放连接
+                await engine.dispose()
+        
+        # 运行异步任务
+        # 在 Celery worker 的 ForkPoolWorker 中，每个任务在独立进程中运行
+        # 应该没有事件循环，可以安全使用 asyncio.run()
+        try:
+            report_result = asyncio.run(generate_report_async())
+        except RuntimeError as e:
+            # 如果已有事件循环（理论上不应该发生），记录错误并重试
+            logger.error(f"[报告生成] 事件循环错误: {e}")
+            # 尝试创建新的事件循环
+            try:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                report_result = loop.run_until_complete(generate_report_async())
+            finally:
+                try:
+                    loop.close()
+                except:
+                    pass
+        
+        # 报告进度 - 保存结果
+        self.update_state(state='PROGRESS', meta={
+            'progress': 90,
+            'current_step': '正在保存报告...'
+        })
+        
+        # 更新任务状态
+        if report_result.get("success"):
+            task_record.status = TaskStatus.COMPLETED.value
+            task_record.processed_items = 1
+            report_data = report_result.get("report", {})
+            report_id = report_data.get("id") if isinstance(report_data, dict) else None
+            logger.info(f"[报告生成] 成功生成报告 {report_id}")
+        else:
+            task_record.status = TaskStatus.FAILED.value
+            task_record.error_message = report_result.get("error", "未知错误")
+            logger.error(f"[报告生成] 失败: {report_result.get('error')}")
+        
+        db.commit()
+        
+        return {
+            "success": report_result.get("success", False),
+            "product_id": product_id,
+            "report_type": report_type,
+            "report_id": report_data.get("id") if report_result.get("success") and isinstance(report_data, dict) else None,
+            "error": report_result.get("error") if not report_result.get("success") else None
+        }
+        
+    except Exception as e:
+        logger.error(f"[报告生成] 异常: {e}")
+        # 更新任务状态为失败
+        try:
+            if task_record:
+                task_record.status = TaskStatus.FAILED.value
+                task_record.error_message = str(e)
+                db.commit()
+        except:
+            pass
+        raise self.retry(exc=e)
+    finally:
+        db.close()
+
+
+# ============== [NEW] 任务10: 队列消费入库 ==============
 
 @celery_app.task(bind=True, max_retries=3, default_retry_delay=10)
 def task_process_ingestion_queue(self):
@@ -2695,5 +3046,204 @@ def task_sync_product_reviews_to_redis(asin: str):
     except Exception as e:
         logger.error(f"[Sync] 同步失败: {e}")
         return {"success": False, "error": str(e)}
+    finally:
+        db.close()
+
+
+# ============== [NEW] 定时任务：分析补全巡检 ==============
+
+@celery_app.task(bind=True)
+def task_analysis_completion_patrol(self):
+    """
+    🛡️ 分析补全巡检任务 (Analysis Completion Patrol)
+    
+    定期检查所有产品，找出有遗漏洞察/主题的评论，触发补全处理。
+    
+    这是"三层防护机制"的最后一道防线：
+    1. 第一层：入库队列等待（task_full_auto_analysis）
+    2. 第二层：任务末尾补全检查（task_extract_insights/themes）
+    3. 第三层：本任务 - 定时全局巡检
+    
+    运行频率：每 5 分钟
+    
+    检查逻辑：
+    1. 找出最近 24 小时内有评论的产品
+    2. 对每个产品检查是否有遗漏的洞察/主题
+    3. 如果有遗漏且没有正在运行的任务，触发补全
+    
+    设计原则：
+    - 轻量级：只检查活跃产品，不全表扫描
+    - 非侵入：只在确实需要时才触发补全
+    - 防重复：检查任务状态，避免重复触发
+    """
+    from app.models.product import Product
+    from app.models.review import Review
+    from app.models.insight import ReviewInsight
+    from app.models.theme_highlight import ReviewThemeHighlight
+    from app.models.task import Task, TaskType, TaskStatus
+    from datetime import datetime, timezone, timedelta
+    
+    logger.info("[巡检] 🔍 开始分析补全巡检...")
+    
+    db = get_sync_db()
+    
+    try:
+        # 找出最近 24 小时内有评论的产品
+        cutoff_time = datetime.now(timezone.utc) - timedelta(hours=24)
+        
+        active_products_result = db.execute(
+            select(Product.id, Product.asin)
+            .where(
+                Product.id.in_(
+                    select(Review.product_id)
+                    .where(Review.created_at >= cutoff_time)
+                    .distinct()
+                )
+            )
+        )
+        active_products = active_products_result.all()
+        
+        if not active_products:
+            logger.info("[巡检] ✅ 无活跃产品，跳过")
+            return {"checked": 0, "triggered": 0}
+        
+        logger.info(f"[巡检] 发现 {len(active_products)} 个活跃产品")
+        
+        triggered_insights = 0
+        triggered_themes = 0
+        
+        for product_id, asin in active_products:
+            product_id_str = str(product_id)
+            
+            # 检查是否有正在运行的分析任务
+            running_task_result = db.execute(
+                select(Task.id)
+                .where(
+                    and_(
+                        Task.product_id == product_id,
+                        Task.status.in_([TaskStatus.PENDING.value, TaskStatus.PROCESSING.value]),
+                        Task.task_type.in_([
+                            TaskType.INSIGHTS.value,
+                            TaskType.THEMES.value,
+                            TaskType.AUTO_ANALYSIS.value
+                        ])
+                    )
+                )
+                .limit(1)
+            )
+            if running_task_result.scalar_one_or_none():
+                logger.debug(f"[巡检] 产品 {asin} 有正在运行的任务，跳过")
+                continue
+            
+            # 🔧 [FIX] 先检查是否有维度和标签（科学学习的前置条件）
+            from app.models.product_dimension import ProductDimension
+            from app.models.product_context_label import ProductContextLabel
+            
+            dim_count_result = db.execute(
+                select(func.count(ProductDimension.id))
+                .where(ProductDimension.product_id == product_id)
+            )
+            has_dimensions = (dim_count_result.scalar() or 0) > 0
+            
+            label_count_result = db.execute(
+                select(func.count(ProductContextLabel.id))
+                .where(ProductContextLabel.product_id == product_id)
+            )
+            has_labels = (label_count_result.scalar() or 0) > 0
+            
+            # 检查遗漏的洞察
+            missing_insights_result = db.execute(
+                select(func.count(Review.id))
+                .where(
+                    and_(
+                        Review.product_id == product_id,
+                        Review.body_original.isnot(None),
+                        Review.is_deleted == False,
+                        ~Review.id.in_(
+                            select(ReviewInsight.review_id).distinct()
+                        )
+                    )
+                )
+            )
+            missing_insights = missing_insights_result.scalar() or 0
+            
+            # 检查遗漏的主题
+            missing_themes_result = db.execute(
+                select(func.count(Review.id))
+                .where(
+                    and_(
+                        Review.product_id == product_id,
+                        Review.body_original.isnot(None),
+                        Review.is_deleted == False,
+                        ~Review.id.in_(
+                            select(ReviewThemeHighlight.review_id).distinct()
+                        )
+                    )
+                )
+            )
+            missing_themes = missing_themes_result.scalar() or 0
+            
+            # 🔧 [FIX] 智能触发策略：
+            # 1. 如果没有维度或标签，触发完整流程（包含科学学习）
+            # 2. 如果已有维度和标签，只触发补全任务
+            if missing_insights > 0 or missing_themes > 0:
+                if not has_dimensions or not has_labels:
+                    # 没有维度或标签，触发完整流程（包含科学学习）
+                    logger.warning(f"[巡检] ⚠️ 产品 {asin} 缺少科学学习（维度:{has_dimensions}, 标签:{has_labels}），触发完整分析流程")
+                    # 创建任务记录
+                    from app.models.task import Task
+                    import uuid
+                    new_task_id = str(uuid.uuid4())
+                    new_task = Task(
+                        id=new_task_id,
+                        product_id=product_id,
+                        task_type=TaskType.AUTO_ANALYSIS.value,
+                        status=TaskStatus.PENDING.value,
+                        total_items=4  # 4个步骤
+                    )
+                    db.add(new_task)
+                    db.commit()
+                    
+                    # 触发完整分析（包含科学学习）
+                    task_full_auto_analysis.apply_async(
+                        args=[product_id_str, new_task_id],
+                        countdown=5
+                    )
+                    triggered_insights += 1
+                    triggered_themes += 1
+                else:
+                    # 已有维度和标签，只触发补全任务
+                    if missing_insights > 0:
+                        logger.warning(f"[巡检] ⚠️ 产品 {asin} 发现 {missing_insights} 条遗漏洞察，触发补全")
+                        task_extract_insights.apply_async(
+                            args=[product_id_str],
+                            countdown=5  # 5秒后执行
+                        )
+                        triggered_insights += 1
+                    
+                    if missing_themes > 0:
+                        logger.warning(f"[巡检] ⚠️ 产品 {asin} 发现 {missing_themes} 条遗漏主题，触发补全")
+                        task_extract_themes.apply_async(
+                            args=[product_id_str],
+                            countdown=10  # 10秒后执行，错开洞察任务
+                        )
+                        triggered_themes += 1
+        
+        result = {
+            "checked": len(active_products),
+            "triggered_insights": triggered_insights,
+            "triggered_themes": triggered_themes
+        }
+        
+        if triggered_insights > 0 or triggered_themes > 0:
+            logger.info(f"[巡检] 🔄 巡检完成，触发 {triggered_insights} 个洞察补全 + {triggered_themes} 个主题补全")
+        else:
+            logger.info(f"[巡检] ✅ 巡检完成，所有产品分析完整")
+        
+        return result
+        
+    except Exception as e:
+        logger.error(f"[巡检] ❌ 巡检失败: {e}")
+        return {"error": str(e)}
     finally:
         db.close()

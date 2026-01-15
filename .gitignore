@@ -47,3 +47,8 @@ htmlcov/
 build/
 *.egg-info/
 
+.playwright-mcp/
+*.sql.bak
+beta_users*.txt
+beta_users*.sql
+fix_*.sql

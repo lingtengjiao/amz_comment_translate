@@ -20,6 +20,7 @@ from app.api.reviews import products_router, tasks_router, system_router
 from app.api.analysis import router as analysis_router
 from app.api.auth import router as auth_router
 from app.api.user_projects import router as user_projects_router
+from app.api.keepa import router as keepa_router
 
 # Configure logging
 logging.basicConfig(
@@ -110,6 +111,7 @@ app.include_router(products_router, prefix="/api/v1")
 app.include_router(tasks_router, prefix="/api/v1")
 app.include_router(analysis_router, prefix="/api/v1")
 app.include_router(system_router, prefix="/api/v1")  # Worker 健康检查
+app.include_router(keepa_router, prefix="/api/v1")  # Keepa 时序数据接口
 
 
 # Error handlers

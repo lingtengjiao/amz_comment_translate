@@ -18,6 +18,7 @@ if TYPE_CHECKING:
     from app.models.product_context_label import ProductContextLabel
     from app.models.report import ProductReport
     from app.models.user_project import UserProject
+    from app.models.product_time_series import ProductTimeSeries
 
 
 class Product(Base):
@@ -111,6 +112,14 @@ class Product(Base):
         "UserProject",
         back_populates="product",
         cascade="all, delete-orphan"
+    )
+    
+    # Keepa 时序数据
+    time_series: Mapped["ProductTimeSeries"] = relationship(
+        "ProductTimeSeries",
+        back_populates="product",
+        cascade="all, delete-orphan",
+        uselist=False  # One-to-one relationship
     )
     
     def __repr__(self) -> str:

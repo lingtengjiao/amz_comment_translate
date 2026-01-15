@@ -30,7 +30,8 @@ import {
 } from './ui/dialog';
 import { Button } from './ui/button';
 import { 
-  generateReport, 
+  generateReportAsync,
+  getReportTaskStatus,
   getReportPreview,
   getReportHistory
 } from '@/api/service';
@@ -117,7 +118,7 @@ export const ProductReportDialog = memo(function ProductReportDialog({
   // 满足条件且数据有更新才能生成
   const canGenerate = meetsRequirements && !isDataUnchanged;
 
-  // 生成报告
+  // 🚀 异步生成报告（后台运行，可以离开页面）
   const handleGenerateReport = async () => {
     if (!canGenerate || isGenerating) return;
 
@@ -125,15 +126,58 @@ export const ProductReportDialog = memo(function ProductReportDialog({
     setError(null);
 
     try {
-      const response = await generateReport(asin, selectedReportType);
+      // 1. 触发异步任务
+      const startResponse = await generateReportAsync(asin, selectedReportType);
       
-      // 生成成功后，直接跳转到报告页面
-      if (response.report?.id) {
-        navigate(`/report/${asin}/${response.report.id}`);
-        onClose(); // 关闭弹窗
-      } else {
-        setError('报告生成失败：未返回报告ID');
+      if (!startResponse.success || !startResponse.task_id) {
+        throw new Error(startResponse.message || '启动报告生成失败');
       }
+      
+      const taskId = startResponse.task_id;
+      console.log('[报告生成] 任务已启动:', taskId);
+      
+      // 2. 轮询任务状态（支持后台运行）
+      const pollInterval = 2000; // 2秒
+      const maxAttempts = 90; // 最多 3 分钟
+      let attempts = 0;
+      
+      const pollStatus = async (): Promise<string | null> => {
+        while (attempts < maxAttempts) {
+          attempts++;
+          
+          try {
+            const statusResponse = await getReportTaskStatus(asin, taskId);
+            console.log('[报告生成] 状态:', statusResponse.status, `(${attempts}/${maxAttempts})`);
+            
+            if (statusResponse.status === 'completed') {
+              if (statusResponse.report_id) {
+                return statusResponse.report_id;
+              } else {
+                throw new Error('报告生成完成但未返回报告ID');
+              }
+            } else if (statusResponse.status === 'failed') {
+              throw new Error(statusResponse.error || '报告生成失败');
+            }
+            
+            // 继续等待
+            await new Promise(resolve => setTimeout(resolve, pollInterval));
+          } catch (pollError: any) {
+            // 网络错误时继续重试
+            console.warn('[报告生成] 轮询出错，继续重试:', pollError.message);
+            await new Promise(resolve => setTimeout(resolve, pollInterval));
+          }
+        }
+        throw new Error('报告生成超时，请稍后查看历史报告');
+      };
+      
+      const reportId = await pollStatus();
+      
+      // 3. 生成成功，跳转到报告页面（从详情页跳转，传递来源信息）
+      if (reportId) {
+        navigate(`/report/${asin}/${reportId}`, { state: { from: 'reader' } });
+        onClose();
+      }
+      
     } catch (err: any) {
       console.error('Failed to generate report:', err);
       setError(err.message || '报告生成失败');
@@ -142,15 +186,15 @@ export const ProductReportDialog = memo(function ProductReportDialog({
     }
   };
 
-  // 取消生成（简单重置状态）
+  // 取消生成（标记取消，但后台任务会继续运行）
   const handleCancelGeneration = () => {
     setIsGenerating(false);
-    setError(null);
+    setError('已取消等待，报告会在后台继续生成，稍后可在历史报告中查看');
   };
 
-  // 查看指定报告
+  // 查看指定报告（从详情页跳转，传递来源信息）
   const handleViewReport = (reportId: string) => {
-    navigate(`/report/${asin}/${reportId}`);
+    navigate(`/report/${asin}/${reportId}`, { state: { from: 'reader' } });
     onClose();
   };
 

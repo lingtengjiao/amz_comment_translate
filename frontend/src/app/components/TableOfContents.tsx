@@ -113,7 +113,7 @@ export const TableOfContents = memo(function TableOfContents({
 
   return (
     <div
-      className={`hidden xl:block fixed left-8 top-24 w-[260px] max-h-[calc(100vh-8rem)] overflow-y-auto z-40 transition-opacity duration-300 ${isDrawerOpen ? 'opacity-50 pointer-events-none' : 'opacity-100'} ${className}`}
+      className={`hidden xl:block fixed left-4 top-24 bottom-8 w-[200px] overflow-y-auto z-40 transition-opacity duration-300 ${isDrawerOpen ? 'opacity-50 pointer-events-none' : 'opacity-100'} ${className}`}
     >
       <div className="bg-white/90 dark:bg-gray-900/80 backdrop-blur-sm rounded-xl shadow-xl ring-1 ring-black/5 dark:ring-white/10 p-4">
         <h3 className="text-sm font-semibold text-gray-900 dark:text-white mb-3">

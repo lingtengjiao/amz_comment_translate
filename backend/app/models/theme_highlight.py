@@ -19,20 +19,32 @@ if TYPE_CHECKING:
 
 
 class ThemeType(str, Enum):
-    """[UPDATED] 5W 营销模型主题类型"""
-    WHO = "who"      # 人群/角色
+    """[UPDATED] 5W 营销模型主题类型（扩展版：Who 拆分为 Buyer + User）"""
+    WHO = "who"      # [DEPRECATED] 保留向后兼容
+    BUYER = "buyer"  # [NEW] 购买者身份（谁付钱）
+    USER = "user"    # [NEW] 使用者身份（谁使用）
     WHERE = "where"  # 地点/场景
     WHEN = "when"    # 时刻/时机
     WHY = "why"      # 购买动机 (Purchase Driver)
     WHAT = "what"    # 待办任务 (Jobs to be Done)
 
 
-# [UPDATED] 5W 主题配置
+# [UPDATED] 5W 主题配置 - 扩展版：Who 拆分为 Buyer + User
 THEME_CONFIG = {
-    ThemeType.WHO: {
-        "label": "Who（使用者/人群）",
+    ThemeType.BUYER: {
+        "label": "Buyer（购买者）",
         "color": "blue",
-        "description": "识别核心用户画像，如：独居老人、新手宝妈、宠物主、工程师等"
+        "description": "识别购买者身份（谁付钱），如：妈妈、送礼者、企业采购、丈夫给妻子买等"
+    },
+    ThemeType.USER: {
+        "label": "User（使用者）",
+        "color": "cyan",
+        "description": "识别实际使用者身份（谁使用），如：3岁幼儿、老人、员工、宠物主自己等"
+    },
+    ThemeType.WHO: {
+        "label": "Who（人群）",
+        "color": "blue",
+        "description": "[历史数据] 未区分购买者/使用者的人群标签"
     },
     ThemeType.WHERE: {
         "label": "Where（使用地点）",
@@ -123,6 +135,14 @@ class ReviewThemeHighlight(Base):
         comment="归类理由，如：评论明确提到买给奶奶"
     )
     
+    # [NEW 2026-01-15] 置信度 - 表示AI对该归类的确定程度
+    confidence: Mapped[str | None] = mapped_column(
+        String(20),
+        nullable=True,
+        default="high",
+        comment="置信度：high(明确证据)/medium(合理推断)/low(弱关联)"
+    )
+    
     # [NEW] 可选外键关联到 product_context_labels
     context_label_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
@@ -178,6 +198,7 @@ class ReviewThemeHighlight(Base):
             "quote": self.quote,
             "quote_translated": self.quote_translated,
             "explanation": self.explanation,
+            "confidence": self.confidence,
             "context_label_id": str(self.context_label_id) if self.context_label_id else None
         }
 

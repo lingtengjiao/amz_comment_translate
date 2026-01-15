@@ -4,7 +4,7 @@
  * 功能：点击标签评论数时，右侧滑出显示原始评论（包含原文和译文）
  */
 import { memo, useEffect, useState } from 'react';
-import { X, Star, ChevronDown, ChevronUp } from 'lucide-react';
+import { X, Star, ChevronDown, ChevronUp, AlertCircle, CheckCircle2, HelpCircle } from 'lucide-react';
 
 interface Review {
   id: string;
@@ -16,7 +16,34 @@ interface Review {
   body_original: string;
   body_translated?: string;
   verified_purchase: boolean;
+  confidence?: 'high' | 'medium' | 'low';  // 置信度
+  explanation?: string;  // 归类理由
 }
+
+/** 置信度配置 */
+const CONFIDENCE_CONFIG = {
+  high: {
+    label: '高置信',
+    description: '评论中有明确证据',
+    icon: CheckCircle2,
+    className: 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400',
+    iconClass: 'text-green-600 dark:text-green-400',
+  },
+  medium: {
+    label: '中置信',
+    description: '基于上下文合理推断',
+    icon: HelpCircle,
+    className: 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400',
+    iconClass: 'text-amber-600 dark:text-amber-400',
+  },
+  low: {
+    label: '低置信',
+    description: '证据较弱，仅供参考',
+    icon: AlertCircle,
+    className: 'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400',
+    iconClass: 'text-gray-500 dark:text-gray-400',
+  },
+} as const;
 
 interface CompareReviewSidebarProps {
   isOpen: boolean;
@@ -169,9 +196,9 @@ export const CompareReviewSidebar = memo(({
                     key={review.id}
                     className="bg-gray-50 dark:bg-gray-800/50 p-4 rounded-xl border border-gray-200 dark:border-gray-700"
                   >
-                    {/* 作者和评分 */}
+                    {/* 作者、评分和置信度 */}
                     <div className="flex items-center justify-between mb-2">
-                      <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-2 flex-wrap">
                         <span className="text-sm font-semibold text-gray-900 dark:text-gray-100">
                           {review.author}
                         </span>
@@ -180,8 +207,24 @@ export const CompareReviewSidebar = memo(({
                             ✓ 已验证购买
                           </span>
                         )}
+                        {/* 置信度标签 */}
+                        {review.confidence && (
+                          (() => {
+                            const config = CONFIDENCE_CONFIG[review.confidence] || CONFIDENCE_CONFIG.high;
+                            const Icon = config.icon;
+                            return (
+                              <span 
+                                className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-xs font-medium ${config.className}`}
+                                title={config.description}
+                              >
+                                <Icon className={`size-3 ${config.iconClass}`} />
+                                {config.label}
+                              </span>
+                            );
+                          })()
+                        )}
                       </div>
-                      <div className="flex items-center gap-1">
+                      <div className="flex items-center gap-1 flex-shrink-0">
                         {[...Array(5)].map((_, i) => (
                           <Star
                             key={i}
@@ -222,6 +265,18 @@ export const CompareReviewSidebar = memo(({
                     <div className="text-sm text-gray-700 dark:text-gray-300 leading-relaxed whitespace-pre-wrap mb-2">
                       {review.body_translated || review.body_original}
                     </div>
+                    
+                    {/* AI 归类理由 */}
+                    {review.explanation && (
+                      <div className="mb-2 px-3 py-2 bg-blue-50 dark:bg-blue-900/20 rounded-lg border border-blue-100 dark:border-blue-800">
+                        <div className="text-xs font-medium text-blue-600 dark:text-blue-400 mb-1">
+                          🤖 AI 归类理由
+                        </div>
+                        <div className="text-xs text-blue-700 dark:text-blue-300 leading-relaxed">
+                          {review.explanation}
+                        </div>
+                      </div>
+                    )}
                     
                     {/* 原文切换按钮 */}
                     {hasOriginal && (

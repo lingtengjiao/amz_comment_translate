@@ -22,17 +22,22 @@ export type SortOption = 'date-desc' | 'date-asc' | 'rating-desc' | 'rating-asc'
 
 // ============== 评论相关 ==============
 
-/** 评论深度解读 */
+/** 
+ * 评论深度解读 
+ * [UPDATED 2026-01-15] 添加 confidence 置信度字段
+ */
 export interface ReviewInsight {
   type: 'strength' | 'weakness' | 'suggestion' | 'scenario' | 'emotion';
   quote: string;           // 原文引用的片段（英文）
   quoteTranslated?: string; // 原文引用的片段（中文翻译）
   analysis: string;        // 深度解读
   dimension?: string;      // 产品维度：如"音质"、"价格"、"易用性"等
+  confidence?: 'high' | 'medium' | 'low';  // [NEW] 置信度：high(明确证据)/medium(合理推断)/low(弱关联)
 }
 
 /** 
  * [UPDATED] 主题内容项 - 带证据的可解释结构
+ * [UPDATED 2026-01-15] 添加 confidence 置信度字段
  */
 export interface ThemeItem {
   content: string;                     // 标签名称（如：老年人、卧室）
@@ -40,6 +45,7 @@ export interface ThemeItem {
   quote_translated?: string;           // [NEW] 原文证据翻译（中文）
   content_translated?: string;          // 翻译（可选，向后兼容）
   explanation?: string;                // 归类理由
+  confidence?: 'high' | 'medium' | 'low';  // [NEW] 置信度：high(明确证据)/medium(合理推断)/low(弱关联)
 }
 
 /** 评论主题高亮 */
@@ -275,27 +281,38 @@ export interface WebSocketMessage {
 // ============== 后端 API 响应类型（兼容现有后端） ==============
 
 /** 后端评论响应 */
-/** 后端 Insight 响应 */
+/** 
+ * 后端 Insight 响应 
+ * [UPDATED 2026-01-15] 添加 confidence 置信度字段
+ */
 export interface ApiInsight {
   type: string;
   quote: string;
   quote_translated: string | null;
   analysis: string;
   dimension: string | null;
+  confidence?: 'high' | 'medium' | 'low' | null;  // [NEW] 置信度
 }
 
-/** 后端主题内容项响应 */
+/** 
+ * 后端主题内容项响应 
+ * [UPDATED 2026-01-15] 添加 confidence 置信度字段
+ */
 export interface ApiThemeItem {
   content: string;                     // 标签名称
   content_original?: string | null;    // 原文证据（英文）
   quote_translated?: string | null;    // [NEW] 原文证据翻译（中文）
   content_translated?: string | null;  // 翻译（可选，向后兼容）
   explanation?: string | null;         // 归类理由
+  confidence?: 'high' | 'medium' | 'low' | null;  // [NEW] 置信度
 }
 
 /** 
  * [UPDATED] 后端主题高亮响应 - 5W 模型 + 带证据的可解释结构
  * 新结构：一条记录 = 一个标签
+ */
+/**
+ * [UPDATED 2026-01-15] 添加 confidence 置信度字段
  */
 export interface ApiThemeHighlight {
   theme_type: string;                 // who/where/when/why/what
@@ -303,20 +320,23 @@ export interface ApiThemeHighlight {
   quote?: string | null;              // [NEW] 原文证据（英文）
   quote_translated?: string | null;   // [NEW] 原文证据翻译（中文）
   explanation?: string | null;        // [NEW] 归类理由
+  confidence?: 'high' | 'medium' | 'low' | null;  // [NEW 2026-01-15] 置信度
   context_label_id?: string | null;   // [NEW] 关联的标签库ID
   items?: ApiThemeItem[] | null;      // [DEPRECATED] 旧版内容项列表，向后兼容
   keywords?: string[] | null;         // [DEPRECATED] 已废弃
 }
 
 /** 
- * [UPDATED] 5W 营销模型主题类型枚举
- * - who: 使用者/人群
+ * [UPDATED 2026-01-14] 5W 营销模型主题类型枚举 - 扩展版：Who 拆分为 Buyer + User
+ * - buyer: 购买者身份（谁付钱）- [NEW]
+ * - user: 使用者身份（谁使用）- [NEW]
+ * - who: 人群（向后兼容旧数据）
  * - where: 使用地点/场景  
  * - when: 使用时刻/时机
  * - why: 购买动机 (Purchase Driver)
  * - what: 待办任务 (Jobs to be Done)
  */
-export type ThemeTypeId = 'who' | 'where' | 'when' | 'why' | 'what';
+export type ThemeTypeId = 'buyer' | 'user' | 'who' | 'where' | 'when' | 'why' | 'what';
 
 export interface ApiReview {
   id: string;
@@ -516,9 +536,11 @@ export interface InsightChartData {
   emotion: ChartDataItem[] | StatsCategoryData;
 }
 
-/** 5W Context 数据 (ECharts 格式) - 支持新旧两种格式 */
+/** 5W Context 数据 (ECharts 格式) - 扩展版：Who 拆分为 Buyer + User */
 export interface ContextChartData {
-  who: ChartDataItem[] | StatsCategoryData;
+  buyer?: ChartDataItem[] | StatsCategoryData;  // [NEW] 购买者
+  user?: ChartDataItem[] | StatsCategoryData;   // [NEW] 使用者
+  who?: ChartDataItem[] | StatsCategoryData;    // [DEPRECATED] 向后兼容
   where: ChartDataItem[] | StatsCategoryData;
   when: ChartDataItem[] | StatsCategoryData;
   why: ChartDataItem[] | StatsCategoryData;
@@ -672,50 +694,78 @@ export interface UsageContextSupplyChain {
 
 /** 综合战略版报告内容 */
 export interface ComprehensiveReportContent {
-  user_profile?: UserProfileComprehensive;
-  strategic_verdict: string;
-  market_fit_analysis: string;
+  // 新格式：数组 [{aspect, insight, evidence, confidence}]
+  user_profile?: UserProfileComprehensive | Array<{ aspect?: string; insight?: string; evidence?: unknown[]; confidence?: string }>;
+  // 可能是字符串或数组
+  strategic_verdict: string | Array<{ verdict?: string; insight?: string; evidence?: unknown[]; confidence?: string }>;
+  // 新格式：数组 [{insight, evidence, confidence, analysis}]
+  market_fit_analysis: string | Array<{ insight?: string; analysis?: string; evidence?: unknown[]; confidence?: string }>;
   core_swot: {
-    strengths: string[];
-    weaknesses: string[];
-    opportunities: string[];
-    threats: string[];
+    strengths: Array<string | { point?: string; evidence?: unknown[]; confidence?: string }>;
+    weaknesses: Array<string | { point?: string; evidence?: unknown[]; confidence?: string }>;
+    opportunities: Array<string | { point?: string; evidence?: unknown[]; confidence?: string }>;
+    threats: Array<string | { point?: string; evidence?: unknown[]; confidence?: string }>;
   };
+  // 新格式：可能是数组
   department_directives: {
-    to_marketing: string;
-    to_product: string;
-    to_supply_chain: string;
-  };
-  priority_actions?: Array<{ action: string; owner: string; deadline: string }>;
-  risk_level?: 'low' | 'medium' | 'high' | 'critical';
+    to_marketing?: string;
+    to_product?: string;
+    to_supply_chain?: string;
+  } | Array<{ department?: string; to?: string; directive?: string; action?: string; evidence?: unknown[]; confidence?: string }>;
+  priority_actions?: Array<{ action?: string; task?: string; owner?: string; deadline?: string; priority?: string; evidence?: unknown[]; confidence?: string }>;
+  risk_level?: 'low' | 'medium' | 'high' | 'critical' | string;
 }
 
 /** 运营市场版报告内容 */
 export interface OperationsReportContent {
-  user_profile?: UserProfileOperations;
-  executive_summary: string;
-  selling_points: Array<{ title: string; copywriting: string; source_strength: string }>;
-  marketing_risks: string[];
+  // 新格式：数组 [{tag, description, evidence, confidence}]
+  user_profile?: UserProfileOperations | Array<{ tag?: string; description?: string; evidence?: unknown[]; confidence?: string }>;
+  // 新格式：数组 [{insight, evidence, confidence}]
+  executive_summary: string | Array<{ insight?: string; summary?: string; evidence?: unknown[]; confidence?: string; comparison?: string }>;
+  // 新格式：[{point, evidence, confidence}]
+  selling_points: Array<{ title?: string; point?: string; copywriting?: string; source_strength?: string; evidence?: unknown[]; confidence?: string }>;
+  // 新格式：[{risk, talking_points, evidence, confidence}]
+  marketing_risks: string[] | Array<{ risk?: string; issue?: string; talking_points?: string; evidence?: unknown[]; confidence?: string }>;
+  // 可能是对象或数组
   target_audience: {
-    who: string[];
-    scenario: string[];
-    strategy: string;
-  };
-  competitor_analysis: string;
-  listing_optimization?: Array<{ element: string; suggestion: string }>;
-  review_response_templates?: Array<{ pain_point: string; response: string }>;
+    who?: string[];
+    scenario?: string[];
+    strategy?: string;
+  } | Array<{ segment?: string; audience?: string; who?: string; strategy?: string; evidence?: unknown[]; confidence?: string }>;
+  // 新格式：可能是数组
+  competitor_analysis: string | Array<{ analysis?: string; insight?: string; point?: string; evidence?: unknown[]; confidence?: string }>;
+  listing_optimization?: Array<{ element?: string; suggestion?: string; optimization?: string; evidence?: unknown[]; confidence?: string }>;
+  review_response_templates?: Array<{ pain_point?: string; issue?: string; response?: string; template?: string; evidence?: unknown[]; confidence?: string }>;
 }
 
 /** 产品研发版报告内容 */
 export interface ProductReportContent {
-  user_research?: UserResearchProduct;
-  quality_score: number;
-  critical_bugs: Array<{ issue: string; severity: string; root_cause_guess?: string; suggestion: string }>;
-  unmet_needs: string[];
-  usage_context_gap: string;
-  roadmap_suggestion: string;
-  usability_issues?: Array<{ issue: string; user_group: string; suggestion: string }>;
-  design_recommendations?: Array<{ area: string; current_state: string; recommendation: string }>;
+  // 新格式：数组，每项有 insight, evidence, confidence
+  user_research?: UserResearchProduct | Array<{ insight?: string; evidence?: unknown[]; confidence?: string }>;
+  // 新格式：对象 { score, reasons }
+  quality_score: number | { score?: number; reasons?: Array<{ issue?: string; evidence?: unknown[]; confidence?: string }> };
+  // 新格式：每项有 bug, impact, evidence, confidence 等
+  critical_bugs: Array<{ 
+    issue?: string; 
+    bug?: string;
+    severity?: string; 
+    impact?: string;
+    root_cause_guess?: string; 
+    suggestion?: string;
+    related_jtbd?: string;
+    user_segments?: string[];
+    usage_scenarios?: string[];
+    evidence?: unknown[];
+    confidence?: string;
+  }>;
+  // 新格式：每项有 need, evidence, confidence, rationale
+  unmet_needs: string[] | Array<{ need?: string; feature?: string; evidence?: unknown[]; confidence?: string; rationale?: string; reason?: string }>;
+  // 可能是字符串或数组
+  usage_context_gap: string | Array<{ gap?: string; evidence?: unknown[]; confidence?: string }>;
+  // 新格式：数组，每项有 suggestion, impact, evidence, confidence, priority
+  roadmap_suggestion: string | Array<{ suggestion?: string; impact?: string; evidence?: unknown[]; confidence?: string; priority?: string }>;
+  usability_issues?: Array<{ issue?: string; user_group?: string; suggestion?: string; evidence?: unknown[]; confidence?: string }>;
+  design_recommendations?: Array<{ area?: string; recommendation?: string; current_state?: string; impact?: string; evidence?: unknown[]; confidence?: string }>;
 }
 
 /** 供应链版报告内容 */
@@ -846,9 +896,11 @@ export interface LabelDescItem {
   is_inferred?: boolean;  // 是否为AI智能推断（无原始评论关联）
 }
 
-/** 5W 用户画像 */
+/** 5W 用户画像 - 扩展版：Who 拆分为 Buyer + User */
 export interface FiveWProfile {
-  who: LabelDescItem[];
+  buyer?: LabelDescItem[];  // [NEW] 购买者身份
+  user?: LabelDescItem[];   // [NEW] 使用者身份
+  who?: LabelDescItem[];    // [DEPRECATED] 向后兼容旧数据
   when: LabelDescItem[];
   where: LabelDescItem[];
   why: LabelDescItem[];

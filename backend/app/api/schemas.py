@@ -35,6 +35,18 @@ class TaskStatus(str, Enum):
     FAILED = "failed"
 
 
+class WorkflowMode(str, Enum):
+    """
+    工作流模式枚举 (Workflow Mode)
+    
+    用于区分用户选择的两种采集模式：
+    - ONE_STEP_INSIGHT: 一步到位 - 采集→翻译→学习→洞察→报告（全自动）
+    - TRANSLATE_ONLY: 只翻译 - 采集→翻译，用户稍后手动触发分析
+    """
+    ONE_STEP_INSIGHT = "one_step_insight"  # 一步到位：自动完成全部分析
+    TRANSLATE_ONLY = "translate_only"       # 只翻译：等待用户手动触发分析
+
+
 # ============== Review Schemas ==============
 
 class ReviewRawData(BaseModel):
@@ -109,12 +121,16 @@ class InsightType(str, Enum):
 
 
 class ReviewInsightResponse(BaseModel):
-    """Single insight response"""
+    """
+    Single insight response
+    [UPDATED 2026-01-15] 添加 confidence 置信度字段
+    """
     type: InsightType
     quote: str                          # 原文引用片段
     quote_translated: Optional[str]     # 引用片段翻译
     analysis: str                       # 深度解读（中文）
     dimension: Optional[str] = None     # 产品维度
+    confidence: Optional[str] = "high"  # [NEW] 置信度：high/medium/low
     
     model_config = ConfigDict(from_attributes=True)
 
