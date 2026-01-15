@@ -137,8 +137,8 @@ class APIRateLimiter:
     
     策略：
     - 使用 Redis 滑动窗口计数
-    - qwen-plus-latest: 15,000 RPM = 250 RPS
-    - 安全上限: 250 * 0.8 = 200 RPS（留 20% 余量）
+    - qwen-plus-latest: 40,000 RPM = 666 RPS
+    - 安全上限: 666 * 0.75 = 500 RPS（留 25% 余量）
     - 支持分布式部署（多服务器共享 Redis 限流）
     - 超过限制时，随机退避 0.05-0.2 秒
     """
@@ -197,9 +197,9 @@ class APIRateLimiter:
 redis_client = redis.from_url(settings.REDIS_URL, decode_responses=True)
 
 # 全局限流器实例
-# qwen-plus-latest: 15,000 RPM = 250 RPS，安全上限 200 RPS
+# qwen-plus-latest: 40,000 RPM = 666 RPS，安全上限 500 RPS（留 25% 余量）
 import os
-MAX_API_RPS = int(os.environ.get('MAX_API_RPS', '200'))
+MAX_API_RPS = int(os.environ.get('MAX_API_RPS', '500'))
 api_limiter = APIRateLimiter(redis_client, max_qps=MAX_API_RPS)
 
 def rate_limited_api(api_name="qwen"):
@@ -1102,7 +1102,7 @@ def task_extract_insights(self, product_id: str):
         # 🚀 并行协程优化：使用 gevent pool 并行调用 AI API
         # 支持环境变量配置，服务器 B 可以使用更高的值
         import os
-        PARALLEL_SIZE = int(os.environ.get('INSIGHT_PARALLEL_SIZE', '60'))  # 默认 60，可通过环境变量调整
+        PARALLEL_SIZE = int(os.environ.get('INSIGHT_PARALLEL_SIZE', '120'))  # 40K RPM 优化：60→120
         
         # 🔥 [OPTIMIZED] BATCH_SIZE = PARALLEL_SIZE，充分利用并行池
         # 之前 BATCH_SIZE=20 限制了真实并发，现在与 PARALLEL_SIZE 同步
@@ -1509,7 +1509,7 @@ def task_extract_themes(self, product_id: str):
         # 🚀 并行协程优化：使用 gevent pool 并行调用 AI API
         # 支持环境变量配置，服务器 B 可以使用更高的值
         import os
-        PARALLEL_SIZE = int(os.environ.get('THEME_PARALLEL_SIZE', '80'))  # 默认 80，可通过环境变量调整
+        PARALLEL_SIZE = int(os.environ.get('THEME_PARALLEL_SIZE', '150'))  # 40K RPM 优化：80→150
         
         # 🔥 [OPTIMIZED] BATCH_SIZE = PARALLEL_SIZE，充分利用并行池
         # 之前 BATCH_SIZE=20 限制了真实并发，现在与 PARALLEL_SIZE 同步
