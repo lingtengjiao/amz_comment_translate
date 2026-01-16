@@ -664,6 +664,8 @@ export async function getReportTaskStatus(
   report_id?: string;
   success?: boolean;
   error?: string;
+  progress?: number;
+  current_step?: string;
 }> {
   const response = await fetch(`${API_BASE}/products/${asin}/report/task/${taskId}`);
   if (!response.ok) {

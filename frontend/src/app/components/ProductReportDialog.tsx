@@ -66,6 +66,36 @@ export const ProductReportDialog = memo(function ProductReportDialog({
   const [error, setError] = useState<string | null>(null);
   const [selectedReportType, setSelectedReportType] = useState<ReportType>('comprehensive');
   const [isDataUnchanged, setIsDataUnchanged] = useState(false); // 数据是否未更新
+  const [generatingProgress, setGeneratingProgress] = useState(0); // 后端真实进度
+  const [generatingStep, setGeneratingStep] = useState('准备中...'); // 当前步骤
+  const [displayProgress, setDisplayProgress] = useState(0); // 显示进度（含平滑）
+
+  // 进度平滑过渡：当后端进度在 30%-90% 之间时，前端缓慢增长避免卡顿感
+  useEffect(() => {
+    // 当后端进度更新时，同步到显示进度
+    if (generatingProgress > displayProgress) {
+      setDisplayProgress(generatingProgress);
+    }
+    
+    // 当后端进度在 30-85 之间时，启动平滑增长
+    if (isGenerating && generatingProgress >= 30 && generatingProgress < 90) {
+      const interval = setInterval(() => {
+        setDisplayProgress(prev => {
+          // 缓慢增长，最高到 88%，给最后完成留空间
+          if (prev < 88 && prev >= generatingProgress) {
+            return prev + 0.5; // 每秒增长 0.5%
+          }
+          return prev;
+        });
+      }, 1000);
+      return () => clearInterval(interval);
+    }
+    
+    // 重置：当不在生成状态时，重置显示进度
+    if (!isGenerating) {
+      setDisplayProgress(0);
+    }
+  }, [isGenerating, generatingProgress]);
 
   // 加载预览数据
   useEffect(() => {
@@ -123,6 +153,8 @@ export const ProductReportDialog = memo(function ProductReportDialog({
     if (!canGenerate || isGenerating) return;
 
     setIsGenerating(true);
+    setGeneratingProgress(0);
+    setGeneratingStep('准备中...');
     setError(null);
 
     try {
@@ -147,7 +179,15 @@ export const ProductReportDialog = memo(function ProductReportDialog({
           
           try {
             const statusResponse = await getReportTaskStatus(asin, taskId);
-            console.log('[报告生成] 状态:', statusResponse.status, `(${attempts}/${maxAttempts})`);
+            console.log('[报告生成] 状态:', statusResponse.status, '进度:', statusResponse.progress, `(${attempts}/${maxAttempts})`);
+            
+            // 更新真实进度
+            if (statusResponse.progress !== undefined) {
+              setGeneratingProgress(statusResponse.progress);
+            }
+            if (statusResponse.current_step) {
+              setGeneratingStep(statusResponse.current_step);
+            }
             
             if (statusResponse.status === 'completed') {
               if (statusResponse.report_id) {
@@ -460,16 +500,17 @@ export const ProductReportDialog = memo(function ProductReportDialog({
                   AI 正在撰写 {REPORT_TYPE_CONFIG[selectedReportType].label}...
                 </p>
                 <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
-                  {REPORT_TYPE_CONFIG[selectedReportType].description}
+                  {generatingStep}
                 </p>
                 <p className="text-xs text-gray-400 dark:text-gray-500 mt-2">
-                  预计需要 30-60 秒，请耐心等待
+                  {displayProgress > 0 ? `${Math.round(displayProgress)}%` : '准备中...'}
                 </p>
               </div>
               <div className="w-64 h-2 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden">
-                <div className="h-full bg-gradient-to-r from-rose-500 to-pink-500 rounded-full animate-progress" style={{
-                  animation: 'progress 30s ease-in-out forwards'
-                }} />
+                <div
+                  className="h-full bg-gradient-to-r from-rose-500 to-pink-500 rounded-full transition-all duration-500 ease-out"
+                  style={{ width: `${Math.max(displayProgress, 5)}%` }}
+                />
               </div>
               <Button
                 variant="outline"
@@ -535,18 +576,6 @@ export const ProductReportDialog = memo(function ProductReportDialog({
           </div>
         </div>
 
-        {/* 进度条动画 CSS */}
-        <style>{`
-          @keyframes progress {
-            0% { width: 0%; }
-            10% { width: 15%; }
-            30% { width: 40%; }
-            50% { width: 60%; }
-            70% { width: 75%; }
-            90% { width: 90%; }
-            100% { width: 95%; }
-          }
-        `}</style>
       </DialogContent>
     </Dialog>
   );

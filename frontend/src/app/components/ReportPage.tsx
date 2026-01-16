@@ -248,8 +248,9 @@ function ReportPageInner() {
   const [copied, setCopied] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
   const [generatingReportType, setGeneratingReportType] = useState<ReportType>('comprehensive');
-  const [generatingProgress, setGeneratingProgress] = useState(0); // 真实生成进度
+  const [generatingProgress, setGeneratingProgress] = useState(0); // 后端真实进度
   const [generatingStep, setGeneratingStep] = useState('准备中...'); // 当前步骤
+  const [displayProgress, setDisplayProgress] = useState(0); // 显示进度（含平滑）
   const [showTypeSelector, setShowTypeSelector] = useState(false);
   const [isDrawerOpen, setIsDrawerOpen] = useState(false); // 证据抽屉是否打开
   const [isFullscreen, setIsFullscreen] = useState(false); // 沉浸模式状态
@@ -284,6 +285,33 @@ function ReportPageInner() {
   const closeReviewSidebar = useCallback(() => {
     setReviewSidebar(prev => ({ ...prev, isOpen: false }));
   }, []);
+  
+  // 进度平滑过渡：当后端进度在 30%-90% 之间时，前端缓慢增长避免卡顿感
+  useEffect(() => {
+    // 当后端进度更新时，同步到显示进度
+    if (generatingProgress > displayProgress) {
+      setDisplayProgress(generatingProgress);
+    }
+    
+    // 当后端进度在 30-85 之间时，启动平滑增长
+    if (isGenerating && generatingProgress >= 30 && generatingProgress < 90) {
+      const interval = setInterval(() => {
+        setDisplayProgress(prev => {
+          // 缓慢增长，最高到 88%，给最后完成留空间
+          if (prev < 88 && prev >= generatingProgress) {
+            return prev + 0.5; // 每秒增长 0.5%
+          }
+          return prev;
+        });
+      }, 1000);
+      return () => clearInterval(interval);
+    }
+    
+    // 重置：当不在生成状态时，重置显示进度
+    if (!isGenerating) {
+      setDisplayProgress(0);
+    }
+  }, [isGenerating, generatingProgress]);
   
   // 判断当前报告是否为 JSON 格式
   const isJsonReport = useMemo(() => {
@@ -816,36 +844,11 @@ function ReportPageInner() {
     );
   }
   
-  // 生成中状态
-  if (isGenerating) {
-    const typeConfig = REPORT_TYPE_CONFIG[generatingReportType];
-    return (
-      <div className="min-h-screen bg-gray-50 dark:bg-gray-900 flex items-center justify-center">
-        <div className="text-center">
-          <div className="relative inline-block">
-            <Loader2 className="size-16 text-rose-500 animate-spin" />
-            <span className="text-3xl absolute -top-2 -right-2">{typeConfig.icon}</span>
-          </div>
-          <p className="mt-6 text-xl font-medium text-gray-900 dark:text-white">
-            AI 正在撰写 {typeConfig.label}...
-          </p>
-          <p className="mt-2 text-gray-500 dark:text-gray-400">{generatingStep}</p>
-          <p className="mt-1 text-sm text-gray-400 dark:text-gray-500">
-            {generatingProgress > 0 ? `${Math.round(generatingProgress)}%` : '准备中...'}
-          </p>
-          <div className="mt-6 w-64 h-3 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden mx-auto">
-            <div 
-              className="h-full bg-gradient-to-r from-rose-500 to-pink-500 rounded-full transition-all duration-500 ease-out"
-              style={{ width: `${Math.max(generatingProgress, 5)}%` }}
-            />
-          </div>
-        </div>
-      </div>
-    );
-  }
+  // 生成中状态 - 不再全屏遮挡，改为顶部进度条
+  const generatingTypeConfig = REPORT_TYPE_CONFIG[generatingReportType];
   
-  // 错误状态
-  if (error && !report) {
+  // 错误状态（生成中时不显示错误页面）
+  if (error && !report && !isGenerating) {
     return (
       <div className="min-h-screen bg-gray-50 dark:bg-gray-900 flex items-center justify-center p-4">
         <div className="max-w-md text-center">
@@ -1058,7 +1061,7 @@ function ReportPageInner() {
                   {(report?.analysis_data?.total_reviews || (report?.analysis_data as any)?.meta?.total_reviews) && (
                     <span className="flex items-center gap-1">
                       <BarChart3 className="size-3" />
-                      基于 {report.analysis_data?.total_reviews || (report.analysis_data as any)?.meta?.total_reviews} 条评论
+                      基于 {report?.analysis_data?.total_reviews || (report?.analysis_data as any)?.meta?.total_reviews} 条评论
                     </span>
                   )}
                   <span className="px-1.5 py-0.5 bg-rose-100 dark:bg-rose-900/30 text-rose-700 dark:text-rose-400 rounded text-xs">
@@ -1124,6 +1127,32 @@ function ReportPageInner() {
               {isFullscreen ? <Minimize2 className="size-4" /> : <Maximize2 className="size-4" />}
               沉浸
             </Button>
+            {/* 生成中显示进度，否则显示生成按钮 */}
+            {isGenerating ? (
+              <div className="flex items-center gap-3 px-3 py-1.5 bg-gradient-to-r from-rose-50 to-pink-50 dark:from-rose-900/20 dark:to-pink-900/20 rounded-lg border border-rose-200 dark:border-rose-800">
+                <div className="flex items-center gap-2">
+                  <Loader2 className="size-4 text-rose-500 animate-spin" />
+                  <span className="text-xl">{generatingTypeConfig.icon}</span>
+                </div>
+                <div className="flex flex-col">
+                  <span className="text-xs font-medium text-gray-700 dark:text-gray-300">
+                    正在生成 {generatingTypeConfig.label}
+                  </span>
+                  <span className="text-xs text-gray-500 dark:text-gray-400">{generatingStep}</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <div className="w-24 h-1.5 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden">
+                    <div 
+                      className="h-full bg-gradient-to-r from-rose-500 to-pink-500 rounded-full transition-all duration-500 ease-out"
+                      style={{ width: `${Math.max(displayProgress, 5)}%` }}
+                    />
+                  </div>
+                  <span className="text-xs font-medium text-rose-600 dark:text-rose-400 w-8">
+                    {Math.round(displayProgress)}%
+                  </span>
+                </div>
+              </div>
+            ) : (
             <div className="relative">
               <Button
                 variant="default"
@@ -1164,6 +1193,7 @@ function ReportPageInner() {
                 </div>
               )}
             </div>
+            )}
           </div>
         </div>
         

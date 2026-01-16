@@ -1016,6 +1016,7 @@ def task_extract_insights(self, product_id: str):
     
     try:
         # [NEW] 获取产品的维度 Schema（如果有的话）
+        # [UPDATED 2026-01-16] 支持3类维度体系
         dimension_result = db.execute(
             select(ProductDimension)
             .where(ProductDimension.product_id == product_id)
@@ -1023,14 +1024,58 @@ def task_extract_insights(self, product_id: str):
         )
         dimensions = dimension_result.scalars().all()
         
-        # 转换为 schema 格式
+        # [UPDATED 2026-01-16] 按维度类型分组
         dimension_schema = None
         if dimensions and len(dimensions) > 0:
-            dimension_schema = [
-                {"name": dim.name, "description": dim.description or ""}
-                for dim in dimensions
-            ]
-            logger.info(f"使用 {len(dimension_schema)} 个产品维度进行洞察提取")
+            # 检查是否有 dimension_type 字段（新版本数据）
+            has_type_field = hasattr(dimensions[0], 'dimension_type') and dimensions[0].dimension_type
+            
+            if has_type_field:
+                # 新格式：按类型分组
+                dimension_schema = {
+                    "product": [],
+                    "scenario": [],
+                    "emotion": []
+                }
+                for dim in dimensions:
+                    dim_type = getattr(dim, 'dimension_type', 'product') or 'product'
+                    if dim_type in dimension_schema:
+                        dimension_schema[dim_type].append({
+                            "name": dim.name, 
+                            "description": dim.description or ""
+                        })
+                    else:
+                        # 未知类型默认归入产品维度
+                        dimension_schema["product"].append({
+                            "name": dim.name, 
+                            "description": dim.description or ""
+                        })
+                
+                total_dims = sum(len(v) for v in dimension_schema.values())
+                logger.info(f"使用3类维度进行洞察提取: 总计 {total_dims} 个 "
+                           f"(产品:{len(dimension_schema['product'])}, "
+                           f"场景:{len(dimension_schema['scenario'])}, "
+                           f"情绪:{len(dimension_schema['emotion'])})")
+            else:
+                # 旧格式：全部作为产品维度，使用默认场景和情绪维度
+                product_dims = [
+                    {"name": dim.name, "description": dim.description or ""}
+                    for dim in dimensions
+                ]
+                dimension_schema = {
+                    "product": product_dims,
+                    "scenario": [
+                        {"name": "日常使用", "description": "日常生活场景"},
+                        {"name": "工作办公", "description": "办公场景"},
+                        {"name": "户外出行", "description": "户外场景"}
+                    ],
+                    "emotion": [
+                        {"name": "惊喜好评", "description": "超出预期的正面情绪"},
+                        {"name": "失望不满", "description": "期望落空的负面情绪"},
+                        {"name": "感激推荐", "description": "感谢并推荐"}
+                    ]
+                }
+                logger.info(f"使用 {len(product_dims)} 个产品维度 + 默认场景/情绪维度进行洞察提取")
         else:
             logger.info(f"产品暂无定义维度，使用通用洞察提取逻辑")
         
@@ -2134,6 +2179,7 @@ def task_scientific_learning_and_analysis(self, product_id: str):
         logger.info(f"[科学学习] Step 2: 跨语言零样本学习中...")
         
         # 2.1 学习维度（如果不存在）
+        # [UPDATED 2026-01-16] 支持3类维度体系
         dim_count_result = db.execute(
             select(func.count(ProductDimension.id))
             .where(ProductDimension.product_id == product_id)
@@ -2142,25 +2188,48 @@ def task_scientific_learning_and_analysis(self, product_id: str):
         
         dimensions_learned = 0
         if dim_count == 0:
-            logger.info(f"[科学学习] 学习产品维度中...")
-            dims = translation_service.learn_dimensions_from_raw(
+            logger.info(f"[科学学习] 学习3类产品维度中...")
+            dims_result = translation_service.learn_dimensions_from_raw(
                 raw_reviews=raw_samples,
                 product_title=product_title,
                 bullet_points="\n".join(bullet_points) if bullet_points else ""
             )
             
-            if dims:
-                for dim in dims:
+            # [UPDATED 2026-01-16] 解析3类维度并保存
+            if dims_result and isinstance(dims_result, dict):
+                # 新格式：3类维度
+                for dim_type in ["product", "scenario", "emotion"]:
+                    type_dims = dims_result.get(dim_type, [])
+                    for dim in type_dims:
+                        if isinstance(dim, dict) and dim.get("name"):
+                            dimension = ProductDimension(
+                                product_id=product_id,
+                                name=dim["name"].strip(),
+                                description=dim.get("description", "").strip() or None,
+                                dimension_type=dim_type,  # [NEW] 设置维度类型
+                                is_ai_generated=True
+                            )
+                            db.add(dimension)
+                            dimensions_learned += 1
+                db.commit()
+                logger.info(f"[科学学习] 3类维度学习完成: {dimensions_learned} 个 "
+                           f"(产品:{len(dims_result.get('product', []))}, "
+                           f"场景:{len(dims_result.get('scenario', []))}, "
+                           f"情绪:{len(dims_result.get('emotion', []))})")
+            elif dims_result and isinstance(dims_result, list):
+                # 向后兼容：旧格式（单一列表）
+                for dim in dims_result:
                     dimension = ProductDimension(
                         product_id=product_id,
                         name=dim["name"],
                         description=dim.get("description", ""),
+                        dimension_type="product",  # 默认为产品维度
                         is_ai_generated=True
                     )
                     db.add(dimension)
+                    dimensions_learned += 1
                 db.commit()
-                dimensions_learned = len(dims)
-                logger.info(f"[科学学习] 维度学习完成: {dimensions_learned} 个")
+                logger.info(f"[科学学习] 维度学习完成(旧格式): {dimensions_learned} 个")
         else:
             logger.info(f"[科学学习] 产品已有 {dim_count} 个维度，跳过学习")
         
@@ -2390,24 +2459,49 @@ def task_full_auto_analysis(self, product_id: str, task_id: str):
             dim_count = dim_count_result.scalar() or 0
             
             if dim_count == 0:
-                logger.info(f"[全自动分析] 学习产品维度中...")
+                logger.info(f"[全自动分析] 学习3类产品维度中...")
                 try:
-                    dims = translation_service.learn_dimensions_from_raw(
+                    dims_result = translation_service.learn_dimensions_from_raw(
                         raw_reviews=raw_samples,
                         product_title=product_title,
                         bullet_points="\n".join(bullet_points) if bullet_points else ""
                     )
-                    if dims:
-                        for dim in dims:
+                    # [UPDATED 2026-01-16] 支持3类维度体系
+                    dimensions_learned = 0
+                    if dims_result and isinstance(dims_result, dict):
+                        # 新格式：3类维度
+                        for dim_type in ["product", "scenario", "emotion"]:
+                            type_dims = dims_result.get(dim_type, [])
+                            for dim in type_dims:
+                                if isinstance(dim, dict) and dim.get("name"):
+                                    dimension = ProductDimension(
+                                        product_id=product_id,
+                                        name=dim["name"].strip(),
+                                        description=dim.get("description", "").strip() or None,
+                                        dimension_type=dim_type,
+                                        is_ai_generated=True
+                                    )
+                                    db.add(dimension)
+                                    dimensions_learned += 1
+                        db.commit()
+                        logger.info(f"[全自动分析] 3类维度学习完成: {dimensions_learned} 个 "
+                                   f"(产品:{len(dims_result.get('product', []))}, "
+                                   f"场景:{len(dims_result.get('scenario', []))}, "
+                                   f"情绪:{len(dims_result.get('emotion', []))})")
+                    elif dims_result and isinstance(dims_result, list):
+                        # 向后兼容：旧格式
+                        for dim in dims_result:
                             dimension = ProductDimension(
                                 product_id=product_id,
                                 name=dim["name"],
                                 description=dim.get("description", ""),
+                                dimension_type="product",
                                 is_ai_generated=True
                             )
                             db.add(dimension)
+                            dimensions_learned += 1
                         db.commit()
-                        logger.info(f"[全自动分析] 维度学习完成: {len(dims)} 个")
+                        logger.info(f"[全自动分析] 维度学习完成(旧格式): {dimensions_learned} 个")
                 except Exception as e:
                     logger.error(f"[全自动分析] 维度学习失败: {e}")
             

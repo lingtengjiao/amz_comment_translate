@@ -90,9 +90,10 @@ BULLET_POINTS_SYSTEM_PROMPT = """你是一位专业的亚马逊产品描述翻�
 
 
 # [NEW] 跨语言维度发现 Prompt (英文输入 → 中文维度输出)
+# [UPDATED 2026-01-16] 扩展为3类维度：产品维度、场景维度、情绪维度
 DIMENSION_DISCOVERY_RAW_PROMPT = """You are a senior product manager and user research expert. 
 Based on the following **English product information** and **English user review samples**, 
-build a core evaluation dimension model for this product.
+build a **3-category evaluation dimension model** for this product.
 
 # Product Official Information (English)
 - **Product Title**: {product_title}
@@ -103,22 +104,48 @@ build a core evaluation dimension model for this product.
 {reviews_text}
 
 # Task
-Extract 5-8 core evaluation dimensions. **Output dimension names and descriptions in Chinese**.
+Extract **3 categories** of dimensions. **Output all names and descriptions in Chinese**.
+
+## A. Product Dimensions (产品维度) - 4-6 dimensions
+For evaluating product attributes: strengths, weaknesses, suggestions.
+- Examples: 功能表现、结构做工、材料质感、安全性、续航能力、外观设计、性价比
+- Focus on: What aspects of the product are users evaluating?
+
+## B. Scenario Dimensions (场景维度) - 3-5 dimensions  
+For categorizing usage scenarios: where/when/how users use the product.
+- Examples: 家居日常、办公场景、户外活动、亲子互动、车载使用、旅行出差
+- Focus on: In what situations/contexts do users use this product?
+- ⚠️ These are NOT product attributes, but usage contexts!
+
+## C. Emotion Dimensions (情绪维度) - 3-4 dimensions
+For categorizing emotional reactions: user's feelings about the product.
+- Examples: 惊喜好评、失望不满、感激推荐、后悔抱怨、超出预期
+- Focus on: What emotional states do users express?
+- ⚠️ These are about feelings, not product features!
 
 # Requirements
-1. **Combine official positioning with user perspective**: Dimension names should use official terms when possible (from bullet points), but must cover actual user feedback.
-2. **Dimension names**: Use concise Chinese (e.g.: 外观设计、结构做工、材料质感、功能表现、玩法多样性、安全性、性价比).
-3. **Dimension definition**: One sentence describing what the dimension covers, to guide subsequent classification.
-4. **Mutual exclusivity**: Dimensions should not overlap, clear boundaries.
-5. **Coverage**: 
-   - Must cover major pain points and benefits from reviews
-   - Include dimensions emphasized in bullet points even if users are "silently satisfied"
-6. **Quantity control**: Extract 5-8 most core dimensions, no more.
+1. **Product dimensions**: Combine official positioning with user perspective.
+2. **Scenario dimensions**: Extract from actual usage stories in reviews, NOT product features.
+3. **Emotion dimensions**: Extract from emotional expressions in reviews.
+4. **Dimension names**: Use concise Chinese (2-6 characters ideal).
+5. **Mutual exclusivity**: Dimensions within each category should not overlap.
+6. **Clear boundaries**: Each category serves a different purpose.
 
 # Output Format (JSON Only, Chinese output)
 {{
-  "dimensions": [
-    {{ "name": "维度名称(中文)", "description": "该维度的具体定义(中文)" }},
+  "product_dimensions": [
+    {{ "name": "功能表现", "description": "产品核心功能的实际表现和效果" }},
+    {{ "name": "结构做工", "description": "产品的结构设计、组装质量和耐用性" }},
+    ...
+  ],
+  "scenario_dimensions": [
+    {{ "name": "家居日常", "description": "在家中日常生活中使用产品的场景" }},
+    {{ "name": "户外活动", "description": "在户外、旅行、露营等场景使用" }},
+    ...
+  ],
+  "emotion_dimensions": [
+    {{ "name": "惊喜好评", "description": "超出预期的正面情绪，强烈推荐" }},
+    {{ "name": "失望不满", "description": "期望落空的负面情绪，不推荐" }},
     ...
   ]
 }}
@@ -248,11 +275,13 @@ DIMENSION_DISCOVERY_PROMPT = """你是一位资深的产品经理和用户研究
 
 # [UPDATED] 跨语言洞察提取 Prompt - 5类洞察系统 (英文输入 → 中文输出)
 # [UPDATED 2026-01-15] 添加置信度字段
+# [UPDATED 2026-01-16] 支持3类维度匹配：产品维度、场景维度、情绪维度
 INSIGHT_EXTRACTION_PROMPT_DYNAMIC = """# Role
 Amazon Review Analyst (Cross-language Expert) with STRICT evidence standards
 
 # Task
-Analyze the following **English review** and extract key insights. Categorize each insight into the specified product dimensions.
+Analyze the following **English review** and extract key insights. 
+**CRITICAL: Use the correct dimension category based on insight type!**
 
 **CRITICAL Language Rules:**
 - **Input**: The review text is in **English**.
@@ -262,66 +291,87 @@ Analyze the following **English review** and extract key insights. Categorize ea
 # Input (English Review)
 {original_text}
 
-# Dimension Schema (Must Use)
-Only categorize insights into the following dimensions. If content doesn't fit any dimension, use "其他".
-{schema_str}
+# ⚠️ THREE-CATEGORY DIMENSION SYSTEM (MUST FOLLOW)
+Different insight types MUST use different dimension categories:
+
+## For strength/weakness/suggestion → Use PRODUCT Dimensions:
+{product_schema_str}
+
+## For scenario → Use SCENARIO Dimensions:
+{scenario_schema_str}
+
+## For emotion → Use EMOTION Dimensions:
+{emotion_schema_str}
 
 # ⚠️ CONFIDENCE LEVELS (Must include in output)
 - **high**: Insight is explicitly stated in the review with clear evidence
-  - ✅ "The battery lasts only 2 hours" → weakness about 续航 (high)
-  - ✅ "I love the compact design" → strength about 外观设计 (high)
-  
 - **medium**: Insight can be reasonably inferred from context
-  - ✅ "Works as expected" → general satisfaction (medium)
-  
 - **low**: Use for fallback when review is too vague
-  - ⚠️ Only use for very short reviews like "Good" or "OK"
-  - For specific claims, always use high or medium
 
-# 5 Insight Types (CRITICAL - Distinguish Carefully)
-Break down the review into specific insights and categorize into one of these 5 types:
+# 5 Insight Types (CRITICAL - Use Correct Dimension Category!)
 
-1. **strength (Product Advantage)**: Features or experiences explicitly praised by the user.
-   - Example insights: "吸力非常强劲", "续航超出预期", "外观精美"
-   - Use: Extract for Listing selling points
+1. **strength (Product Advantage)** → dimension from PRODUCT Dimensions
+   - Features or experiences explicitly praised by the user.
+   - Example: type="strength", dimension="功能表现"
 
-2. **weakness (Pain Point)**: Defects, bugs, or complaints mentioned by the user.
-   - Example insights: "电池续航太短", "塑料感强", "噪音过大"
-   - Use: Product improvement basis
+2. **weakness (Pain Point)** → dimension from PRODUCT Dimensions
+   - Defects, bugs, or complaints mentioned by the user.
+   - Example: type="weakness", dimension="结构做工"
 
-3. **suggestion (Feature Request)**: Improvement suggestions or desired features.
-   - Example insights: "如果能加LED灯就好了", "希望增加定时功能"
-   - Use: Direct PM requirements
+3. **suggestion (Feature Request)** → dimension from PRODUCT Dimensions
+   - Improvement suggestions or desired features.
+   - Example: type="suggestion", dimension="功能表现"
 
-4. **scenario (Usage Scenario)**: **Specific** usage processes or behavioral stories.
-   - Example insights: "尝试清理车库锯末时吸嘴被堵", "晚上喂奶时一键开启很方便"
-   - ⚠️ Important: Different from 5W tags!
-     - 5W tags are **simple nouns**: "卧室", "厨房"
-     - Scenario is **dynamic behavior**: "在厨房做饭时清理面粉"
-   - If it's just a simple place/time noun, do NOT extract as scenario
+4. **scenario (Usage Scenario)** → dimension from SCENARIO Dimensions ⚠️
+   - **Specific** usage processes or behavioral stories.
+   - ⚠️ MUST use SCENARIO dimensions like "家居日常", "办公场景"
+   - ❌ WRONG: dimension="功能表现" (this is a product dimension!)
+   - ✅ RIGHT: dimension="家居日常" (this is a scenario dimension!)
+   - Example: "晚上喂奶时一键开启很方便" → type="scenario", dimension="亲子互动"
 
-5. **emotion (Emotional Insight)**: Strong emotions expressed (anger/surprise/disappointment/gratitude).
-   - Example insights: "对此极其失望", "这是我买过最好的东西", "后悔没早点买"
-   - Use: Operations team sentiment alerts
+5. **emotion (Emotional Insight)** → dimension from EMOTION Dimensions ⚠️
+   - Strong emotions expressed (anger/surprise/disappointment/gratitude).
+   - ⚠️ MUST use EMOTION dimensions like "惊喜好评", "失望不满"
+   - ❌ WRONG: dimension="整体满意度" (too vague!)
+   - ✅ RIGHT: dimension="惊喜好评" (specific emotion category!)
+   - Example: "后悔没早点买" → type="emotion", dimension="惊喜好评"
 
 # Output Format (JSON Array)
 [
   {{
     "type": "weakness", 
-    "dimension": "选择上述维度之一", 
-    "quote": "Original English quote from the review",
+    "dimension": "结构做工",  // ← From PRODUCT dimensions
+    "quote": "Original English quote",
     "quote_translated": "引用的中文翻译",
     "analysis": "简要分析（中文）",
-    "sentiment": "positive/negative/neutral",
+    "sentiment": "negative",
+    "confidence": "high"
+  }},
+  {{
+    "type": "scenario",
+    "dimension": "家居日常",  // ← From SCENARIO dimensions ⚠️
+    "quote": "I use it every morning in the kitchen",
+    "quote_translated": "我每天早上在厨房使用",
+    "analysis": "家居早晨使用场景",
+    "sentiment": "positive",
+    "confidence": "high"
+  }},
+  {{
+    "type": "emotion",
+    "dimension": "惊喜好评",  // ← From EMOTION dimensions ⚠️
+    "quote": "Best purchase ever!",
+    "quote_translated": "买过的最好的东西！",
+    "analysis": "用户表达强烈的正面惊喜情绪",
+    "sentiment": "positive",
     "confidence": "high"
   }}
 ]
 
 # Critical Rules
 1. **每条评论必须至少提取1个洞察**, even for very short reviews.
-2. **dimension must be from the schema**, do not invent new dimensions.
-3. For short positive reviews (e.g., "Amazing!"), extract as emotion type with dimension "整体满意度".
-4. For short negative reviews (e.g., "Terrible"), extract as weakness type with dimension "整体满意度".
+2. **dimension MUST match insight type category** - this is the most important rule!
+3. For short positive reviews → emotion type with EMOTION dimension
+4. For short negative reviews → weakness type with PRODUCT dimension OR emotion type with EMOTION dimension
 5. Be specific: not "质量不好" but "塑料感强" or "按键松动".
 6. NEVER return empty array []. At least 1 insight required.
 7. Scenario must be **dynamic behavior**, not simple place/time nouns.
@@ -1200,9 +1250,14 @@ class TranslationService:
         raw_reviews: List[str],
         product_title: str = "",
         bullet_points: str = ""
-    ) -> List[dict]:
+    ) -> dict:
         """
-        跨语言零样本学习：从英文原文评论直接学习产品维度（输出中文）。
+        跨语言零样本学习：从英文原文评论直接学习3类维度（输出中文）。
+        
+        [UPDATED 2026-01-16] 扩展为3类维度体系：
+        - 产品维度 (product): 用于 strength/weakness/suggestion
+        - 场景维度 (scenario): 用于 scenario 类型洞察
+        - 情绪维度 (emotion): 用于 emotion 类型洞察
         
         这是流式处理架构的核心方法：
         - 不需要等待翻译完成
@@ -1215,15 +1270,22 @@ class TranslationService:
             bullet_points: 产品英文五点描述
             
         Returns:
-            维度列表（中文），每个维度包含 name 和 description
+            3类维度字典（中文），格式：
+            {
+                "product": [{"name": "功能表现", "description": "..."}, ...],
+                "scenario": [{"name": "家居日常", "description": "..."}, ...],
+                "emotion": [{"name": "惊喜好评", "description": "..."}, ...]
+            }
+            
+            向后兼容：如果调用方期望 List[dict]，可以使用 result.get("product", [])
         """
         if not self._check_client():
             logger.error("Translation service not configured for raw dimension learning")
-            return []
+            return {}
         
         if not raw_reviews or len(raw_reviews) < 5:
             logger.warning("样本数量不足（至少需要5条英文评论），无法有效学习维度")
-            return []
+            return {}
         
         # 限制样本量防止超 token
         sample_texts = raw_reviews[:50]
@@ -1247,33 +1309,91 @@ class TranslationService:
                     {"role": "user", "content": prompt}
                 ],
                 temperature=0.3,
-                max_tokens=2000,
-                timeout=90.0,
+                max_tokens=3000,  # 增加 token 限制以支持3类维度
+                timeout=120.0,   # 增加超时时间
             )
             
             result = response.choices[0].message.content.strip()
             parsed = parse_json_safely(result)
             
-            if not isinstance(parsed, dict) or "dimensions" not in parsed:
+            if not isinstance(parsed, dict):
                 logger.warning(f"跨语言维度发现返回格式不正确: {type(parsed)}")
-                return []
+                return {}
             
-            dimensions = parsed.get("dimensions", [])
+            # [UPDATED] 解析3类维度
+            valid_result = {}
             
-            valid_dimensions = []
-            for dim in dimensions:
+            # 1. 产品维度
+            product_dims = parsed.get("product_dimensions", [])
+            valid_product = []
+            for dim in product_dims:
                 if isinstance(dim, dict) and dim.get("name"):
-                    valid_dimensions.append({
+                    valid_product.append({
                         "name": dim["name"].strip(),
                         "description": (dim.get("description") or "").strip()
                     })
+            if valid_product:
+                valid_result["product"] = valid_product
             
-            logger.info(f"[跨语言学习] 从 {len(sample_texts)} 条英文评论学习到 {len(valid_dimensions)} 个中文维度")
-            return valid_dimensions
+            # 2. 场景维度
+            scenario_dims = parsed.get("scenario_dimensions", [])
+            valid_scenario = []
+            for dim in scenario_dims:
+                if isinstance(dim, dict) and dim.get("name"):
+                    valid_scenario.append({
+                        "name": dim["name"].strip(),
+                        "description": (dim.get("description") or "").strip()
+                    })
+            if valid_scenario:
+                valid_result["scenario"] = valid_scenario
+            
+            # 3. 情绪维度
+            emotion_dims = parsed.get("emotion_dimensions", [])
+            valid_emotion = []
+            for dim in emotion_dims:
+                if isinstance(dim, dict) and dim.get("name"):
+                    valid_emotion.append({
+                        "name": dim["name"].strip(),
+                        "description": (dim.get("description") or "").strip()
+                    })
+            if valid_emotion:
+                valid_result["emotion"] = valid_emotion
+            
+            # 向后兼容：如果AI返回旧格式（单一 dimensions 列表），转换为新格式
+            if not valid_result and "dimensions" in parsed:
+                old_dims = parsed.get("dimensions", [])
+                valid_product = []
+                for dim in old_dims:
+                    if isinstance(dim, dict) and dim.get("name"):
+                        valid_product.append({
+                            "name": dim["name"].strip(),
+                            "description": (dim.get("description") or "").strip()
+                        })
+                if valid_product:
+                    valid_result["product"] = valid_product
+                    # 添加默认的场景和情绪维度
+                    valid_result["scenario"] = [
+                        {"name": "家居日常", "description": "在家中日常生活场景"},
+                        {"name": "工作办公", "description": "办公室或工作场景"},
+                        {"name": "户外出行", "description": "户外活动或出行场景"}
+                    ]
+                    valid_result["emotion"] = [
+                        {"name": "惊喜好评", "description": "超出预期的正面情绪"},
+                        {"name": "失望不满", "description": "期望落空的负面情绪"},
+                        {"name": "感激推荐", "description": "感谢并愿意推荐的情绪"}
+                    ]
+                    logger.warning("[跨语言学习] AI返回旧格式，已自动补充场景和情绪维度")
+            
+            total_dims = sum(len(v) for v in valid_result.values())
+            logger.info(f"[跨语言学习] 从 {len(sample_texts)} 条英文评论学习到 {total_dims} 个中文维度 "
+                       f"(产品:{len(valid_result.get('product', []))}, "
+                       f"场景:{len(valid_result.get('scenario', []))}, "
+                       f"情绪:{len(valid_result.get('emotion', []))})")
+            return valid_result
             
         except Exception as e:
             logger.error(f"跨语言维度学习失败: {e}")
-            return []
+            return {}
 
     @retry(
         stop=stop_after_attempt(2),
@@ -1509,7 +1629,7 @@ class TranslationService:
         self,
         original_text: str,
         translated_text: str = None,  # [UPDATED] 不再使用，保留参数仅为向后兼容
-        dimension_schema: List[dict] = None
+        dimension_schema = None  # [UPDATED 2026-01-16] 支持 List[dict] 或 dict (3类维度)
     ) -> List[dict]:
         """
         Extract insights from a review using cross-language analysis.
@@ -1517,11 +1637,21 @@ class TranslationService:
         [UPDATED] 跨语言洞察提取 - 直接从英文原文提取洞察，输出中文结果。
         不再依赖翻译后的文本，实现与翻译任务的完全解耦。
         
+        [UPDATED 2026-01-16] 支持3类维度体系：
+        - 产品维度 (product): 用于 strength/weakness/suggestion
+        - 场景维度 (scenario): 用于 scenario 类型洞察
+        - 情绪维度 (emotion): 用于 emotion 类型洞察
+        
         Args:
             original_text: 原始评论文本（英文）
             translated_text: [DEPRECATED] 不再使用，保留仅为向后兼容
-            dimension_schema: 可选的维度模式列表，用于限定 AI 只使用这些维度进行归类
-                             格式: [{"name": "维度名", "description": "维度定义"}, ...]
+            dimension_schema: 维度模式，支持两种格式：
+                - 旧格式 List[dict]: [{"name": "维度名", "description": "..."}, ...]
+                - 新格式 dict: {
+                    "product": [{"name": "功能表现", "description": "..."}],
+                    "scenario": [{"name": "家居日常", "description": "..."}],
+                    "emotion": [{"name": "惊喜好评", "description": "..."}]
+                  }
         
         Returns:
             洞察列表，每个洞察包含 type, dimension, quote(英文), quote_translated(中文), analysis(中文) 等字段
@@ -1535,19 +1665,67 @@ class TranslationService:
             return []
         
         try:
-            # 根据是否有维度模式选择不同的 Prompt
-            # [UPDATED] 跨语言模式：只传入英文原文，AI 输出中文分析
-            if dimension_schema and len(dimension_schema) > 0:
-                # 使用动态维度 Prompt - 强制 AI 按指定维度归类
-                schema_str = "\n".join([
-                    f"- {d['name']}: {d.get('description', '无具体定义')}" 
-                    for d in dimension_schema
-                ])
-                prompt = INSIGHT_EXTRACTION_PROMPT_DYNAMIC.format(
-                    original_text=original_text,
-                    schema_str=schema_str
+            # [UPDATED 2026-01-16] 检测维度格式并构建对应的 prompt
+            if dimension_schema:
+                # 检测是新格式（dict with product/scenario/emotion）还是旧格式（list）
+                is_new_format = (
+                    isinstance(dimension_schema, dict) and 
+                    any(k in dimension_schema for k in ["product", "scenario", "emotion"])
                 )
-                logger.debug(f"[跨语言洞察] 使用动态维度 Prompt，共 {len(dimension_schema)} 个维度")
+                
+                if is_new_format:
+                    # 新格式：3类维度体系
+                    product_dims = dimension_schema.get("product", [])
+                    scenario_dims = dimension_schema.get("scenario", [])
+                    emotion_dims = dimension_schema.get("emotion", [])
+                    
+                    # 构建3类维度的 schema 字符串
+                    product_schema_str = "\n".join([
+                        f"- {d['name']}: {d.get('description', '无具体定义')}" 
+                        for d in product_dims
+                    ]) if product_dims else "- 整体满意度: 通用产品维度"
+                    
+                    scenario_schema_str = "\n".join([
+                        f"- {d['name']}: {d.get('description', '无具体定义')}" 
+                        for d in scenario_dims
+                    ]) if scenario_dims else "- 日常使用: 通用场景维度"
+                    
+                    emotion_schema_str = "\n".join([
+                        f"- {d['name']}: {d.get('description', '无具体定义')}" 
+                        for d in emotion_dims
+                    ]) if emotion_dims else "- 正面情绪: 积极情感\n- 负面情绪: 消极情感"
+                    
+                    prompt = INSIGHT_EXTRACTION_PROMPT_DYNAMIC.format(
+                        original_text=original_text,
+                        product_schema_str=product_schema_str,
+                        scenario_schema_str=scenario_schema_str,
+                        emotion_schema_str=emotion_schema_str
+                    )
+                    logger.debug(f"[跨语言洞察] 使用3类维度 Prompt "
+                               f"(产品:{len(product_dims)}, 场景:{len(scenario_dims)}, 情绪:{len(emotion_dims)})")
+                else:
+                    # 旧格式：单一维度列表，向后兼容
+                    # 将旧格式转换为新格式（全部作为产品维度，使用默认场景和情绪维度）
+                    if isinstance(dimension_schema, list) and len(dimension_schema) > 0:
+                        product_schema_str = "\n".join([
+                            f"- {d['name']}: {d.get('description', '无具体定义')}" 
+                            for d in dimension_schema
+                        ])
+                        scenario_schema_str = "- 日常使用: 通用场景维度\n- 工作办公: 办公场景\n- 户外出行: 户外场景"
+                        emotion_schema_str = "- 惊喜好评: 超出预期的正面情绪\n- 失望不满: 期望落空的负面情绪\n- 感激推荐: 感谢并推荐"
+                        
+                        prompt = INSIGHT_EXTRACTION_PROMPT_DYNAMIC.format(
+                            original_text=original_text,
+                            product_schema_str=product_schema_str,
+                            scenario_schema_str=scenario_schema_str,
+                            emotion_schema_str=emotion_schema_str
+                        )
+                        logger.debug(f"[跨语言洞察] 旧格式维度已转换，共 {len(dimension_schema)} 个产品维度")
+                    else:
+                        # 维度列表为空，使用无维度 Prompt
+                        prompt = INSIGHT_EXTRACTION_PROMPT.format(
+                            original_text=original_text
+                        )
             else:
                 # 使用无维度 Prompt - 自动检测维度
                 prompt = INSIGHT_EXTRACTION_PROMPT.format(
