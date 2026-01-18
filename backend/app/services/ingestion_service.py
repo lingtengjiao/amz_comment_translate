@@ -388,6 +388,11 @@ class IngestionService:
             if not review_url and review_id.startswith('R'):
                 review_url = f"https://www.amazon.com/gp/customer-reviews/{review_id}"
             
+            # 处理 variant 字段
+            variant = r.get("variant")
+            if variant and len(variant) > 500:
+                variant = variant[:500]
+            
             import uuid
             records.append({
                 "id": uuid.uuid4(),
@@ -405,6 +410,7 @@ class IngestionService:
                 "image_urls": image_urls_json,
                 "video_url": video_url,
                 "review_url": review_url,
+                "variant": variant,  # [NEW] 产品变体信息
                 "sentiment": "neutral",
                 "translation_status": TranslationStatus.PENDING.value
             })

@@ -316,6 +316,14 @@ class ReviewService:
             if not review_url and review_id.startswith('R'):
                 review_url = f"https://www.amazon.com/gp/customer-reviews/{review_id}"
             
+            # 处理 variant - 截断到 500 字符
+            variant = review_data.get("variant")
+            # 调试日志：记录收到的 variant 值（前3条）
+            if len(review_records) < 3:
+                logger.info(f"[VARIANT_DEBUG] Review {review_id}: variant={variant}")
+            if variant and len(variant) > 500:
+                variant = variant[:500]
+            
             review_records.append({
                 "id": uuid.uuid4(),
                 "product_id": product_id,
@@ -334,6 +342,8 @@ class ReviewService:
                 "video_url": video_url,
                 # Review link
                 "review_url": review_url,
+                # Variant info
+                "variant": variant,
                 "sentiment": "neutral",
                 "translation_status": TranslationStatus.PENDING.value
             })

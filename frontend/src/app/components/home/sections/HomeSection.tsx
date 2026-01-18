@@ -11,7 +11,7 @@ import { EyeIcon } from '../../EyeIcon';
 import { ImageWithFallback } from '../../figma/ImageWithFallback';
 import { ProductSelectDialog } from '../dialogs/ProductSelectDialog';
 import { AdvancedOptionsDialog } from '../dialogs/AdvancedOptionsDialog';
-import { AnalysisModal } from '../../AnalysisModal';
+import { AnalysisModal, AnalysisType } from '../../AnalysisModal';
 import apiService from '../../../../api/service';
 
 interface UserProject {
@@ -193,8 +193,8 @@ export function HomeSection() {
     }
   };
 
-  // 创建对比分析项目
-  const handleCreateAnalysis = async (title: string, description?: string) => {
+  // 创建分析项目（支持对比分析和市场洞察）
+  const handleCreateAnalysis = async (title: string, description?: string, analysisType?: AnalysisType) => {
     if (compareProducts.length < 2) {
       toast.error('至少需要选择 2 个产品');
       return;
@@ -220,11 +220,13 @@ export function HomeSection() {
         description,
         products: productsList,
         auto_run: true,
+        analysis_type: analysisType || 'comparison',
       });
 
       if (result.success && result.project) {
         const projectId = result.project.id;
-        toast.success('对比分析已启动', {
+        const typeName = analysisType === 'market_insight' ? '市场洞察' : '对比分析';
+        toast.success(`${typeName}已启动`, {
           description: '分析预计需要 1-2 分钟，点击查看进度',
           duration: 8000,
           action: {

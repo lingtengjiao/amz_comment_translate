@@ -21,10 +21,10 @@
   // ================= 核心代码开始 =================
 
   // Configuration
-  // 本地开发环境配置
+  // 生产环境配置
   const CONFIG = {
-  API_BASE_URL: 'http://localhost:8000/api/v1',
-  DASHBOARD_URL: 'http://localhost:3000',  // 本地前端地址
+  API_BASE_URL: 'https://98kamz.com/api/v1',
+  DASHBOARD_URL: 'https://98kamz.com',  // 生产前端地址
   DELAY_BETWEEN_PAGES: { min: 2000, max: 5000 }, // Increased for safety
   DELAY_BETWEEN_STARS: { min: 3000, max: 6000 },
   BATCH_SIZE: 20
@@ -37,6 +37,58 @@ const STAR_FILTERS = {
   3: 'three_star',
   4: 'four_star',
   5: 'five_star'
+};
+
+// Rufus AI 预设问题配置
+const RUFUS_QUESTION_TOPICS = {
+  wish_it_had: {
+    name: '功能改进建议',
+    icon: '💡',
+    questions: [
+      "In the current reviews, what features do buyers most commonly mention using the 'I wish it had...' phrase? Please summarize the top 3-5 wishes.",
+      "What improvements do customers suggest for this product based on their reviews?"
+    ]
+  },
+  quality_issues: {
+    name: '质量问题',
+    icon: '🔧',
+    questions: [
+      "What are the most common quality issues or defects mentioned in the reviews?",
+      "How durable is this product according to customer feedback? What breaks or wears out?"
+    ]
+  },
+  price_value: {
+    name: '性价比',
+    icon: '💰',
+    questions: [
+      "Do customers think this product is worth the price? Summarize the value-for-money feedback.",
+      "What do reviews say about the price compared to similar products?"
+    ]
+  },
+  comparison: {
+    name: '竞品对比',
+    icon: '⚖️',
+    questions: [
+      "How do customers compare this product to competitors or alternatives they've tried?",
+      "What brands or products do reviewers mention as better or worse alternatives?"
+    ]
+  },
+  use_scenarios: {
+    name: '使用场景',
+    icon: '👥',
+    questions: [
+      "What are the most common use cases and scenarios mentioned in reviews?",
+      "Who is this product best suited for according to customer reviews? Any age groups or skill levels?"
+    ]
+  },
+  positive_highlights: {
+    name: '好评亮点',
+    icon: '⭐',
+    questions: [
+      "What features or aspects do customers praise the most in their positive reviews?",
+      "What makes customers recommend this product to others?"
+    ]
+  }
 };
 
 // Global state
@@ -128,6 +180,105 @@ function detectASIN() {
   }
 
   return null;
+}
+
+/**
+ * [NEW] 检测当前页面是否为搜索结果页
+ * 用于在搜索结果页显示产品选择界面
+ */
+function isSearchResultsPage() {
+  const url = window.location.href;
+  
+  // URL 模式检测
+  const urlPatterns = [
+    /\/s\?k=/i,           // /s?k=keyword
+    /\/s\?keywords=/i,    // /s?keywords=keyword
+    /\/s\/ref=/i,         // /s/ref=...
+    /\/s\?/i,             // /s?...
+    /\/s$/i               // /s (末尾)
+  ];
+  
+  const isSearchUrl = urlPatterns.some(pattern => pattern.test(url));
+  
+  // DOM 元素检测（更可靠）
+  const hasSearchResults = document.querySelectorAll('[data-component-type="s-search-result"]').length > 0;
+  const hasSearchContainer = !!document.querySelector('.s-main-slot') || !!document.querySelector('#search');
+  
+  return isSearchUrl && (hasSearchResults || hasSearchContainer);
+}
+
+/**
+ * [NEW] 从搜索结果页面提取所有产品信息
+ * @returns {Array} 产品信息数组
+ */
+function extractSearchResults() {
+  const products = [];
+  
+  // 主选择器：搜索结果项
+  const searchResults = document.querySelectorAll('[data-component-type="s-search-result"]');
+  
+  searchResults.forEach((item, index) => {
+    try {
+      // 提取 ASIN
+      const asin = item.getAttribute('data-asin');
+      if (!asin || asin.length !== 10) return;
+      
+      // 跳过广告产品
+      const isSponsored = item.querySelector('[data-component-type="sp-sponsored-result"]') ||
+                          item.textContent?.includes('Sponsored');
+      
+      // 提取标题
+      const titleEl = item.querySelector('.s-title-instructions-style span, h2 a span, .a-text-normal');
+      const title = titleEl?.textContent?.trim() || '';
+      if (!title) return;
+      
+      // 提取图片
+      const imageEl = item.querySelector('.s-image');
+      const imageUrl = imageEl?.src || imageEl?.getAttribute('data-image-source-density-1') || '';
+      
+      // 提取价格
+      const priceEl = item.querySelector('.a-price .a-offscreen');
+      const price = priceEl?.textContent?.trim() || '';
+      
+      // 提取评分
+      let rating = null;
+      const ratingEl = item.querySelector('.a-icon-alt');
+      if (ratingEl) {
+        const match = ratingEl.textContent?.match(/(\d+\.?\d*)/);
+        if (match) rating = parseFloat(match[1]);
+      }
+      
+      // 提取评论数量
+      let reviewCount = null;
+      const reviewCountEl = item.querySelector('.s-underline-text, [aria-label*="ratings"], a[href*="customerReviews"]');
+      if (reviewCountEl) {
+        const text = reviewCountEl.textContent?.replace(/,/g, '') || '';
+        const match = text.match(/(\d+)/);
+        if (match) reviewCount = parseInt(match[1]);
+      }
+      
+      // 提取产品链接
+      const linkEl = item.querySelector('h2 a, .s-title-instructions-style a');
+      const link = linkEl?.href || `https://www.amazon.com/dp/${asin}`;
+      
+      products.push({
+        asin,
+        title: title.length > 100 ? title.substring(0, 100) + '...' : title,
+        imageUrl,
+        price,
+        rating,
+        reviewCount,
+        link,
+        isSponsored: !!isSponsored,
+        index: index + 1
+      });
+    } catch (e) {
+      console.error('[VOC-Master] Error extracting product:', e);
+    }
+  });
+  
+  console.log(`[VOC-Master] Extracted ${products.length} products from search results`);
+  return products;
 }
 
 /**
@@ -249,7 +400,8 @@ function buildReviewsUrl(asin, star, page = 1) {
     reviewerType: 'all_reviews',
     filterByStar: starFilter,
     pageNumber: page.toString(),
-    sortBy: 'recent'
+    sortBy: 'recent',
+    formatType: 'all_formats'  // 确保采集所有变体的评论
   });
   
   return `${baseUrl}/product-reviews/${asin}?${params.toString()}`;
@@ -328,6 +480,26 @@ function parseReviewsFromPage(doc = document) {
       const helpfulMatch = helpfulText.match(/(\d+)/);
       const helpfulVotes = helpfulMatch ? parseInt(helpfulMatch[1]) : 0;
 
+      // Variant info (color, size, etc.)
+      // 尝试多种选择器提取变体信息
+      let variant = null;
+      const variantSelectors = [
+        '[data-hook="format-strip"]',           // 最常见的形式
+        '[data-hook="format-strip-linkless"]',  // 无链接版本
+        '.review-format-strip a',               // 通过类名查找
+        '.review-format-strip'                  // 直接取容器文本
+      ];
+      for (const selector of variantSelectors) {
+        const variantEl = el.querySelector(selector);
+        if (variantEl) {
+          const text = variantEl.textContent?.trim();
+          if (text && text.length > 0 && !text.includes('Verified Purchase')) {
+            variant = text;
+            break;
+          }
+        }
+      }
+
       if (reviewId && (body || rating > 0)) {
         reviews.push({
           review_id: reviewId,
@@ -337,7 +509,8 @@ function parseReviewsFromPage(doc = document) {
           body,
           review_date: reviewDate,
           verified_purchase: verifiedPurchase,
-          helpful_votes: helpfulVotes
+          helpful_votes: helpfulVotes,
+          variant: variant
         });
       }
     } catch (e) {
@@ -586,6 +759,7 @@ function detectMarketplace() {
   if (hostname.includes('.de')) return 'DE';
   if (hostname.includes('.fr')) return 'FR';
   if (hostname.includes('.co.jp')) return 'JP';
+  if (hostname.includes('.com.au')) return 'AU';
   return 'US';
 }
 
@@ -611,6 +785,577 @@ function showOverlay(state) {
 
 function hideOverlay() {
   if (overlay) overlay.classList.remove('voc-visible');
+}
+
+// ============================================================================
+// [NEW] 产品选择器 - 用于搜索结果页批量分析
+// ============================================================================
+
+let productSelector = null;
+let selectedProducts = new Set();
+let allLoadedProducts = [];  // [NEW] 存储所有已加载的产品
+let currentSearchPage = 1;   // [NEW] 当前搜索页码
+let isLoadingMore = false;   // [NEW] 是否正在加载更多
+let hasMorePages = true;     // [NEW] 是否还有更多页
+
+/**
+ * [NEW] 显示产品选择器界面
+ */
+function showProductSelector() {
+  if (!productSelector) createProductSelector();
+  
+  // 重置状态
+  allLoadedProducts = [];
+  currentSearchPage = 1;
+  isLoadingMore = false;
+  hasMorePages = true;
+  selectedProducts.clear();
+  
+  // 提取当前页产品列表
+  const products = extractSearchResults();
+  allLoadedProducts = [...products];
+  
+  // 检测是否有下一页
+  hasMorePages = detectNextPage();
+  
+  updateProductSelector(allLoadedProducts, false);
+  updateLoadMoreButton();
+  
+  productSelector.classList.add('voc-visible');
+}
+
+/**
+ * [NEW] 隐藏产品选择器
+ */
+function hideProductSelector() {
+  if (productSelector) {
+    productSelector.classList.remove('voc-visible');
+  }
+}
+
+/**
+ * [NEW] 创建产品选择器 DOM
+ */
+function createProductSelector() {
+  // 确保 CSS 已加载
+  const styleId = 'voc-master-styles';
+  if (!document.getElementById(styleId)) {
+    const link = document.createElement('link');
+    link.id = styleId;
+    link.rel = 'stylesheet';
+    link.type = 'text/css';
+    link.href = chrome.runtime.getURL('src/content/overlay.css');
+    (document.head || document.documentElement).appendChild(link);
+  }
+
+  productSelector = document.createElement('div');
+  productSelector.id = 'voc-product-selector';
+  productSelector.innerHTML = `
+    <div class="voc-selector-panel">
+      <div class="voc-header">
+        <div class="voc-logo">
+          <svg class="voc-icon-svg" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg" style="width:28px;height:28px;">
+            <circle cx="50" cy="50" r="35" fill="#FEF3C7"/>
+            <circle cx="50" cy="50" r="25" fill="#93C5FD"/>
+            <circle cx="50" cy="50" r="15" fill="#1E40AF"/>
+            <circle cx="47" cy="45" r="5" fill="#FFFFFF"/>
+          </svg>
+          <span class="voc-title">选择产品分析</span>
+        </div>
+        <button class="voc-close" id="voc-selector-close-btn" title="关闭">×</button>
+      </div>
+      
+      <div class="voc-selector-content">
+        <div class="voc-selector-header">
+          <div class="voc-selector-info">
+            <span id="voc-selector-count">已选择 0 个产品</span>
+            <span class="voc-selector-hint">（对比分析最多5个，市场细分最多10个）</span>
+          </div>
+          <div class="voc-selector-actions-top">
+            <button class="voc-btn-sm" id="voc-select-all-btn">全选</button>
+            <button class="voc-btn-sm" id="voc-deselect-all-btn">清空</button>
+          </div>
+        </div>
+        
+        <div class="voc-product-list" id="voc-product-list">
+          <div class="voc-loading">正在加载产品列表...</div>
+        </div>
+        
+        <div class="voc-load-more-section" id="voc-load-more-section">
+          <button class="voc-btn voc-btn-load-more" id="voc-load-more-btn">
+            <span class="voc-load-more-icon">📄</span>
+            <span class="voc-load-more-text">加载下一页</span>
+          </button>
+          <div class="voc-page-info" id="voc-page-info">已加载第 1 页</div>
+        </div>
+        
+        <div class="voc-selector-actions">
+          <div class="voc-action-row">
+            <button class="voc-btn voc-btn-primary" id="voc-batch-insight-btn" disabled>
+              📊 批量洞察分析
+            </button>
+            <span class="voc-action-hint">对每个产品单独分析</span>
+          </div>
+          <div class="voc-action-row">
+            <button class="voc-btn voc-btn-secondary" id="voc-comparison-btn" disabled>
+              ⚖️ 对比分析 (2-5个)
+            </button>
+            <span class="voc-action-hint">对选中产品进行对比</span>
+          </div>
+          <div class="voc-action-row">
+            <button class="voc-btn voc-btn-secondary" id="voc-market-insight-btn" disabled>
+              🎯 市场细分 (2-10个)
+            </button>
+            <span class="voc-action-hint">多产品市场洞察分析</span>
+          </div>
+        </div>
+        
+        <div class="voc-selector-status" id="voc-selector-status"></div>
+      </div>
+    </div>
+  `;
+
+  document.body.appendChild(productSelector);
+
+  // 绑定事件
+  document.getElementById('voc-selector-close-btn').addEventListener('click', hideProductSelector);
+  document.getElementById('voc-select-all-btn').addEventListener('click', handleSelectAll);
+  document.getElementById('voc-deselect-all-btn').addEventListener('click', handleDeselectAll);
+  document.getElementById('voc-batch-insight-btn').addEventListener('click', handleBatchInsight);
+  document.getElementById('voc-comparison-btn').addEventListener('click', handleComparison);
+  document.getElementById('voc-market-insight-btn').addEventListener('click', handleMarketInsight);
+  document.getElementById('voc-load-more-btn').addEventListener('click', handleLoadMore);
+}
+
+/**
+ * [NEW] 更新产品选择器列表
+ * @param {Array} products - 产品列表
+ * @param {boolean} append - 是否追加模式（加载更多时使用）
+ */
+function updateProductSelector(products, append = false) {
+  const listEl = document.getElementById('voc-product-list');
+  if (!listEl) return;
+  
+  if (!append) {
+    // 非追加模式，清空选择
+    selectedProducts.clear();
+  }
+  
+  if (products.length === 0 && !append) {
+    listEl.innerHTML = '<div class="voc-empty">未在页面中检测到产品，请确保页面已完全加载</div>';
+    return;
+  }
+  
+  const productsHtml = products.map(p => `
+    <div class="voc-product-item" data-asin="${p.asin}">
+      <label class="voc-product-checkbox">
+        <input type="checkbox" class="voc-product-check" value="${p.asin}" 
+               data-title="${p.title.replace(/"/g, '&quot;')}"
+               data-image="${p.imageUrl}"
+               data-price="${p.price}"
+               data-rating="${p.rating || ''}"
+               ${p.isSponsored ? 'data-sponsored="true"' : ''}>
+        <span class="voc-checkmark"></span>
+      </label>
+      <div class="voc-product-image">
+        <img src="${p.imageUrl}" alt="" onerror="this.style.display='none'">
+      </div>
+      <div class="voc-product-details">
+        <div class="voc-product-title-text">${p.title}</div>
+        <div class="voc-product-meta">
+          <span class="voc-product-asin">ASIN: ${p.asin}</span>
+          ${p.price ? `<span class="voc-product-price">${p.price}</span>` : ''}
+          ${p.rating ? `<span class="voc-product-rating">⭐ ${p.rating}</span>` : ''}
+          ${p.reviewCount ? `<span class="voc-product-reviews">(${p.reviewCount})</span>` : ''}
+          ${p.isSponsored ? '<span class="voc-sponsored-tag">广告</span>' : ''}
+        </div>
+      </div>
+    </div>
+  `).join('');
+  
+  if (append) {
+    // 追加模式
+    listEl.insertAdjacentHTML('beforeend', productsHtml);
+  } else {
+    // 替换模式
+    listEl.innerHTML = productsHtml;
+  }
+  
+  // 绑定新添加的复选框事件
+  const checkboxes = append 
+    ? Array.from(listEl.querySelectorAll('.voc-product-check')).slice(-products.length)
+    : listEl.querySelectorAll('.voc-product-check');
+  
+  checkboxes.forEach(checkbox => {
+    checkbox.addEventListener('change', handleProductCheck);
+  });
+  
+  updateSelectionCount();
+}
+
+/**
+ * [NEW] 检测是否有下一页
+ */
+function detectNextPage() {
+  // 检测下一页按钮
+  const nextPageBtn = document.querySelector('.s-pagination-next:not(.s-pagination-disabled)');
+  const paginationItems = document.querySelectorAll('.s-pagination-item');
+  
+  return !!nextPageBtn || paginationItems.length > 0;
+}
+
+/**
+ * [NEW] 获取下一页的 URL
+ */
+function getNextPageUrl() {
+  const currentUrl = new URL(window.location.href);
+  const currentPage = parseInt(currentUrl.searchParams.get('page') || '1');
+  const nextPage = currentSearchPage + 1;
+  
+  // 构建下一页 URL
+  currentUrl.searchParams.set('page', nextPage.toString());
+  
+  return currentUrl.toString();
+}
+
+/**
+ * [NEW] 更新加载更多按钮状态
+ */
+function updateLoadMoreButton() {
+  const loadMoreBtn = document.getElementById('voc-load-more-btn');
+  const pageInfo = document.getElementById('voc-page-info');
+  const loadMoreSection = document.getElementById('voc-load-more-section');
+  
+  if (!loadMoreBtn || !pageInfo || !loadMoreSection) return;
+  
+  if (!hasMorePages) {
+    loadMoreSection.style.display = 'none';
+    return;
+  }
+  
+  loadMoreSection.style.display = 'block';
+  
+  if (isLoadingMore) {
+    loadMoreBtn.disabled = true;
+    loadMoreBtn.querySelector('.voc-load-more-text').textContent = '加载中...';
+    loadMoreBtn.querySelector('.voc-load-more-icon').textContent = '⏳';
+  } else {
+    loadMoreBtn.disabled = false;
+    loadMoreBtn.querySelector('.voc-load-more-text').textContent = '加载下一页';
+    loadMoreBtn.querySelector('.voc-load-more-icon').textContent = '📄';
+  }
+  
+  pageInfo.textContent = `已加载 ${currentSearchPage} 页 · 共 ${allLoadedProducts.length} 个产品`;
+}
+
+/**
+ * [NEW] 处理加载更多
+ */
+async function handleLoadMore() {
+  if (isLoadingMore || !hasMorePages) return;
+  
+  isLoadingMore = true;
+  updateLoadMoreButton();
+  setSelectorStatus('正在加载下一页产品...', 'info');
+  
+  try {
+    const nextPageUrl = getNextPageUrl();
+    console.log('[VOC-Master] Loading next page:', nextPageUrl);
+    
+    // 通过 fetch 获取下一页内容
+    const response = await fetch(nextPageUrl, {
+      credentials: 'include',
+      headers: {
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
+      }
+    });
+    
+    if (!response.ok) {
+      throw new Error(`加载失败: ${response.status}`);
+    }
+    
+    const html = await response.text();
+    
+    // 解析 HTML
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(html, 'text/html');
+    
+    // 从解析的文档中提取产品
+    const newProducts = extractProductsFromDocument(doc);
+    
+    if (newProducts.length === 0) {
+      hasMorePages = false;
+      setSelectorStatus('已加载全部产品', 'info');
+    } else {
+      // 去重：过滤掉已存在的 ASIN
+      const existingAsins = new Set(allLoadedProducts.map(p => p.asin));
+      const uniqueNewProducts = newProducts.filter(p => !existingAsins.has(p.asin));
+      
+      if (uniqueNewProducts.length > 0) {
+        currentSearchPage++;
+        allLoadedProducts = [...allLoadedProducts, ...uniqueNewProducts];
+        updateProductSelector(uniqueNewProducts, true);
+        setSelectorStatus(`已加载 ${uniqueNewProducts.length} 个新产品`, 'success');
+      } else {
+        setSelectorStatus('没有更多新产品', 'info');
+      }
+      
+      // 检查是否还有更多页
+      const nextBtn = doc.querySelector('.s-pagination-next:not(.s-pagination-disabled)');
+      hasMorePages = !!nextBtn;
+    }
+  } catch (error) {
+    console.error('[VOC-Master] Load more error:', error);
+    setSelectorStatus(`加载失败: ${error.message}`, 'error');
+  } finally {
+    isLoadingMore = false;
+    updateLoadMoreButton();
+  }
+}
+
+/**
+ * [NEW] 从 HTML 文档中提取产品
+ */
+function extractProductsFromDocument(doc) {
+  const products = [];
+  const searchResults = doc.querySelectorAll('[data-component-type="s-search-result"]');
+  
+  searchResults.forEach((item, index) => {
+    try {
+      const asin = item.getAttribute('data-asin');
+      if (!asin || asin.length !== 10) return;
+      
+      const isSponsored = item.querySelector('[data-component-type="sp-sponsored-result"]') ||
+                          item.textContent?.includes('Sponsored');
+      
+      const titleEl = item.querySelector('.s-title-instructions-style span, h2 a span, .a-text-normal');
+      const title = titleEl?.textContent?.trim() || '';
+      if (!title) return;
+      
+      const imageEl = item.querySelector('.s-image');
+      const imageUrl = imageEl?.src || imageEl?.getAttribute('data-image-source-density-1') || '';
+      
+      const priceEl = item.querySelector('.a-price .a-offscreen');
+      const price = priceEl?.textContent?.trim() || '';
+      
+      let rating = null;
+      const ratingEl = item.querySelector('.a-icon-alt');
+      if (ratingEl) {
+        const match = ratingEl.textContent?.match(/(\d+\.?\d*)/);
+        if (match) rating = parseFloat(match[1]);
+      }
+      
+      let reviewCount = null;
+      const reviewCountEl = item.querySelector('.s-underline-text, [aria-label*="ratings"], a[href*="customerReviews"]');
+      if (reviewCountEl) {
+        const text = reviewCountEl.textContent?.replace(/,/g, '') || '';
+        const match = text.match(/(\d+)/);
+        if (match) reviewCount = parseInt(match[1]);
+      }
+      
+      const linkEl = item.querySelector('h2 a, .s-title-instructions-style a');
+      const link = linkEl?.href || `https://www.amazon.com/dp/${asin}`;
+      
+      products.push({
+        asin,
+        title: title.length > 100 ? title.substring(0, 100) + '...' : title,
+        imageUrl,
+        price,
+        rating,
+        reviewCount,
+        link,
+        isSponsored: !!isSponsored,
+        index: index + 1
+      });
+    } catch (e) {
+      console.error('[VOC-Master] Error extracting product from doc:', e);
+    }
+  });
+  
+  return products;
+}
+
+/**
+ * [NEW] 处理产品选择
+ */
+function handleProductCheck(e) {
+  const asin = e.target.value;
+  if (e.target.checked) {
+    selectedProducts.add(asin);
+  } else {
+    selectedProducts.delete(asin);
+  }
+  updateSelectionCount();
+}
+
+/**
+ * [NEW] 全选
+ */
+function handleSelectAll() {
+  const checkboxes = document.querySelectorAll('.voc-product-check');
+  checkboxes.forEach(cb => {
+    cb.checked = true;
+    selectedProducts.add(cb.value);
+  });
+  updateSelectionCount();
+}
+
+/**
+ * [NEW] 清空选择
+ */
+function handleDeselectAll() {
+  const checkboxes = document.querySelectorAll('.voc-product-check');
+  checkboxes.forEach(cb => {
+    cb.checked = false;
+  });
+  selectedProducts.clear();
+  updateSelectionCount();
+}
+
+/**
+ * [NEW] 更新选择计数和按钮状态
+ */
+function updateSelectionCount() {
+  const count = selectedProducts.size;
+  const countEl = document.getElementById('voc-selector-count');
+  if (countEl) {
+    countEl.textContent = `已选择 ${count} 个产品`;
+  }
+  
+  // 更新按钮状态
+  const batchBtn = document.getElementById('voc-batch-insight-btn');
+  const comparisonBtn = document.getElementById('voc-comparison-btn');
+  const marketBtn = document.getElementById('voc-market-insight-btn');
+  
+  if (batchBtn) {
+    batchBtn.disabled = count === 0;
+  }
+  if (comparisonBtn) {
+    comparisonBtn.disabled = count < 2 || count > 5;
+    comparisonBtn.textContent = `⚖️ 对比分析 (${count}/2-5)`;
+  }
+  if (marketBtn) {
+    marketBtn.disabled = count < 2 || count > 10;
+    marketBtn.textContent = `🎯 市场细分 (${count}/2-10)`;
+  }
+}
+
+/**
+ * [NEW] 设置选择器状态消息
+ */
+function setSelectorStatus(message, type = 'info') {
+  const statusEl = document.getElementById('voc-selector-status');
+  if (statusEl) {
+    statusEl.textContent = message;
+    statusEl.className = `voc-selector-status voc-status-${type}`;
+  }
+}
+
+/**
+ * [NEW] 获取选中的产品信息
+ */
+function getSelectedProductsInfo() {
+  const products = [];
+  document.querySelectorAll('.voc-product-check:checked').forEach(cb => {
+    products.push({
+      asin: cb.value,
+      title: cb.dataset.title,
+      imageUrl: cb.dataset.image,
+      price: cb.dataset.price,
+      rating: cb.dataset.rating
+    });
+  });
+  return products;
+}
+
+/**
+ * [NEW] 处理批量洞察分析
+ */
+async function handleBatchInsight() {
+  const products = getSelectedProductsInfo();
+  if (products.length === 0) {
+    setSelectorStatus('请先选择产品', 'error');
+    return;
+  }
+  
+  setSelectorStatus(`正在启动批量分析 (${products.length} 个产品)...`, 'info');
+  
+  // 发送消息到 background
+  chrome.runtime.sendMessage({
+    type: 'BATCH_INSIGHT_ANALYSIS',
+    products: products,
+    marketplace: detectMarketplace()
+  }, (response) => {
+    if (response?.success) {
+      setSelectorStatus('批量分析任务已启动，请在洞察中心查看进度', 'success');
+      // 3秒后跳转到洞察中心
+      setTimeout(() => {
+        window.open(`${CONFIG.DASHBOARD_URL}/home/my-projects`, '_blank');
+      }, 2000);
+    } else {
+      setSelectorStatus(`启动失败: ${response?.error || '未知错误'}`, 'error');
+    }
+  });
+}
+
+/**
+ * [NEW] 处理对比分析
+ */
+async function handleComparison() {
+  const products = getSelectedProductsInfo();
+  if (products.length < 2 || products.length > 5) {
+    setSelectorStatus('对比分析需要选择 2-5 个产品', 'error');
+    return;
+  }
+  
+  setSelectorStatus(`正在创建对比分析项目 (${products.length} 个产品)...`, 'info');
+  
+  chrome.runtime.sendMessage({
+    type: 'COMPARISON_ANALYSIS',
+    products: products,
+    marketplace: detectMarketplace()
+  }, (response) => {
+    if (response?.success) {
+      setSelectorStatus('对比分析项目已创建', 'success');
+      if (response.redirectUrl) {
+        setTimeout(() => {
+          window.open(response.redirectUrl, '_blank');
+        }, 1000);
+      }
+    } else {
+      setSelectorStatus(`创建失败: ${response?.error || '未知错误'}`, 'error');
+    }
+  });
+}
+
+/**
+ * [NEW] 处理市场细分分析
+ */
+async function handleMarketInsight() {
+  const products = getSelectedProductsInfo();
+  if (products.length < 2 || products.length > 10) {
+    setSelectorStatus('市场细分需要选择 2-10 个产品', 'error');
+    return;
+  }
+  
+  setSelectorStatus(`正在创建市场洞察项目 (${products.length} 个产品)...`, 'info');
+  
+  chrome.runtime.sendMessage({
+    type: 'MARKET_INSIGHT_ANALYSIS',
+    products: products,
+    marketplace: detectMarketplace()
+  }, (response) => {
+    if (response?.success) {
+      setSelectorStatus('市场洞察项目已创建', 'success');
+      if (response.redirectUrl) {
+        setTimeout(() => {
+          window.open(response.redirectUrl, '_blank');
+        }, 1000);
+      }
+    } else {
+      setSelectorStatus(`创建失败: ${response?.error || '未知错误'}`, 'error');
+    }
+  });
 }
 
 /**
@@ -727,6 +1472,49 @@ function createOverlay() {
             进入洞察中心查看分析 →
           </a>
         </div>
+        
+        <div class="voc-rufus-section" id="voc-rufus-section">
+          <div class="voc-section-divider"></div>
+          <div class="voc-rufus-header">
+            <span class="voc-rufus-icon">🤖</span>
+            <span class="voc-rufus-title">Rufus AI 洞察</span>
+          </div>
+          <p class="voc-rufus-desc">先手动打开 Rufus，然后选择分析主题自动采集</p>
+          <div class="voc-rufus-topics" id="voc-rufus-topics">
+            <button class="voc-rufus-topic-btn" data-topic="wish_it_had">
+              <span class="voc-topic-icon">💡</span>
+              <span class="voc-topic-name">功能改进</span>
+            </button>
+            <button class="voc-rufus-topic-btn" data-topic="quality_issues">
+              <span class="voc-topic-icon">🔧</span>
+              <span class="voc-topic-name">质量问题</span>
+            </button>
+            <button class="voc-rufus-topic-btn" data-topic="price_value">
+              <span class="voc-topic-icon">💰</span>
+              <span class="voc-topic-name">性价比</span>
+            </button>
+            <button class="voc-rufus-topic-btn" data-topic="comparison">
+              <span class="voc-topic-icon">⚖️</span>
+              <span class="voc-topic-name">竞品对比</span>
+            </button>
+            <button class="voc-rufus-topic-btn" data-topic="use_scenarios">
+              <span class="voc-topic-icon">👥</span>
+              <span class="voc-topic-name">使用场景</span>
+            </button>
+            <button class="voc-rufus-topic-btn" data-topic="positive_highlights">
+              <span class="voc-topic-icon">⭐</span>
+              <span class="voc-topic-name">好评亮点</span>
+            </button>
+          </div>
+          <div class="voc-rufus-progress-container" id="voc-rufus-progress" style="display: none;">
+            <div class="voc-rufus-progress-bar">
+              <div class="voc-rufus-progress-fill" id="voc-rufus-progress-fill"></div>
+            </div>
+            <div class="voc-rufus-progress-text" id="voc-rufus-progress-text">0/0</div>
+          </div>
+          <div class="voc-rufus-status" id="voc-rufus-status"></div>
+          <div class="voc-rufus-result" id="voc-rufus-result" style="display: none;"></div>
+        </div>
       </div>
     </div>
   `;
@@ -763,6 +1551,25 @@ function createOverlay() {
       if (radio) radio.checked = true;
       // 日志
       console.log('[VOC-Master] 选择工作流模式:', card.dataset.mode);
+    });
+  });
+  
+  // [NEW] 绑定 Rufus 主题按钮点击事件
+  const topicButtons = document.querySelectorAll('.voc-rufus-topic-btn');
+  topicButtons.forEach(btn => {
+    btn.addEventListener('click', () => {
+      const topicKey = btn.getAttribute('data-topic');
+      console.log('[VOC-Master] Rufus topic button clicked:', topicKey);
+      
+      // 禁用所有按钮防止重复点击
+      topicButtons.forEach(b => b.disabled = true);
+      btn.classList.add('voc-topic-active');
+      
+      runTopicQuestions(topicKey).finally(() => {
+        // 恢复按钮状态
+        topicButtons.forEach(b => b.disabled = false);
+        btn.classList.remove('voc-topic-active');
+      });
     });
   });
 }
@@ -851,6 +1658,763 @@ function handleStopClick() {
   stopCollection();
 }
 
+// ================= Rufus AI 对话功能 =================
+
+// Rufus 状态
+let isRufusConversing = false;
+
+/**
+ * 检测页面上是否存在 Rufus 聊天界面
+ */
+function detectRufusChat() {
+  // 尝试多种可能的选择器 - 基于实际 Amazon Rufus 界面
+  const selectors = [
+    // Rufus 对话框容器
+    '[data-testid*="rufus"]',
+    '[aria-label*="Rufus"]',
+    '[class*="rufus"]',
+    '[id*="rufus"]',
+    // Amazon 侧边栏聊天界面
+    '#sw-chat-window',
+    '[class*="chat-window"]',
+    '[class*="ChatWindow"]',
+    '[data-testid="chat-window"]',
+    // 通用对话界面
+    '[role="dialog"][class*="chat"]',
+    '[class*="assistant-container"]',
+    '[class*="ai-assistant"]',
+    // 特定的 Amazon AI 助手容器
+    '.a-popover-wrapper [class*="chat"]',
+    'div[class*="ConversationalShopping"]',
+    'div[class*="conversational"]'
+  ];
+  
+  for (const selector of selectors) {
+    try {
+      const element = document.querySelector(selector);
+      if (element) {
+        console.log('[Rufus] Found chat interface with selector:', selector);
+        return element;
+      }
+    } catch (e) {
+      // 选择器可能无效，跳过
+    }
+  }
+  
+  // 备选：查找包含 "Rufus" 文本的元素
+  const allElements = document.querySelectorAll('div, section, aside');
+  for (const el of allElements) {
+    if (el.textContent && el.textContent.includes('Ask Rufus') && el.querySelector('input, textarea')) {
+      console.log('[Rufus] Found chat by text content');
+      return el;
+    }
+  }
+  
+  return null;
+}
+
+/**
+ * 尝试打开 Rufus 聊天界面
+ */
+async function openRufusChat() {
+  // 首先检查是否已经打开
+  let chatInterface = detectRufusChat();
+  if (chatInterface) {
+    console.log('[Rufus] Chat already open');
+    return chatInterface;
+  }
+  
+  // 尝试找到并点击 Rufus 图标
+  const iconSelectors = [
+    '[data-testid*="rufus-button"]',
+    '[aria-label*="Rufus"]',
+    '[aria-label*="AI assistant"]',
+    '[aria-label*="Ask a question"]',
+    '.rufus-trigger',
+    '#rufus-trigger',
+    // 通用的聊天图标
+    'button[aria-label*="chat"]',
+    '[data-testid="chat-trigger"]',
+    // Amazon 搜索栏附近的 AI 图标
+    '.nav-search-scope button[aria-label*="AI"]',
+    '#nav-search-bar button[aria-label*="assistant"]'
+  ];
+  
+  for (const selector of iconSelectors) {
+    const icon = document.querySelector(selector);
+    if (icon) {
+      console.log('[Rufus] Found and clicking trigger:', selector);
+      icon.click();
+      
+      // 等待聊天界面打开
+      await new Promise(r => setTimeout(r, 1500));
+      
+      chatInterface = detectRufusChat();
+      if (chatInterface) {
+        return chatInterface;
+      }
+    }
+  }
+  
+  console.log('[Rufus] Could not find or open Rufus chat');
+  return null;
+}
+
+/**
+ * 向 Rufus 发送问题
+ */
+async function sendRufusQuestion(question) {
+  // 找到输入框
+  const inputSelectors = [
+    '[data-testid*="rufus-input"]',
+    '[aria-label*="Ask Rufus"]',
+    '[placeholder*="Ask"]',
+    'input[type="text"][aria-label*="question"]',
+    'textarea[aria-label*="question"]',
+    '.rufus-input',
+    '#rufus-input',
+    '[data-testid="chat-input"]',
+    'input[placeholder*="Ask a question"]',
+    'textarea[placeholder*="Ask"]'
+  ];
+  
+  let input = null;
+  for (const selector of inputSelectors) {
+    input = document.querySelector(selector);
+    if (input) {
+      console.log('[Rufus] Found input with selector:', selector);
+      break;
+    }
+  }
+  
+  if (!input) {
+    throw new Error('无法找到 Rufus 输入框');
+  }
+  
+  // 设置问题文本
+  input.focus();
+  input.value = question;
+  
+  // 触发 input 事件
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+  input.dispatchEvent(new Event('change', { bubbles: true }));
+  
+  await new Promise(r => setTimeout(r, 300));
+  
+  // 找到并点击发送按钮
+  const sendSelectors = [
+    '[data-testid*="rufus-send"]',
+    '[aria-label*="Send"]',
+    '[aria-label*="Submit"]',
+    'button[type="submit"]',
+    '.rufus-send',
+    '#rufus-send',
+    '[data-testid="send-button"]',
+    'button[aria-label*="send"]'
+  ];
+  
+  let sendBtn = null;
+  for (const selector of sendSelectors) {
+    sendBtn = document.querySelector(selector);
+    if (sendBtn) {
+      console.log('[Rufus] Found send button with selector:', selector);
+      break;
+    }
+  }
+  
+  // 如果找不到按钮，尝试按 Enter 键
+  if (!sendBtn) {
+    console.log('[Rufus] No send button found, pressing Enter');
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true }));
+    input.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true }));
+  } else {
+    sendBtn.click();
+  }
+  
+  console.log('[Rufus] Question sent:', question);
+  return true;
+}
+
+/**
+ * 等待 Rufus 回答完成
+ */
+async function waitForRufusAnswer(timeout = 60000) {
+  console.log('[Rufus] Waiting for answer, timeout:', timeout);
+  const startTime = Date.now();
+  let lastAnswerLength = 0;
+  let stableCount = 0;
+  let attempts = 0;
+  
+  while (Date.now() - startTime < timeout) {
+    await new Promise(r => setTimeout(r, 1000)); // 每秒检查一次
+    attempts++;
+    
+    const answer = extractRufusResponse();
+    console.log(`[Rufus] Attempt ${attempts}: answer length = ${answer?.length || 0}`);
+    
+    if (answer && answer.length > 100) {
+      // 检查回答是否稳定（停止变化）
+      if (answer.length === lastAnswerLength) {
+        stableCount++;
+        console.log(`[Rufus] Stable count: ${stableCount}`);
+        if (stableCount >= 2) {
+          console.log('[Rufus] Answer stable, returning');
+          return answer;
+        }
+      } else {
+        stableCount = 0;
+        lastAnswerLength = answer.length;
+      }
+    }
+    
+    // 如果已经等了超过 10 秒且有内容，检查是否完成
+    if (Date.now() - startTime > 10000 && lastAnswerLength > 200) {
+      // 检查是否有加载指示器
+      const loading = document.querySelector(
+        '[data-testid*="loading"], ' +
+        '[class*="loading"], ' +
+        '[class*="typing"], ' +
+        '[aria-busy="true"], ' +
+        '.spinner, ' +
+        '[class*="Spinner"]'
+      );
+      
+      if (!loading) {
+        console.log('[Rufus] No loading indicator found, answer appears complete');
+        const finalAnswer = extractRufusResponse();
+        if (finalAnswer && finalAnswer.length > 100) {
+          return finalAnswer;
+        }
+      }
+    }
+  }
+  
+  // 超时但仍尝试返回已有内容
+  const finalAnswer = extractRufusResponse();
+  console.log('[Rufus] Timeout reached, final answer length:', finalAnswer?.length || 0);
+  
+  if (finalAnswer && finalAnswer.length > 50) {
+    console.log('[Rufus] Returning partial answer after timeout');
+    return finalAnswer;
+  }
+  
+  throw new Error('等待 Rufus 回答超时');
+}
+
+/**
+ * 获取 Rufus 对话中的所有消息元素
+ */
+function getRufusMessages() {
+  const container = findRufusChatContainer();
+  if (!container) return [];
+  
+  // 尝试多种选择器找到消息元素
+  const messageSelectors = [
+    '[data-testid*="message"]',
+    '[class*="chat-message"]',
+    '[class*="ChatMessage"]',
+    '[class*="message-content"]',
+    '[class*="MessageContent"]',
+    // 通用的消息容器模式
+    'div[class*="response"]',
+    'div[class*="answer"]'
+  ];
+  
+  for (const selector of messageSelectors) {
+    try {
+      const messages = container.querySelectorAll(selector);
+      if (messages.length > 0) {
+        console.log(`[Rufus] Found ${messages.length} messages with selector: ${selector}`);
+        return Array.from(messages);
+      }
+    } catch (e) {
+      // 选择器无效
+    }
+  }
+  
+  // 备选：查找所有段落或较长的文本块
+  const textBlocks = container.querySelectorAll('p, div > span, li');
+  const validBlocks = Array.from(textBlocks).filter(el => {
+    const text = el.textContent?.trim() || '';
+    return text.length > 50 && !text.includes('function(') && !text.includes('typeof ');
+  });
+  
+  console.log(`[Rufus] Found ${validBlocks.length} text blocks as messages`);
+  return validBlocks;
+}
+
+/**
+ * 获取当前消息数量
+ */
+function getRufusMessageCount() {
+  return getRufusMessages().length;
+}
+
+/**
+ * 提取最后一条消息的内容
+ */
+function extractLastMessage() {
+  const messages = getRufusMessages();
+  if (messages.length === 0) return null;
+  
+  const lastMessage = messages[messages.length - 1];
+  const text = lastMessage.textContent?.trim() || '';
+  
+  // 清理文本
+  return cleanRufusText(text);
+}
+
+/**
+ * 等待新消息出现并提取
+ */
+async function waitAndExtractNewMessage(previousCount, timeout = 60000) {
+  console.log(`[Rufus] Waiting for new message, previous count: ${previousCount}`);
+  const startTime = Date.now();
+  let lastContent = '';
+  let stableCount = 0;
+  
+  while (Date.now() - startTime < timeout) {
+    await new Promise(r => setTimeout(r, 1000));
+    
+    const currentCount = getRufusMessageCount();
+    console.log(`[Rufus] Current message count: ${currentCount}`);
+    
+    // 检查是否有新消息
+    if (currentCount > previousCount) {
+      const currentContent = extractLastMessage();
+      
+      if (currentContent && currentContent.length > 50) {
+        // 检查内容是否稳定
+        if (currentContent === lastContent) {
+          stableCount++;
+          if (stableCount >= 2) {
+            console.log('[Rufus] Content stable, returning');
+            return currentContent;
+          }
+        } else {
+          stableCount = 0;
+          lastContent = currentContent;
+        }
+      }
+    }
+    
+    // 备选：检查加载状态
+    const loading = document.querySelector('[class*="loading"], [class*="typing"], [aria-busy="true"]');
+    if (!loading && lastContent.length > 100 && stableCount >= 1) {
+      return lastContent;
+    }
+  }
+  
+  // 超时但有内容则返回
+  if (lastContent.length > 50) {
+    console.log('[Rufus] Timeout but returning partial content');
+    return lastContent;
+  }
+  
+  throw new Error('等待 Rufus 回答超时');
+}
+
+/**
+ * 从 DOM 中提取 Rufus 的回答
+ */
+function extractRufusResponse() {
+  console.log('[Rufus] Attempting to extract response...');
+
+  // 首先尝试找到 Rufus 聊天容器
+  const rufusContainer = findRufusChatContainer();
+
+  if (rufusContainer) {
+    console.log('[Rufus] Found Rufus container');
+    return extractFromRufusContainer(rufusContainer);
+  }
+
+  // 如果没找到容器，尝试通过关键词在小范围内查找
+  return extractByKeywordSearch();
+}
+
+/**
+ * 查找 Rufus 聊天容器
+ */
+function findRufusChatContainer() {
+  // Rufus 特定的容器选择器
+  const containerSelectors = [
+    // 侧边栏对话框
+    '[class*="sw-chat"]',
+    '[id*="sw-chat"]',
+    '[class*="rufus-chat"]',
+    '[class*="RufusChat"]',
+    // 对话窗口
+    '[class*="ConversationalShopping"]',
+    '[class*="conversational-shopping"]',
+    // 通用 AI 助手容器
+    '[role="dialog"][aria-label*="Rufus"]',
+    '[role="dialog"][aria-label*="assistant"]',
+    // Amazon 弹出层
+    '.a-popover-content [class*="chat"]'
+  ];
+  
+  for (const selector of containerSelectors) {
+    try {
+      const container = document.querySelector(selector);
+      if (container && container.textContent && container.textContent.length > 100) {
+        return container;
+      }
+    } catch (e) {
+      // 选择器无效，跳过
+    }
+  }
+  
+  // 备选：查找包含 "Rufus" 或 "Ask Rufus" 的容器
+  const allContainers = document.querySelectorAll('div[class], aside, section');
+  for (const container of allContainers) {
+    const firstText = container.textContent?.substring(0, 200) || '';
+    if ((firstText.includes('Rufus') || firstText.includes('Ask Rufus')) &&
+        container.querySelector('input, textarea')) {
+      // 确保这是一个合理大小的容器（不是整个页面）
+      const rect = container.getBoundingClientRect();
+      if (rect.width > 200 && rect.width < 800 && rect.height > 200) {
+        return container;
+      }
+    }
+  }
+  
+  return null;
+}
+
+/**
+ * 从 Rufus 容器中提取回答
+ */
+function extractFromRufusContainer(container) {
+  // 查找回答区域 - 通常是用户问题之后的内容
+  const allTextElements = container.querySelectorAll('p, div, span, li');
+  let answerParts = [];
+  let foundAnswerStart = false;
+  
+  for (const element of allTextElements) {
+    const text = element.textContent?.trim() || '';
+    
+    // 跳过太短的文本
+    if (text.length < 10) continue;
+    
+    // 跳过输入框和按钮文本
+    if (element.closest('input, button, textarea')) continue;
+    
+    // 检测回答开始的标志
+    if (text.includes('Based on') || 
+        text.includes('Top 5') || 
+        text.includes('Top five') ||
+        text.includes('customers mention') ||
+        text.includes('reviewers mention') ||
+        text.includes('wish it had')) {
+      foundAnswerStart = true;
+    }
+    
+    // 收集回答内容
+    if (foundAnswerStart) {
+      // 检查是否是有效的回答内容（不是 JavaScript 或元数据）
+      if (!text.includes('function(') && 
+          !text.includes('typeof ') && 
+          !text.includes('window.') &&
+          !text.includes('document.') &&
+          text.length < 2000) {
+        answerParts.push(text);
+      }
+    }
+    
+    // 检测回答结束
+    if (foundAnswerStart && answerParts.length > 5 && 
+        (text.includes('Ask Rufus') || text.includes('Type a question'))) {
+      break;
+    }
+  }
+  
+  if (answerParts.length > 0) {
+    // 合并回答，去重
+    const uniqueParts = [...new Set(answerParts)];
+    const answer = uniqueParts.join('\n\n');
+    
+    // 限制长度（最多 10000 字符）
+    const finalAnswer = answer.length > 10000 ? answer.substring(0, 10000) + '...' : answer;
+    console.log('[Rufus] Extracted answer from container, length:', finalAnswer.length);
+    return finalAnswer;
+  }
+  
+  // 备选：直接取容器内的文本，但要过滤
+  const containerText = container.innerText || container.textContent || '';
+  const cleanedText = cleanRufusText(containerText);
+  
+  if (cleanedText.length > 100 && cleanedText.length < 15000) {
+    console.log('[Rufus] Using cleaned container text, length:', cleanedText.length);
+    return cleanedText;
+  }
+  
+  return null;
+}
+
+/**
+ * 通过关键词搜索提取回答
+ */
+function extractByKeywordSearch() {
+  // 查找包含 Rufus 回答特征的元素
+  const allElements = document.querySelectorAll('div, p, section');
+  
+  for (const element of allElements) {
+    // 获取元素的直接文本（不包含子元素的重复文本）
+    const text = element.innerText?.trim() || '';
+    
+    // 检查长度合理性（100-10000字符）
+    if (text.length < 100 || text.length > 10000) continue;
+    
+    // 检查是否包含 Rufus 回答的特征
+    const hasAnswerMarkers = (
+      (text.includes('Based on') && text.includes('review')) ||
+      (text.includes('Top') && (text.includes('wish') || text.includes('feature'))) ||
+      (text.includes('1.') && text.includes('2.') && text.includes('3.'))
+    );
+    
+    // 确保不是 JavaScript 代码
+    const isNotCode = (
+      !text.includes('function(') &&
+      !text.includes('typeof ') &&
+      !text.includes('window.') &&
+      !text.includes('AUI_') &&
+      !text.includes('csa(')
+    );
+    
+    if (hasAnswerMarkers && isNotCode) {
+      // 验证这个元素的尺寸合理（是可见的 UI 元素）
+      const rect = element.getBoundingClientRect();
+      if (rect.width > 100 && rect.height > 50) {
+        console.log('[Rufus] Found answer by keyword search, length:', text.length);
+        return cleanRufusText(text);
+      }
+    }
+  }
+  
+  console.log('[Rufus] No response found');
+  return null;
+}
+
+/**
+ * 清理 Rufus 回答文本
+ */
+function cleanRufusText(text) {
+  if (!text) return '';
+  
+  // 移除 JavaScript 代码片段
+  let cleaned = text
+    .replace(/\{[\s\S]*?typeof[\s\S]*?\}/g, '')
+    .replace(/function\s*\([^)]*\)\s*\{[^}]*\}/g, '')
+    .replace(/csa\([^)]*\);?/g, '')
+    .replace(/AUI_\w+/g, '')
+    .replace(/uex\([^)]*\)/g, '')
+    .replace(/window\.\w+\s*=/g, '')
+    .trim();
+  
+  // 移除多余的空白行
+  cleaned = cleaned.replace(/\n{3,}/g, '\n\n');
+  
+  // 限制长度
+  if (cleaned.length > 10000) {
+    cleaned = cleaned.substring(0, 10000) + '...';
+  }
+  
+  return cleaned;
+}
+
+/**
+ * 上传单条对话数据
+ */
+function uploadRufusConversation(data) {
+  return new Promise((resolve, reject) => {
+    chrome.runtime.sendMessage({
+      type: 'UPLOAD_RUFUS_CONVERSATION',
+      data: data
+    }, (response) => {
+      if (response?.success) {
+        resolve(response);
+      } else {
+        reject(new Error(response?.error || '上传失败'));
+      }
+    });
+  });
+}
+
+/**
+ * 批量问答流程 - 按主题执行多个问题
+ */
+async function runTopicQuestions(topicKey) {
+  if (isRufusConversing) {
+    console.log('[Rufus] Already conversing, skipping');
+    return;
+  }
+  
+  const topic = RUFUS_QUESTION_TOPICS[topicKey];
+  if (!topic) {
+    console.error('[Rufus] Unknown topic:', topicKey);
+    updateRufusStatus('❌ 未知的主题类型');
+    return;
+  }
+  
+  isRufusConversing = true;
+  const asin = detectASIN();
+  const marketplace = detectMarketplace();
+  const results = [];
+  
+  try {
+    updateRufusStatus(`开始 ${topic.name} 分析...`);
+    updateRufusProgress(0, topic.questions.length);
+    
+    // 确保 Rufus 已打开
+    const chatInterface = await openRufusChat();
+    if (!chatInterface) {
+      throw new Error('请先手动打开 Rufus 对话框，然后再点击按钮');
+    }
+    
+    await new Promise(r => setTimeout(r, 1000));
+    
+    // 逐个问题执行
+    for (let i = 0; i < topic.questions.length; i++) {
+      const question = topic.questions[i];
+      const questionNum = i + 1;
+      
+      updateRufusStatus(`正在提问 ${questionNum}/${topic.questions.length}...`);
+      updateRufusProgress(i, topic.questions.length);
+      
+      try {
+        // 1. 记录当前消息数量
+        const beforeCount = getRufusMessageCount();
+        console.log(`[Rufus] Question ${questionNum}: beforeCount = ${beforeCount}`);
+        
+        // 2. 发送问题
+        await sendRufusQuestion(question);
+        
+        // 3. 等待并提取新回答
+        updateRufusStatus(`等待回答 ${questionNum}/${topic.questions.length}...`);
+        const answer = await waitAndExtractNewMessage(beforeCount, 60000);
+        
+        if (!answer || answer.length < 50) {
+          console.warn(`[Rufus] Question ${questionNum} got empty answer`);
+          results.push({ question, answer: null, success: false, error: '未获取到回答' });
+          continue;
+        }
+        
+        console.log(`[Rufus] Question ${questionNum} answer length: ${answer.length}`);
+        
+        // 4. 立即上传
+        updateRufusStatus(`保存回答 ${questionNum}/${topic.questions.length}...`);
+        
+        const conversationData = {
+          asin: asin,
+          marketplace: marketplace,
+          question: question,
+          answer: answer,
+          question_type: topicKey,
+          question_index: i,
+          conversation_id: `rufus-${topicKey}-${i}-${Date.now()}`
+        };
+        
+        await uploadRufusConversation(conversationData);
+        results.push({ question, answer, success: true });
+        
+        // 5. 等待间隔
+        if (i < topic.questions.length - 1) {
+          await new Promise(r => setTimeout(r, 2000));
+        }
+        
+      } catch (questionError) {
+        console.error(`[Rufus] Question ${questionNum} failed:`, questionError);
+        results.push({ question, answer: null, success: false, error: questionError.message });
+      }
+    }
+    
+    // 完成
+    updateRufusProgress(topic.questions.length, topic.questions.length);
+    const successCount = results.filter(r => r.success).length;
+    updateRufusStatus(`✅ 完成! ${successCount}/${topic.questions.length} 条数据已保存`);
+    
+    // 显示结果摘要
+    showRufusResults(results);
+    
+  } catch (error) {
+    console.error('[Rufus] Topic questions failed:', error);
+    updateRufusStatus('❌ ' + error.message);
+  } finally {
+    isRufusConversing = false;
+  }
+  
+  return results;
+}
+
+/**
+ * 更新进度条
+ */
+function updateRufusProgress(current, total) {
+  const progressEl = document.getElementById('voc-rufus-progress');
+  const progressFillEl = document.getElementById('voc-rufus-progress-fill');
+  const progressTextEl = document.getElementById('voc-rufus-progress-text');
+  
+  if (progressEl) {
+    progressEl.style.display = total > 0 ? 'block' : 'none';
+  }
+  if (progressFillEl) {
+    const percent = total > 0 ? (current / total) * 100 : 0;
+    progressFillEl.style.width = `${percent}%`;
+  }
+  if (progressTextEl) {
+    progressTextEl.textContent = `${current}/${total}`;
+  }
+}
+
+/**
+ * 显示批量结果
+ */
+function showRufusResults(results) {
+  const resultEl = document.getElementById('voc-rufus-result');
+  if (!resultEl) return;
+  
+  const successResults = results.filter(r => r.success);
+  if (successResults.length === 0) {
+    resultEl.innerHTML = '<div style="color: #ef4444;">未获取到有效回答</div>';
+    resultEl.style.display = 'block';
+    return;
+  }
+  
+  // 显示成功的回答摘要
+  const summaryHtml = successResults.map((r, i) => {
+    const preview = r.answer.substring(0, 150) + (r.answer.length > 150 ? '...' : '');
+    return `<div style="margin-bottom: 8px; padding: 6px; background: #f0fdf4; border-radius: 4px; font-size: 11px;">
+      <strong>Q${i + 1}:</strong> ${preview}
+    </div>`;
+  }).join('');
+  
+  resultEl.innerHTML = summaryHtml;
+  resultEl.style.display = 'block';
+}
+
+/**
+ * 更新 Rufus 状态显示
+ */
+function updateRufusStatus(message) {
+  const statusEl = document.getElementById('voc-rufus-status');
+  if (statusEl) {
+    statusEl.textContent = message;
+  }
+  console.log('[Rufus Status]', message);
+}
+
+/**
+ * 显示 Rufus 单条结果
+ */
+function showRufusResult(answer) {
+  const resultEl = document.getElementById('voc-rufus-result');
+  if (resultEl) {
+    const preview = answer.length > 300 ? answer.substring(0, 300) + '...' : answer;
+    resultEl.textContent = preview;
+    resultEl.style.display = 'block';
+  }
+}
+
 /**
  * Chrome Message Listener
  * [UPDATED] Added handler for 'GET_PAGE_INFO' to support Popup
@@ -879,6 +2443,30 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       title: info.title 
     });
     sendResponse({ success: true });
+    return true;
+  }
+  
+  // 2.5 [NEW] 处理打开产品选择器的请求（搜索结果页）
+  else if (msg.type === 'OPEN_PRODUCT_SELECTOR') {
+    if (isSearchResultsPage()) {
+      showProductSelector();
+      sendResponse({ success: true });
+    } else {
+      sendResponse({ success: false, error: '当前页面不是搜索结果页' });
+    }
+    return true;
+  }
+  
+  // 2.6 [NEW] 获取页面类型信息
+  else if (msg.type === 'GET_PAGE_TYPE') {
+    const isSearch = isSearchResultsPage();
+    const asin = detectASIN();
+    sendResponse({
+      isSearchResultsPage: isSearch,
+      isProductPage: !!asin,
+      asin: asin,
+      productCount: isSearch ? document.querySelectorAll('[data-component-type="s-search-result"]').length : 0
+    });
     return true;
   }
 

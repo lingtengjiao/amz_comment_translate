@@ -268,7 +268,7 @@ services:
       - voc-network
 
   # ==========================================================================
-  # Nginx 反向代理
+  # Nginx 反向代理（支持 HTTPS）
   # ==========================================================================
   nginx:
     image: nginx:alpine
@@ -276,9 +276,11 @@ services:
     restart: unless-stopped
     ports:
       - "80:80"
+      - "443:443"
       - "3000:80"
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./nginx/ssl:/etc/nginx/ssl:ro
     depends_on:
       - app-backend
       - app-frontend

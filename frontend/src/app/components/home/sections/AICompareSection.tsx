@@ -9,7 +9,7 @@ import { Card, CardContent } from '../../ui/card';
 import { Badge } from '../../ui/badge';
 import { Button } from '../../ui/button';
 import { ImageWithFallback } from '../../figma/ImageWithFallback';
-import { AnalysisModal } from '../../AnalysisModal';
+import { AnalysisModal, AnalysisType } from '../../AnalysisModal';
 import { ProductSelectDialog } from '../dialogs/ProductSelectDialog';
 import { useHome } from '../HomeContext';
 import apiService from '../../../../api/service';
@@ -67,8 +67,8 @@ export function AICompareSection() {
     setShowAnalysisModal(true);
   };
 
-  // 创建分析项目
-  const handleCreateAnalysis = async (title: string, description?: string) => {
+  // 创建分析项目（支持对比分析和市场洞察）
+  const handleCreateAnalysis = async (title: string, description?: string, analysisType?: AnalysisType) => {
     try {
       const productsList = selectedProductIds.map((productId, index) => ({
         product_id: productId,
@@ -80,11 +80,13 @@ export function AICompareSection() {
         description,
         products: productsList,
         auto_run: true,
+        analysis_type: analysisType || 'comparison',
       });
 
       if (result.success && result.project) {
         const projectId = result.project.id;
-        toast.success('对比分析已启动', {
+        const typeName = analysisType === 'market_insight' ? '市场洞察' : '对比分析';
+        toast.success(`${typeName}已启动`, {
           description: '分析预计需要 1-2 分钟，点击查看进度',
           duration: 8000,
           action: {
@@ -111,8 +113,13 @@ export function AICompareSection() {
   const loadProjects = async () => {
     setLoading(true);
     try {
-      const response = await apiService.getAnalysisProjects();
-      setProjects(response.projects || []);
+      // 只获取当前用户创建的对比分析项目
+      const response = await apiService.getAnalysisProjects({ my_only: true });
+      // 过滤出对比分析类型的项目（排除市场洞察类型）
+      const comparisonProjects = (response.projects || []).filter(
+        (p: AnalysisProject) => p.analysis_type !== 'market_insight'
+      );
+      setProjects(comparisonProjects);
     } catch (err: any) {
       toast.error('加载失败');
     } finally {

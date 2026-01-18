@@ -52,3 +52,7 @@ build/
 beta_users*.txt
 beta_users*.sql
 fix_*.sql
+
+# SSL 证书（私钥不提交）
+nginx/ssl/*.key
+22905189_98kamz.com_nginx/

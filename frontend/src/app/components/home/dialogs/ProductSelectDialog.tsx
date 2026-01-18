@@ -1,13 +1,14 @@
 /**
  * 产品选择对话框 - 通用组件
+ * [UPDATED 2026-01-17] 添加产品分析状态显示
  */
 import { useState, useEffect } from 'react';
-import { Check, Heart, Star, MessageSquare, Package, Loader2 } from 'lucide-react';
+import { Check, Heart, MessageSquare, Package, Loader2, AlertCircle, CheckCircle2 } from 'lucide-react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '../../ui/dialog';
 import { Button } from '../../ui/button';
 import { ImageWithFallback } from '../../figma/ImageWithFallback';
 import { useHome } from '../HomeContext';
-import apiService from '../../../../api/service';
+import apiService, { ProductAnalysisStatusItem } from '../../../../api/service';
 
 interface UserProject {
   id: string;
@@ -23,9 +24,11 @@ interface UserProject {
 interface ProductSelectDialogProps {
   /** 确认选择后的回调，返回选中的产品 ASIN 列表和产品详情 */
   onConfirm?: (asins: string[], projects: UserProject[]) => void;
+  /** [NEW] 是否为市场洞察模式，显示分析状态 */
+  showAnalysisStatus?: boolean;
 }
 
-export function ProductSelectDialog({ onConfirm }: ProductSelectDialogProps) {
+export function ProductSelectDialog({ onConfirm, showAnalysisStatus = true }: ProductSelectDialogProps) {
   const {
     showProductSelectDialog,
     setShowProductSelectDialog,
@@ -37,6 +40,10 @@ export function ProductSelectDialog({ onConfirm }: ProductSelectDialogProps) {
 
   const [projects, setProjects] = useState<UserProject[]>([]);
   const [loading, setLoading] = useState(false);
+  
+  // [NEW] 产品分析状态
+  const [analysisStatusMap, setAnalysisStatusMap] = useState<Record<string, ProductAnalysisStatusItem>>({});
+  const [loadingStatus, setLoadingStatus] = useState(false);
 
   // 加载产品列表
   useEffect(() => {
@@ -44,6 +51,36 @@ export function ProductSelectDialog({ onConfirm }: ProductSelectDialogProps) {
       loadProjects();
     }
   }, [showProductSelectDialog]);
+  
+  // [NEW] 加载分析状态
+  useEffect(() => {
+    if (showProductSelectDialog && showAnalysisStatus && projects.length > 0) {
+      loadAnalysisStatus();
+    }
+  }, [showProductSelectDialog, projects, showAnalysisStatus]);
+  
+  // [NEW] 加载产品分析状态
+  const loadAnalysisStatus = async () => {
+    const productIds = projects
+      .map(p => p.product_id || p.id)
+      .filter(id => id);
+    
+    if (productIds.length === 0) return;
+    
+    setLoadingStatus(true);
+    try {
+      const result = await apiService.checkProductsAnalysisStatus(productIds);
+      const statusMap: Record<string, ProductAnalysisStatusItem> = {};
+      result.products.forEach(item => {
+        statusMap[item.product_id] = item;
+      });
+      setAnalysisStatusMap(statusMap);
+    } catch (err) {
+      console.error('Failed to load analysis status:', err);
+    } finally {
+      setLoadingStatus(false);
+    }
+  };
 
   const loadProjects = async () => {
     setLoading(true);
@@ -157,6 +194,11 @@ export function ProductSelectDialog({ onConfirm }: ProductSelectDialogProps) {
                   const isChecked = compareProducts.includes(project.asin);
                   const isDisabled = !isChecked && compareProducts.length >= 5;
                   
+                  // [NEW] 获取分析状态
+                  const productId = project.product_id || project.id;
+                  const analysisStatus = analysisStatusMap[productId];
+                  const isAnalysisReady = analysisStatus?.is_ready ?? true; // 默认认为已完成（向后兼容）
+                  
                   return (
                     <div
                       key={project.id}
@@ -174,10 +216,32 @@ export function ProductSelectDialog({ onConfirm }: ProductSelectDialogProps) {
                       }}
                     >
                       <div className="p-4">
-                        {/* Header Row: ASIN and Favorite */}
+                        {/* Header Row: ASIN, Status and Favorite */}
                         <div className="flex items-center justify-between mb-3">
-                          <div className="text-xs text-slate-500 font-medium px-2 py-1 bg-slate-100 rounded">
-                            {project.asin}
+                          <div className="flex items-center gap-2">
+                            <div className="text-xs text-slate-500 font-medium px-2 py-1 bg-slate-100 rounded">
+                              {project.asin}
+                            </div>
+                            {/* [NEW] 分析状态标识 */}
+                            {showAnalysisStatus && (
+                              loadingStatus ? (
+                                <div className="flex items-center gap-1 text-xs text-slate-400 bg-slate-50 px-1.5 py-0.5 rounded">
+                                  <Loader2 className="w-3 h-3 animate-spin" />
+                                </div>
+                              ) : analysisStatus ? (
+                                isAnalysisReady ? (
+                                  <div className="flex items-center gap-1 text-xs text-green-600 bg-green-50 px-1.5 py-0.5 rounded">
+                                    <CheckCircle2 className="w-3 h-3" />
+                                    <span>已分析</span>
+                                  </div>
+                                ) : (
+                                  <div className="flex items-center gap-1 text-xs text-amber-600 bg-amber-50 px-1.5 py-0.5 rounded">
+                                    <AlertCircle className="w-3 h-3" />
+                                    <span>未分析</span>
+                                  </div>
+                                )
+                              ) : null
+                            )}
                           </div>
                           <div className="flex items-center gap-2">
                             <Heart 

@@ -407,10 +407,13 @@ import type {
  * 获取产品列表（兼容现有后端）
  * @param myOnly 只显示我的项目
  */
-export async function getProducts(myOnly = false): Promise<ApiProductListResponse> {
+export async function getProducts(myOnly = false, adminOnly = false): Promise<ApiProductListResponse> {
   const params = new URLSearchParams();
   if (myOnly) {
     params.set('my_only', 'true');
+  }
+  if (adminOnly) {
+    params.set('admin_only', 'true');
   }
   const url = `${API_BASE}/products${params.toString() ? '?' + params.toString() : ''}`;
   const response = await fetch(url, {
@@ -762,13 +765,17 @@ export async function getReportHistory(
  */
 export async function getAllReports(
   limit: number = 100,
-  reportType?: string
+  reportType?: string,
+  myOnly: boolean = false
 ): Promise<ApiReportListResponse> {
   let url = `${API_BASE}/products/reports/all?limit=${limit}`;
   if (reportType) {
     url += `&report_type=${reportType}`;
   }
-  const response = await fetch(url);
+  if (myOnly) {
+    url += `&my_only=true`;
+  }
+  const response = await fetch(url, { headers: getAuthHeaders() });
   if (!response.ok) {
     const errorText = await response.text();
     let message = response.statusText;
@@ -952,13 +959,14 @@ export async function checkTasksHealth(
 // ============== 对比分析相关 ==============
 
 /**
- * 创建对比分析项目
+ * 创建分析项目（支持对比分析和市场洞察）
  */
 export async function createAnalysisProject(params: {
   title: string;
   description?: string;
   products: Array<{ product_id: string; role_label?: string }>;
   auto_run?: boolean;
+  analysis_type?: 'comparison' | 'market_insight';
 }): Promise<{
   success: boolean;
   message: string;
@@ -966,6 +974,7 @@ export async function createAnalysisProject(params: {
     id: string;
     title: string;
     status: string;
+    analysis_type?: string;
     created_at: string;
   };
   error?: string;
@@ -993,11 +1002,15 @@ export async function createAnalysisProject(params: {
 
 /**
  * 获取分析项目列表
+ * @param params.admin_only 只显示包含管理员关注产品的项目（用于市场洞察广场）
+ * @param params.my_only 只显示当前用户创建的项目
  */
 export async function getAnalysisProjects(params?: {
   limit?: number;
   offset?: number;
   status?: string;
+  admin_only?: boolean;
+  my_only?: boolean;
 }): Promise<{
   success: boolean;
   total: number;
@@ -1006,6 +1019,7 @@ export async function getAnalysisProjects(params?: {
     title: string;
     status: string;
     created_at: string;
+    analysis_type?: string;
     items: Array<{
       id: string;
       product_id: string;
@@ -1023,10 +1037,12 @@ export async function getAnalysisProjects(params?: {
   if (params?.limit) searchParams.set('limit', params.limit.toString());
   if (params?.offset) searchParams.set('offset', params.offset.toString());
   if (params?.status) searchParams.set('status', params.status);
+  if (params?.admin_only) searchParams.set('admin_only', 'true');
+  if (params?.my_only) searchParams.set('my_only', 'true');
   
   const query = searchParams.toString();
   const url = `${API_BASE}/analysis/projects${query ? `?${query}` : ''}`;
-  const response = await fetch(url);
+  const response = await fetch(url, { headers: getAuthHeaders() });
   if (!response.ok) {
     throw new ApiError(response.status, response.statusText);
   }
@@ -1164,6 +1180,44 @@ export async function getAutoAnalysisStatus(asin: string): Promise<{
   return response.json();
 }
 
+/**
+ * [NEW] 检查多个产品的分析完成状态
+ * 用于市场洞察功能：需要所有产品都已完成单产品分析
+ */
+export interface ProductAnalysisStatusItem {
+  product_id: string;
+  asin: string;
+  title: string;
+  has_dimensions: boolean;
+  has_labels: boolean;
+  is_ready: boolean;
+}
+
+export interface ProductAnalysisStatusResponse {
+  success: boolean;
+  all_ready: boolean;
+  products: ProductAnalysisStatusItem[];
+  incomplete_count: number;
+  message?: string;
+}
+
+export async function checkProductsAnalysisStatus(
+  productIds: string[]
+): Promise<ProductAnalysisStatusResponse> {
+  const response = await fetch(`${API_BASE}/analysis/products/analysis-status`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ product_ids: productIds }),
+  });
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    throw new ApiError(response.status, errorData.detail || response.statusText);
+  }
+  return response.json();
+}
+
 // ============== 导出服务对象 ==============
 
 const apiService = {
@@ -1246,6 +1300,9 @@ const apiService = {
   // [NEW] 全自动分析（采集完成后触发）
   triggerAutoAnalysis,
   getAutoAnalysisStatus,
+  
+  // [NEW] 市场洞察 - 产品分析状态检查
+  checkProductsAnalysisStatus,
   
   // [NEW] 用户项目管理
   getMyProjects,

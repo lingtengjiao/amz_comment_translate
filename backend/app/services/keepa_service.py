@@ -69,27 +69,44 @@ class KeepaService:
         Returns:
             价格历史列表 [(timestamp, price), ...]
         """
+        import numpy as np
+        
         data = keepa_data.get('data', {})
         price_key = condition  # NEW, USED, etc.
         time_key = f"{condition}_time"
         
-        prices = data.get(price_key, [])
-        times = data.get(time_key, [])
+        prices = data.get(price_key)
+        times = data.get(time_key)
         
-        if not prices or not times or len(prices) != len(times):
+        # 检查数据是否存在
+        if prices is None or times is None:
             return []
         
-        # Keepa 时间戳是 Unix 时间戳（分钟）
-        # 价格需要除以 100（以分为单位存储）
+        # 转换 numpy 数组长度检查
+        try:
+            if len(prices) != len(times) or len(prices) == 0:
+                return []
+        except:
+            return []
+        
+        # Keepa Python 库已经将时间转换为 datetime 对象
+        # 价格单位是美分，需要转换为美元
         history = []
-        for i, (price, time_minutes) in enumerate(zip(prices, times)):
-            if price is not None and time_minutes is not None:
-                # 转换为 datetime
-                timestamp = datetime.fromtimestamp(time_minutes * 60)
-                # 价格从分转换为元
-                price_value = price / 100.0 if price > 0 else None
-                if price_value:
-                    history.append((timestamp, price_value))
+        for price, timestamp in zip(prices, times):
+            # 检查 nan 值（numpy 数组中的无效值）
+            try:
+                if np.isnan(price) if isinstance(price, (float, np.floating)) else False:
+                    continue
+                if price is None or timestamp is None:
+                    continue
+                if price <= 0:
+                    continue
+                    
+                # Keepa 价格单位是美分，转换为美元
+                price_value = float(price)
+                history.append((timestamp, price_value))
+            except (TypeError, ValueError):
+                continue
         
         return history
     
@@ -103,18 +120,35 @@ class KeepaService:
         Returns:
             销售排名历史列表 [(timestamp, rank), ...]
         """
-        data = keepa_data.get('data', {})
-        ranks = data.get('SALES', [])
-        times = data.get('SALES_time', [])
+        import numpy as np
         
-        if not ranks or not times or len(ranks) != len(times):
+        data = keepa_data.get('data', {})
+        ranks = data.get('SALES')
+        times = data.get('SALES_time')
+        
+        if ranks is None or times is None:
+            return []
+        
+        try:
+            if len(ranks) != len(times) or len(ranks) == 0:
+                return []
+        except:
             return []
         
         history = []
-        for rank, time_minutes in zip(ranks, times):
-            if rank is not None and time_minutes is not None:
-                timestamp = datetime.fromtimestamp(time_minutes * 60)
-                history.append((timestamp, rank))
+        for rank, timestamp in zip(ranks, times):
+            try:
+                # 跳过无效值（-1 或 nan）
+                if rank is None or timestamp is None:
+                    continue
+                if isinstance(rank, (float, np.floating)) and np.isnan(rank):
+                    continue
+                rank_int = int(rank)
+                if rank_int <= 0:  # -1 表示无数据
+                    continue
+                history.append((timestamp, rank_int))
+            except (TypeError, ValueError):
+                continue
         
         return history
     
@@ -128,22 +162,46 @@ class KeepaService:
         Returns:
             评分历史列表 [(timestamp, rating, review_count), ...]
         """
-        data = keepa_data.get('data', {})
-        ratings = data.get('RATING', [])
-        review_counts = data.get('COUNT', [])
-        times = data.get('RATING_time', [])
+        import numpy as np
         
-        if not ratings or not times:
+        data = keepa_data.get('data', {})
+        ratings = data.get('RATING')
+        review_counts = data.get('COUNT_REVIEWS')  # Keepa 使用 COUNT_REVIEWS
+        times = data.get('RATING_time')
+        
+        if ratings is None or times is None:
+            return []
+        
+        try:
+            if len(times) == 0:
+                return []
+        except:
             return []
         
         history = []
-        for i, time_minutes in enumerate(times):
-            if time_minutes is not None:
-                timestamp = datetime.fromtimestamp(time_minutes * 60)
-                rating = ratings[i] / 10.0 if i < len(ratings) and ratings[i] is not None else None
-                review_count = review_counts[i] if i < len(review_counts) and review_counts[i] is not None else None
-                if rating is not None:
-                    history.append((timestamp, rating, review_count or 0))
+        for i, timestamp in enumerate(times):
+            try:
+                if timestamp is None:
+                    continue
+                    
+                # 获取评分（Keepa Python 库已转换为正常值，如 4.5）
+                rating = None
+                if i < len(ratings) and ratings[i] is not None:
+                    rating_val = ratings[i]
+                    if not (isinstance(rating_val, (float, np.floating)) and np.isnan(rating_val)):
+                        rating = float(rating_val)  # 无需除以 10
+                
+                # 获取评论数
+                review_count = 0
+                if review_counts is not None and i < len(review_counts) and review_counts[i] is not None:
+                    count_val = review_counts[i]
+                    if not (isinstance(count_val, (float, np.floating)) and np.isnan(count_val)):
+                        review_count = int(count_val)
+                
+                if rating is not None and rating > 0:
+                    history.append((timestamp, rating, review_count))
+            except (TypeError, ValueError, IndexError):
+                continue
         
         return history
 

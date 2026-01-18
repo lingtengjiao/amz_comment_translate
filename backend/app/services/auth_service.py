@@ -304,3 +304,7 @@ async def get_admin_user(
             detail="需要管理员权限"
         )
     return user
+
+
+# Alias for backward compatibility
+get_optional_current_user = get_current_user

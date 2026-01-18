@@ -10,8 +10,9 @@
  */
 
 // Backend API configuration
-// 本地开发环境配置
-const API_BASE_URL = 'http://localhost:8000/api/v1';
+// 生产环境配置
+const API_BASE_URL = 'https://98kamz.com/api/v1';
+const DASHBOARD_URL = 'https://98kamz.com';  // 前端 Dashboard URL
 
 // ==========================================
 // 用户认证状态管理
@@ -414,6 +415,39 @@ async function uploadReviews(data, maxRetries = 3) {
   throw new Error(`上传失败 (已重试${maxRetries}次): ${lastError.message}`);
 }
 
+/**
+ * Upload Rufus conversation data to backend
+ */
+async function uploadRufusConversation(data) {
+  const endpoint = `${API_BASE_URL}/rufus/conversation`;
+  
+  try {
+    console.log('[Rufus] Uploading conversation data:', data.asin);
+    
+    const response = await fetchWithTimeout(
+      endpoint,
+      {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: JSON.stringify(data)
+      },
+      30000
+    );
+
+    if (!response.ok) {
+      const error = await response.text();
+      throw new Error(`Upload failed: ${error}`);
+    }
+
+    const result = await response.json();
+    console.log('[Rufus] Upload successful:', result);
+    return result;
+  } catch (error) {
+    console.error('[Rufus] Upload error:', error.message);
+    throw error;
+  }
+}
+
 // Media type URL parameters for Amazon reviews
 // 两个互斥选项：全部评论 vs 仅带媒体的评论
 const MEDIA_FILTERS = {
@@ -422,9 +456,42 @@ const MEDIA_FILTERS = {
 };
 
 /**
- * Build reviews page URL with cache-busting
+ * Get Amazon domain from marketplace code
  */
-function buildReviewsUrl(asin, star, page = 1, mediaType = 'all_formats') {
+function getAmazonDomain(marketplace) {
+  const domainMap = {
+    'US': 'amazon.com',
+    'UK': 'amazon.co.uk',
+    'DE': 'amazon.de',
+    'FR': 'amazon.fr',
+    'JP': 'amazon.co.jp',
+    'AU': 'amazon.com.au'
+  };
+  return domainMap[marketplace] || 'amazon.com';
+}
+
+/**
+ * Extract marketplace from URL
+ */
+function extractMarketplaceFromUrl(url) {
+  if (!url) return 'US';
+  if (url.includes('.co.uk')) return 'UK';
+  if (url.includes('.de')) return 'DE';
+  if (url.includes('.fr')) return 'FR';
+  if (url.includes('.co.jp')) return 'JP';
+  if (url.includes('.com.au')) return 'AU';
+  return 'US';
+}
+
+/**
+ * Build reviews page URL with cache-busting
+ * @param {string} asin - Product ASIN
+ * @param {number} star - Star rating (1-5)
+ * @param {number} page - Page number
+ * @param {string} mediaType - Media type filter
+ * @param {string} marketplace - Marketplace code (US, UK, DE, FR, JP, AU)
+ */
+function buildReviewsUrl(asin, star, page = 1, mediaType = 'all_formats', marketplace = 'US') {
   const starFilter = STAR_FILTERS[star];
   // 获取媒体过滤器值
   const mediaFilter = MEDIA_FILTERS[mediaType] || 'all_contents';
@@ -441,8 +508,9 @@ function buildReviewsUrl(asin, star, page = 1, mediaType = 'all_formats') {
     _ts: Date.now().toString()
   });
   
-  const url = `https://www.amazon.com/product-reviews/${asin}?${params.toString()}`;
-  console.log(`[URL] Built: ${url}`);
+  const domain = getAmazonDomain(marketplace);
+  const url = `https://www.${domain}/product-reviews/${asin}?${params.toString()}`;
+  console.log(`[URL] Built: ${url} (marketplace: ${marketplace})`);
   return url;
 }
 
@@ -565,8 +633,9 @@ async function extractReviewsFromTab(tabId) {
               if (titleLink && titleLink.href && titleLink.href.includes('/gp/customer-reviews/')) {
                 reviewUrl = titleLink.href;
               } else if (reviewId && reviewId.startsWith('R')) {
-                // 根据 reviewId 生成默认链接
-                reviewUrl = `https://www.amazon.com/gp/customer-reviews/${reviewId}`;
+                // 根据 reviewId 生成默认链接（使用当前页面的域名）
+                const origin = window.location.origin;
+                reviewUrl = `${origin}/gp/customer-reviews/${reviewId}`;
               }
             }
 
@@ -680,6 +749,30 @@ async function extractReviewsFromTab(tabId) {
             const helpfulMatch = helpfulEl?.textContent?.match(/(\d+)/);
             const helpfulVotes = helpfulMatch ? parseInt(helpfulMatch[1]) : 0;
 
+            // ========== 变体信息提取 ==========
+            // 尝试多种选择器提取变体信息
+            let variant = null;
+            const variantSelectors = [
+              '[data-hook="format-strip"]',           // 最常见的形式
+              '[data-hook="format-strip-linkless"]',  // 无链接版本
+              '.review-format-strip a',               // 通过类名查找
+              '.review-format-strip'                  // 直接取容器文本
+            ];
+            for (const selector of variantSelectors) {
+              const variantEl = el.querySelector(selector);
+              if (variantEl) {
+                const text = variantEl.textContent?.trim();
+                if (text && text.length > 0 && !text.includes('Verified Purchase')) {
+                  variant = text;
+                  break;
+                }
+              }
+            }
+            // 调试日志
+            if (index < 3) {
+              console.log(`[Page] Review ${index} variant:`, variant);
+            }
+
             // ========== 图片检测和提取 ==========
             let hasImages = false;
             const imageUrls = [];
@@ -787,6 +880,8 @@ async function extractReviewsFromTab(tabId) {
                 review_date: reviewDate,
                 verified_purchase: verifiedPurchase,
                 helpful_votes: helpfulVotes,
+                // 变体信息
+                variant: variant,
                 // 新增媒体字段
                 has_images: hasImages,
                 has_video: hasVideo,
@@ -819,6 +914,15 @@ async function extractReviewsFromTab(tabId) {
 
     const result = results[0]?.result || { reviews: [], pageNum: null, urlPageNum: null };
     console.log(`[Extract] Result: ${result.reviews.length} reviews, DOM page: ${result.pageNum}, URL page: ${result.urlPageNum}`);
+    
+    // 🔍 调试：打印前3条评论的 variant 值
+    if (result.reviews.length > 0) {
+      console.log('[Extract] === VARIANT DEBUG ===');
+      result.reviews.slice(0, 3).forEach((r, i) => {
+        console.log(`[Extract] Review ${i}: id=${r.review_id}, variant=${r.variant}`);
+      });
+      console.log('[Extract] === END VARIANT DEBUG ===');
+    }
     
     return result;
   } catch (error) {
@@ -959,6 +1063,13 @@ async function collectReviewsWithTab(asin, stars, pagesPerStar, mediaType, speed
   // [NEW] 记录工作流模式
   console.log(`[Collector] Workflow mode: ${workflowMode}`);
   
+  // [NEW] 确定 marketplace（先尝试从 productInfo，否则从 originalTabId 获取）
+  let marketplace = 'US';
+  if (scrapedProductInfo?.marketplace) {
+    marketplace = scrapedProductInfo.marketplace;
+    console.log(`[Collector] Marketplace from productInfo: ${marketplace}`);
+  }
+  
   // 根据速度模式设置等待时间
   // ⚡ 极速模式：激进但不踩红线，依赖 DOM 变化检测而非固定等待
   // 🛡️ 稳定模式：保守策略，适合长时间大量采集
@@ -1004,6 +1115,12 @@ async function collectReviewsWithTab(asin, stars, pagesPerStar, mediaType, speed
       if (currentTab) {
         originalTabId = currentTab.id;
         console.log('[Collector] Original tab:', originalTabId);
+        
+        // [NEW] 如果还没有 marketplace，从原始标签页 URL 获取
+        if (!scrapedProductInfo?.marketplace && currentTab.url) {
+          marketplace = extractMarketplaceFromUrl(currentTab.url);
+          console.log(`[Collector] Marketplace from original tab: ${marketplace}`);
+        }
       }
     } catch (e) {
       console.log('[Collector] Could not get original tab');
@@ -1037,7 +1154,8 @@ async function collectReviewsWithTab(asin, stars, pagesPerStar, mediaType, speed
     } else {
       console.log('[Collector] Fetching product info for stream mode...');
       try {
-        const productPageUrl = `https://www.amazon.com/dp/${asin}`;
+        const domain = getAmazonDomain(marketplace);
+        const productPageUrl = `https://www.${domain}/dp/${asin}`;
         await chrome.tabs.update(collectorTabId, { url: productPageUrl });
         await waitForTabLoad(collectorTabId, 30000);
         await new Promise(r => setTimeout(r, timing.firstPageWait));
@@ -1091,16 +1209,21 @@ async function collectReviewsWithTab(asin, stars, pagesPerStar, mediaType, speed
             }
             
             const url = window.location.href;
-            let marketplace = 'US';
-            if (url.includes('.co.uk')) marketplace = 'UK';
-            else if (url.includes('.de')) marketplace = 'DE';
-            return { title, imageUrl, averageRating, price, bulletPoints, categories, marketplace };
+            let detectedMarketplace = 'US';
+            if (url.includes('.co.uk')) detectedMarketplace = 'UK';
+            else if (url.includes('.de')) detectedMarketplace = 'DE';
+            else if (url.includes('.fr')) detectedMarketplace = 'FR';
+            else if (url.includes('.co.jp')) detectedMarketplace = 'JP';
+            else if (url.includes('.com.au')) detectedMarketplace = 'AU';
+            return { title, imageUrl, averageRating, price, bulletPoints, categories, marketplace: detectedMarketplace };
           }
         });
         
         if (infoResults[0]?.result) {
           scrapedProductInfo = infoResults[0].result;
+          marketplace = scrapedProductInfo.marketplace || marketplace; // 更新 marketplace
           console.log('[Collector] ✅ Product info scraped:', scrapedProductInfo.title?.substring(0, 50));
+          console.log('[Collector] Marketplace detected:', marketplace);
         }
       } catch (e) {
         console.warn('[Collector] Failed to scrape product info:', e.message);
@@ -1140,7 +1263,7 @@ async function collectReviewsWithTab(asin, stars, pagesPerStar, mediaType, speed
           // For page 1: Navigate via URL
           // For subsequent pages: Click the "Next" button (more human-like)
           if (page === 1) {
-            const url = buildReviewsUrl(asin, star, 1, mediaType);
+            const url = buildReviewsUrl(asin, star, 1, mediaType, marketplace);
             console.log(`[Collector] Page 1 - Navigating via URL:`, url);
             
             await chrome.tabs.update(collectorTabId, { url });
@@ -1229,6 +1352,12 @@ async function collectReviewsWithTab(asin, stars, pagesPerStar, mediaType, speed
         
         // [NEW] 🔥 流式上传：每页采集后立即上传新评论
         if (pageNewReviews.length > 0) {
+          // 🔍 调试：检查上传前的 variant 数据
+          console.log(`[Stream] === UPLOAD DEBUG (page ${page}) ===`);
+          pageNewReviews.slice(0, 2).forEach((r, i) => {
+            console.log(`[Stream] Review ${i}: id=${r.review_id}, variant=${r.variant}`);
+          });
+          
           try {
             const streamBatchData = {
               asin: asin,
@@ -1635,6 +1764,40 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         .catch(error => sendResponse({ valid: false, error: error.message }));
       return true;
 
+    // ==========================================
+    // Rufus 对话消息处理
+    // ==========================================
+    case 'UPLOAD_RUFUS_CONVERSATION':
+      uploadRufusConversation(message.data)
+        .then(result => {
+          sendResponse({ success: true, data: result });
+        })
+        .catch(error => {
+          sendResponse({ success: false, error: error.message });
+        });
+      return true; // Keep message channel open for async response
+
+    // ==========================================
+    // [NEW] 搜索结果页批量分析消息处理
+    // ==========================================
+    case 'BATCH_INSIGHT_ANALYSIS':
+      handleBatchInsightAnalysis(message.products, message.marketplace)
+        .then(result => sendResponse(result))
+        .catch(error => sendResponse({ success: false, error: error.message }));
+      return true;
+    
+    case 'COMPARISON_ANALYSIS':
+      handleComparisonAnalysis(message.products, message.marketplace)
+        .then(result => sendResponse(result))
+        .catch(error => sendResponse({ success: false, error: error.message }));
+      return true;
+    
+    case 'MARKET_INSIGHT_ANALYSIS':
+      handleMarketInsightAnalysis(message.products, message.marketplace)
+        .then(result => sendResponse(result))
+        .catch(error => sendResponse({ success: false, error: error.message }));
+      return true;
+
     default:
       sendResponse({ error: 'Unknown message type' });
   }
@@ -1910,6 +2073,7 @@ async function collectReviewsWithTabAuto(asin, stars, pagesPerStar, mediaType, s
   const allReviews = [];
   const seenReviewIds = new Set();
   let scrapedProductInfo = null; // 存储自动抓取的产品信息
+  let marketplace = 'US'; // 默认 marketplace
   
   // 使用与 collectReviewsWithTab 相同的速度配置
   const SPEED_CONFIG = {
@@ -1968,7 +2132,10 @@ async function collectReviewsWithTabAuto(asin, stars, pagesPerStar, mediaType, s
       message: `正在获取产品信息...`
     });
     
-    const productPageUrl = `https://www.amazon.com/dp/${asin}`;
+    // 尝试从 ASIN 推断 marketplace（如果可能），否则使用默认值
+    // 注意：这里使用默认 US，实际 marketplace 会在抓取产品信息时从页面 URL 检测
+    const domain = getAmazonDomain(marketplace);
+    const productPageUrl = `https://www.${domain}/dp/${asin}`;
     console.log('[AutoCollector] Step 1 - Loading product page:', productPageUrl);
     
     await chrome.tabs.update(autoCollectorTabId, { url: productPageUrl });
@@ -2081,18 +2248,20 @@ async function collectReviewsWithTabAuto(asin, stars, pagesPerStar, mediaType, s
 
           // === 判断市场 ===
           const url = window.location.href;
-          let marketplace = 'US';
-          if (url.includes('.co.uk')) marketplace = 'UK';
-          else if (url.includes('.de')) marketplace = 'DE';
-          else if (url.includes('.fr')) marketplace = 'FR';
-          else if (url.includes('.co.jp')) marketplace = 'JP';
+          let detectedMarketplace = 'US';
+          if (url.includes('.co.uk')) detectedMarketplace = 'UK';
+          else if (url.includes('.de')) detectedMarketplace = 'DE';
+          else if (url.includes('.fr')) detectedMarketplace = 'FR';
+          else if (url.includes('.co.jp')) detectedMarketplace = 'JP';
+          else if (url.includes('.com.au')) detectedMarketplace = 'AU';
 
-          return { title, imageUrl, averageRating, price, bulletPoints, categories, marketplace };
+          return { title, imageUrl, averageRating, price, bulletPoints, categories, marketplace: detectedMarketplace };
         }
       });
       
       if (infoResults[0]?.result) {
         scrapedProductInfo = infoResults[0].result;
+        marketplace = scrapedProductInfo.marketplace || marketplace; // 更新 marketplace
         console.log('[AutoCollector] ✅ Scraped full product info:', {
           title: scrapedProductInfo.title,
           hasImage: !!scrapedProductInfo.imageUrl,
@@ -2100,7 +2269,7 @@ async function collectReviewsWithTabAuto(asin, stars, pagesPerStar, mediaType, s
           price: scrapedProductInfo.price,
           bulletPointsCount: scrapedProductInfo.bulletPoints?.length || 0,
           categoriesCount: scrapedProductInfo.categories?.length || 0,
-          marketplace: scrapedProductInfo.marketplace
+          marketplace: marketplace
         });
       }
     } catch (e) {
@@ -2144,7 +2313,7 @@ async function collectReviewsWithTabAuto(asin, stars, pagesPerStar, mediaType, s
         
         try {
           if (page === 1) {
-            const url = buildReviewsUrl(asin, star, 1, mediaType);
+            const url = buildReviewsUrl(asin, star, 1, mediaType, marketplace);
             console.log(`[AutoCollector] Page 1 - Navigating to:`, url);
             
             await chrome.tabs.update(autoCollectorTabId, { url });
@@ -2338,5 +2507,327 @@ async function collectReviewsWithTabAuto(asin, stars, pagesPerStar, mediaType, s
       } catch (e) {}
     }
     throw error;
+  }
+}
+
+// ============================================================================
+// [NEW] 搜索结果页批量分析功能 - API 辅助函数和处理器
+// ============================================================================
+
+/**
+ * [NEW] 获取产品信息（通过 ASIN）
+ * @param {string} asin - 产品 ASIN
+ * @returns {Object|null} 产品信息或 null
+ */
+async function getProductByAsin(asin) {
+  try {
+    const response = await fetchWithTimeout(
+      `${API_BASE_URL}/products/${asin}`,
+      {
+        method: 'GET',
+        headers: getAuthHeaders()
+      },
+      15000
+    );
+    
+    if (response.ok) {
+      return await response.json();
+    }
+    return null;
+  } catch (error) {
+    console.error(`[API] Error fetching product ${asin}:`, error.message);
+    return null;
+  }
+}
+
+/**
+ * [NEW] 获取多个产品的 UUID
+ * @param {Array} asins - ASIN 数组
+ * @returns {Object} { asin: product_id } 映射
+ */
+async function getProductIds(asins) {
+  const productIds = {};
+  
+  for (const asin of asins) {
+    const product = await getProductByAsin(asin);
+    if (product && product.id) {
+      productIds[asin] = product.id;
+    }
+  }
+  
+  return productIds;
+}
+
+/**
+ * [NEW] 触发单产品分析
+ * @param {string} asin - 产品 ASIN
+ * @returns {Object} 分析结果
+ */
+async function triggerProductAnalysis(asin) {
+  try {
+    const response = await fetchWithTimeout(
+      `${API_BASE_URL}/products/${asin}/start-analysis`,
+      {
+        method: 'POST',
+        headers: getAuthHeaders()
+      },
+      30000
+    );
+    
+    if (response.ok) {
+      return { success: true, asin, data: await response.json() };
+    } else {
+      const error = await response.text();
+      return { success: false, asin, error };
+    }
+  } catch (error) {
+    return { success: false, asin, error: error.message };
+  }
+}
+
+/**
+ * [NEW] 创建对比/市场洞察分析项目
+ * @param {Array} productIds - 产品 UUID 数组
+ * @param {string} title - 项目标题
+ * @param {string} analysisType - 分析类型: comparison | market_insight
+ * @returns {Object} 创建结果
+ */
+async function createAnalysisProject(productIds, title, analysisType) {
+  try {
+    const products = productIds.map(id => ({
+      product_id: id,
+      role_label: null
+    }));
+    
+    const response = await fetchWithTimeout(
+      `${API_BASE_URL}/analysis/projects`,
+      {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({
+          title,
+          description: `从亚马逊搜索结果创建的${analysisType === 'comparison' ? '对比分析' : '市场洞察'}项目`,
+          products,
+          analysis_type: analysisType
+        })
+      },
+      30000
+    );
+    
+    if (response.ok) {
+      const result = await response.json();
+      return { success: true, data: result };
+    } else {
+      const error = await response.text();
+      return { success: false, error };
+    }
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+}
+
+/**
+ * [NEW] 处理批量洞察分析
+ * 对每个选中的产品分别触发分析
+ */
+async function handleBatchInsightAnalysis(products, marketplace) {
+  console.log('[BatchInsight] Starting batch analysis for', products.length, 'products');
+  
+  if (!products || products.length === 0) {
+    return { success: false, error: '未选择任何产品' };
+  }
+  
+  const results = {
+    total: products.length,
+    success: 0,
+    failed: 0,
+    needsCollection: 0,
+    details: []
+  };
+  
+  for (const product of products) {
+    try {
+      // 检查产品是否存在
+      const existingProduct = await getProductByAsin(product.asin);
+      
+      if (!existingProduct) {
+        // 产品不存在，需要先采集
+        results.needsCollection++;
+        results.details.push({
+          asin: product.asin,
+          status: 'needs_collection',
+          message: '产品需要先采集评论'
+        });
+        
+        // 将产品添加到采集队列
+        taskQueue.push({
+          asin: product.asin,
+          config: {
+            stars: [1, 2, 3, 4, 5],
+            pagesPerStar: 3,
+            mediaType: 'all_formats',
+            speedMode: 'fast',
+            workflowMode: 'one_step_insight'  // 采集后自动分析
+          },
+          status: 'pending',
+          retries: 0
+        });
+        
+        continue;
+      }
+      
+      // 产品存在，触发分析
+      const analysisResult = await triggerProductAnalysis(product.asin);
+      
+      if (analysisResult.success) {
+        results.success++;
+        results.details.push({
+          asin: product.asin,
+          status: 'success',
+          message: '分析已启动'
+        });
+      } else {
+        results.failed++;
+        results.details.push({
+          asin: product.asin,
+          status: 'failed',
+          message: analysisResult.error
+        });
+      }
+    } catch (error) {
+      results.failed++;
+      results.details.push({
+        asin: product.asin,
+        status: 'error',
+        message: error.message
+      });
+    }
+  }
+  
+  // 如果有需要采集的产品，启动队列
+  if (results.needsCollection > 0 && !isQueueRunning) {
+    queueStats = { completed: 0, failed: 0, total: results.needsCollection };
+    isQueueRunning = true;
+    processQueue();
+  }
+  
+  console.log('[BatchInsight] Results:', results);
+  
+  return {
+    success: true,
+    message: `已处理 ${results.success} 个产品，${results.needsCollection} 个需要采集`,
+    results
+  };
+}
+
+/**
+ * [NEW] 处理对比分析
+ * 创建对比分析项目
+ */
+async function handleComparisonAnalysis(products, marketplace) {
+  console.log('[Comparison] Starting comparison analysis for', products.length, 'products');
+  
+  if (!products || products.length < 2) {
+    return { success: false, error: '对比分析需要至少 2 个产品' };
+  }
+  
+  if (products.length > 5) {
+    return { success: false, error: '对比分析最多支持 5 个产品' };
+  }
+  
+  // 获取所有产品的 UUID
+  const asins = products.map(p => p.asin);
+  const productIds = await getProductIds(asins);
+  
+  // 检查是否所有产品都存在
+  const missingAsins = asins.filter(asin => !productIds[asin]);
+  if (missingAsins.length > 0) {
+    return {
+      success: false,
+      error: `以下产品未采集: ${missingAsins.join(', ')}。请先采集这些产品的评论。`,
+      missingAsins
+    };
+  }
+  
+  // 创建对比分析项目
+  const productIdList = asins.map(asin => productIds[asin]);
+  const title = `搜索结果对比分析 (${asins.length} 个产品)`;
+  
+  const result = await createAnalysisProject(productIdList, title, 'comparison');
+  
+  if (result.success) {
+    // 获取项目 ID，构建跳转 URL
+    const projectId = result.data?.project?.id;
+    const redirectUrl = projectId 
+      ? `${DASHBOARD_URL}/analysis/${projectId}`
+      : `${DASHBOARD_URL}/home/analysis`;
+    
+    return {
+      success: true,
+      message: '对比分析项目已创建',
+      projectId,
+      redirectUrl
+    };
+  } else {
+    return {
+      success: false,
+      error: result.error || '创建对比分析项目失败'
+    };
+  }
+}
+
+/**
+ * [NEW] 处理市场洞察分析
+ * 创建市场洞察项目
+ */
+async function handleMarketInsightAnalysis(products, marketplace) {
+  console.log('[MarketInsight] Starting market insight analysis for', products.length, 'products');
+  
+  if (!products || products.length < 2) {
+    return { success: false, error: '市场洞察需要至少 2 个产品' };
+  }
+  
+  if (products.length > 10) {
+    return { success: false, error: '市场洞察最多支持 10 个产品' };
+  }
+  
+  // 获取所有产品的 UUID
+  const asins = products.map(p => p.asin);
+  const productIds = await getProductIds(asins);
+  
+  // 检查是否所有产品都存在
+  const missingAsins = asins.filter(asin => !productIds[asin]);
+  if (missingAsins.length > 0) {
+    return {
+      success: false,
+      error: `以下产品未采集: ${missingAsins.join(', ')}。请先采集这些产品的评论。`,
+      missingAsins
+    };
+  }
+  
+  // 创建市场洞察项目
+  const productIdList = asins.map(asin => productIds[asin]);
+  const title = `市场洞察分析 (${asins.length} 个产品)`;
+  
+  const result = await createAnalysisProject(productIdList, title, 'market_insight');
+  
+  if (result.success) {
+    // 获取项目 ID，构建跳转 URL
+    const projectId = result.data?.project?.id;
+    const redirectUrl = projectId 
+      ? `${DASHBOARD_URL}/analysis/${projectId}`
+      : `${DASHBOARD_URL}/home/analysis`;
+    
+    return {
+      success: true,
+      message: '市场洞察项目已创建',
+      projectId,
+      redirectUrl
+    };
+  } else {
+    return {
+      success: false,
+      error: result.error || '创建市场洞察项目失败'
+    };
   }
 }

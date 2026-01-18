@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "VOC-Master: Amazon Review Collector",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Collect Amazon product reviews for translation and analysis. 采集亚马逊商品评论，智能翻译分析。",
   "author": "VOC-Master Team",
   
@@ -19,12 +19,13 @@
     "https://*.amazon.de/*",
     "https://*.amazon.fr/*",
     "https://*.amazon.co.jp/*",
-    "http://115.191.30.209/*"
+    "https://*.amazon.com.au/*",
+    "https://98kamz.com/*"
   ],
   
   "externally_connectable": {
     "matches": [
-      "http://115.191.30.209/*"
+      "https://98kamz.com/*"
     ]
   },
   
@@ -50,7 +51,8 @@
         "https://*.amazon.co.uk/*",
         "https://*.amazon.de/*",
         "https://*.amazon.fr/*",
-        "https://*.amazon.co.jp/*"
+        "https://*.amazon.co.jp/*",
+        "https://*.amazon.com.au/*"
       ],
       "js": ["src/content/content.js"],
       "css": ["src/content/overlay.css"],
@@ -72,7 +74,8 @@
         "https://*.amazon.co.uk/*",
         "https://*.amazon.de/*",
         "https://*.amazon.fr/*",
-        "https://*.amazon.co.jp/*"
+        "https://*.amazon.co.jp/*",
+        "https://*.amazon.com.au/*"
       ]
     }
   ]

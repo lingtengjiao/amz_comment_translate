@@ -1,5 +1,5 @@
 """
-Analysis Models - 对比分析模块
+Analysis Models - 分析模块
 
 核心概念：
 - AnalysisProject: 分析项目，用于组织一次特定的分析任务
@@ -7,6 +7,7 @@ Analysis Models - 对比分析模块
 
 支持的分析类型：
 - comparison: 对比分析（竞品 A vs B，或 一代 vs 二代）
+- market_insight: 细分市场洞察（聚合多产品分析市场共性、趋势、机会）
 
 设计原则：
 1. 完全解耦：AnalysisProject 和 Product 是两条平行线
@@ -26,14 +27,14 @@ from app.db.session import Base
 
 if TYPE_CHECKING:
     from app.models.product import Product
+    from app.models.project_learning import ProjectDimension, ProjectContextLabel
+    from app.models.user import User
 
 
 class AnalysisType(str, enum.Enum):
     """分析类型枚举"""
     COMPARISON = "comparison"  # 对比分析 (A vs B)
-    # 未来可扩展:
-    # OVERALL = "overall"      # 整体/系列分析
-    # TREND = "trend"          # 趋势分析
+    MARKET_INSIGHT = "market_insight"  # 细分市场洞察（聚合多产品分析市场共性、趋势、机会）
 
 
 class AnalysisStatus(str, enum.Enum):
@@ -70,7 +71,7 @@ class AnalysisProject(Base):
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     
-    # 分析类型：目前主要是 'comparison'
+    # 分析类型：'comparison' (对比分析) 或 'market_insight' (细分市场洞察)
     analysis_type: Mapped[str] = mapped_column(
         String(50), 
         default=AnalysisType.COMPARISON.value
@@ -93,6 +94,14 @@ class AnalysisProject(Base):
     
     # 错误信息（如果失败）
     error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    
+    # 创建者用户 ID（用于"我的市场洞察"过滤）
+    user_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True
+    )
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), 
@@ -108,6 +117,23 @@ class AnalysisProject(Base):
     items: Mapped[List["AnalysisProjectItem"]] = relationship(
         "AnalysisProjectItem", 
         back_populates="project", 
+        cascade="all, delete-orphan"
+    )
+    
+    # 关联创建者用户
+    user: Mapped[Optional["User"]] = relationship("User")
+    
+    # [NEW] 项目级维度（用于市场洞察）
+    project_dimensions: Mapped[List["ProjectDimension"]] = relationship(
+        "ProjectDimension",
+        back_populates="project",
+        cascade="all, delete-orphan"
+    )
+    
+    # [NEW] 项目级5W标签（用于市场洞察）
+    project_context_labels: Mapped[List["ProjectContextLabel"]] = relationship(
+        "ProjectContextLabel",
+        back_populates="project",
         cascade="all, delete-orphan"
     )
 

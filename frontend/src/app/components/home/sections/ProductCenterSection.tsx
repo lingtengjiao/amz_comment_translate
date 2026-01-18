@@ -28,8 +28,8 @@ export function ProductCenterSection() {
   const loadProducts = async () => {
     setLoading(true);
     try {
-      // 获取所有产品
-      const productsRes = await apiService.getProducts(false);
+      // 洞察广场只显示管理员关注的产品
+      const productsRes = await apiService.getProducts(false, true);
       setProducts(productsRes.products || []);
       
       // 获取我的项目，用于判断哪些已添加

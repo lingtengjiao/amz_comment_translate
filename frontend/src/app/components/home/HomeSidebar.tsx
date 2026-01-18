@@ -7,6 +7,7 @@ import {
   Folder, 
   Brain, 
   FileText,
+  TrendingUp,
   LogOut,
   PanelLeftClose,
   PanelLeftOpen
@@ -29,7 +30,7 @@ export function HomeSidebar() {
   } = useHome();
 
   // 从 URL 获取当前激活的 section
-  const validSections: AppSection[] = ['home', 'my-projects', 'product-center', 'ai-compare', 'reports'];
+  const validSections: AppSection[] = ['home', 'my-projects', 'product-center', 'ai-compare', 'market-insight', 'reports'];
   const activeSection: AppSection = section && validSections.includes(section as AppSection) 
     ? (section as AppSection) 
     : 'home';
@@ -39,6 +40,7 @@ export function HomeSidebar() {
     { id: 'product-center', label: '洞察广场', icon: Package },
     { id: 'my-projects', label: '我的洞察', icon: Folder },
     { id: 'ai-compare', label: 'AI 竞品对比', icon: Brain },
+    { id: 'market-insight', label: '市场洞察', icon: TrendingUp },
     { id: 'reports', label: '报告库', icon: FileText },
   ];
 

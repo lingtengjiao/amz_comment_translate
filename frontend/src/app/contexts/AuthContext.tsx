@@ -4,6 +4,7 @@
  * 提供用户登录状态管理和认证相关方法
  */
 import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+import { trackFeature } from '../../utils/analytics';
 
 // API 基础配置
 const API_BASE = '/api/v1';
@@ -93,6 +94,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         localStorage.setItem(TOKEN_KEY, data.access_token);
         localStorage.setItem(USER_KEY, JSON.stringify(data.user));
         
+        // 追踪登录事件
+        trackFeature('user_login', { email: data.user.email });
+        
         // 尝试通知 Chrome 插件（如果已安装）
         notifyExtension(data.access_token, data.user);
         
@@ -108,6 +112,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   // 登出
   function logout() {
+    // 追踪登出事件
+    if (user) {
+      trackFeature('user_logout', { email: user.email });
+    }
+    
     setToken(null);
     setUser(null);
     localStorage.removeItem(TOKEN_KEY);

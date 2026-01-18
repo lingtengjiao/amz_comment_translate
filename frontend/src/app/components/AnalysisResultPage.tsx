@@ -1,13 +1,21 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { Loader2, AlertCircle, ArrowLeft, Maximize2, Minimize2 } from 'lucide-react';
+import { Loader2, AlertCircle, ArrowLeft, Maximize2, Minimize2, TrendingUp, BarChart3 } from 'lucide-react';
 import { VocComparisonRenderer } from './VocComparisonRenderer';
 import { ComparisonRenderer } from './ComparisonRenderer';
+import { MarketInsightRenderer } from './MarketInsightRenderer';
 import { getAnalysisProject } from '@/api/service';
 import type { AnalysisProject } from '@/api/types';
 import { isStructuredResult, isComparisonResult } from '@/api/types';
 import { Button } from './ui/button';
 import { toast } from '@/app/utils/toast';
+
+// 检查是否是市场洞察结果
+const isMarketInsightResult = (data: any): boolean => {
+  return data?.analysis_type === 'market_insight' || 
+    (data?.market_overview && data?.market_persona) ||
+    (data?.market_opportunities && data?.product_profiles);
+};
 
 export default function AnalysisResultPage() {
   const { projectId } = useParams<{ projectId: string }>();
@@ -123,11 +131,14 @@ export default function AnalysisResultPage() {
   }
   
   if (loading && project?.status === 'processing') {
+    const isMarketInsight = project?.analysis_type === 'market_insight';
     return (
       <div className="h-screen flex flex-col items-center justify-center gap-6 bg-gray-50 dark:bg-gray-950">
-        <Loader2 className="size-10 animate-spin text-rose-500" />
+        <Loader2 className={`size-10 animate-spin ${isMarketInsight ? 'text-blue-500' : 'text-rose-500'}`} />
         <div className="text-center space-y-2">
-          <p className="text-lg font-medium text-gray-700">正在生成深度分析报告...</p>
+          <p className="text-lg font-medium text-gray-700">
+            {isMarketInsight ? '正在生成市场洞察报告...' : '正在生成深度分析报告...'}
+          </p>
           <p className="text-sm text-gray-500">分析进行中，预计需要 1-2 分钟</p>
         </div>
         {/* [NEW] 允许用户返回，让分析在后台运行 */}
@@ -214,24 +225,33 @@ export default function AnalysisResultPage() {
               返回
             </Button>
             <div>
-              <h1 className="font-bold text-lg text-gray-900 dark:text-gray-100">
-                {project?.title || 'VOC 产品对比分析'}
+              <h1 className="font-bold text-lg text-gray-900 dark:text-gray-100 flex items-center gap-2">
+                {project?.analysis_type === 'market_insight' ? (
+                  <TrendingUp className="size-5 text-blue-600" />
+                ) : (
+                  <BarChart3 className="size-5 text-rose-600" />
+                )}
+                {project?.title || (project?.analysis_type === 'market_insight' ? '细分市场洞察' : 'VOC 产品对比分析')}
               </h1>
               <p className="text-xs text-gray-500 dark:text-gray-400">
-                智能化竞品洞察 · 数据驱动决策
+                {project?.analysis_type === 'market_insight' 
+                  ? '市场共性 · 趋势分析 · 机会挖掘' 
+                  : '智能化竞品洞察 · 数据驱动决策'}
               </p>
             </div>
           </div>
           <div className="text-sm text-gray-500 dark:text-gray-400">
-            {project?.items.length || 0} 款产品对比
+            {project?.items.length || 0} 款产品{project?.analysis_type === 'market_insight' ? '聚合分析' : '对比'}
           </div>
         </div>
       </header>
 
       {/* 内容区域 */}
       {project?.result_content ? (
-        // 根据结果类型选择渲染器
-        isStructuredResult(project.result_content) ? (
+        // 根据分析类型和结果类型选择渲染器
+        isMarketInsightResult(project.result_content) ? (
+          <MarketInsightRenderer data={project.result_content} items={project.items} projectId={projectId} />
+        ) : isStructuredResult(project.result_content) ? (
           <VocComparisonRenderer data={project.result_content} items={project.items} />
         ) : isComparisonResult(project.result_content) ? (
           <div className="p-6">

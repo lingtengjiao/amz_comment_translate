@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { GitCompare, X, LayoutGrid, Loader2 } from 'lucide-react';
 import { UnifiedProductCard } from './UnifiedProductCard';
-import { AnalysisModal } from './AnalysisModal';
+import { AnalysisModal, AnalysisType } from './AnalysisModal';
 import { apiService } from '@/api';
 import type { ApiProduct } from '@/api/types';
 import { toast } from 'sonner';
@@ -45,8 +45,8 @@ export default function WorkbenchPage() {
     );
   };
 
-  // 处理提交分析
-  const handleStartAnalysis = async (title: string, description?: string) => {
+  // 处理提交分析（支持对比分析和市场洞察）
+  const handleStartAnalysis = async (title: string, description?: string, analysisType?: AnalysisType) => {
     if (selectedIds.length < 2) {
       toast.error('至少需要选择 2 个产品');
       return;
@@ -64,13 +64,14 @@ export default function WorkbenchPage() {
         title,
         description,
         products: productsList,
-        auto_run: true, // 自动触发分析
+        auto_run: true,
+        analysis_type: analysisType || 'comparison',
       });
 
       if (result.success && result.project) {
         const projectId = result.project.id;
-        // [OPTIMIZED] 显示成功提示，不跳转，让分析在后台运行
-        toast.success('对比分析已启动', {
+        const typeName = analysisType === 'market_insight' ? '市场洞察' : '对比分析';
+        toast.success(`${typeName}已启动`, {
           description: '分析预计需要 1-2 分钟，点击查看进度',
           duration: 8000,
           action: {
@@ -90,7 +91,6 @@ export default function WorkbenchPage() {
       console.error('详细错误信息:', {
         error,
         selectedIds,
-        productsList,
       });
       toast.error(errorMessage);
     } finally {

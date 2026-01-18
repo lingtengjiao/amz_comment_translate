@@ -20,6 +20,8 @@ from pydantic import BaseModel, Field
 from app.db.session import get_db, async_session_maker
 from app.services.analysis_service import AnalysisService
 from app.models.analysis import AnalysisStatus
+from app.models.user import User
+from app.services.auth_service import get_current_user
 from sqlalchemy import select
 
 logger = logging.getLogger(__name__)
@@ -38,10 +40,11 @@ class ProductItemInput(BaseModel):
 
 
 class CreateComparisonRequest(BaseModel):
-    """创建对比分析请求"""
+    """创建分析请求（支持对比分析和市场洞察）"""
     title: str = Field(..., min_length=1, max_length=255, description="项目标题")
     description: Optional[str] = Field(None, description="项目描述")
-    products: List[ProductItemInput] = Field(..., min_length=2, max_length=5, description="产品列表（2-5个）")
+    products: List[ProductItemInput] = Field(..., min_length=2, max_length=10, description="产品列表（2-10个）")
+    analysis_type: Optional[str] = Field("comparison", description="分析类型: comparison(对比分析) 或 market_insight(市场洞察)")
     
     class Config:
         json_schema_extra = {
@@ -51,7 +54,8 @@ class CreateComparisonRequest(BaseModel):
                 "products": [
                     {"product_id": "550e8400-e29b-41d4-a716-446655440000", "role_label": "target"},
                     {"product_id": "550e8400-e29b-41d4-a716-446655440001", "role_label": "competitor"}
-                ]
+                ],
+                "analysis_type": "comparison"
             }
         }
 
@@ -116,6 +120,31 @@ class ComparisonPreviewResponse(BaseModel):
     error: Optional[str] = None
 
 
+# [NEW] 产品分析状态检查相关 Schema
+class ProductAnalysisStatusRequest(BaseModel):
+    """产品分析状态检查请求"""
+    product_ids: List[UUID] = Field(..., min_length=1, max_length=10, description="产品 UUID 列表")
+
+
+class ProductAnalysisStatusItem(BaseModel):
+    """单个产品的分析状态"""
+    product_id: str
+    asin: str
+    title: str
+    has_dimensions: bool
+    has_labels: bool
+    is_ready: bool  # has_dimensions AND has_labels
+
+
+class ProductAnalysisStatusResponse(BaseModel):
+    """产品分析状态检查响应"""
+    success: bool
+    all_ready: bool  # 是否所有产品都已完成分析
+    products: List[ProductAnalysisStatusItem]
+    incomplete_count: int
+    message: Optional[str] = None
+
+
 # ==========================================
 # API Endpoints
 # ==========================================
@@ -125,37 +154,75 @@ async def create_analysis_project(
     request: CreateComparisonRequest,
     background_tasks: BackgroundTasks,
     auto_run: bool = Query(True, description="是否自动触发分析"),
+    current_user: Optional[User] = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
     """
-    创建对比分析项目
+    创建分析项目（支持对比分析和市场洞察）
     
-    - 至少需要 2 个产品，最多支持 5 个
+    - 对比分析: 至少需要 2 个产品，最多支持 5 个
+    - 市场洞察: 至少需要 2 个产品，最多支持 10 个
     - 默认会自动触发分析任务（后台执行）
     - 可通过 auto_run=false 仅创建项目不触发分析
+    - 如果用户已登录，会记录创建者 user_id
     """
     service = AnalysisService(db)
+    user_id = current_user.id if current_user else None
     
     try:
         # 提取产品 ID 和角色标签
         product_ids = [p.product_id for p in request.products]
         role_labels = [p.role_label for p in request.products]
         
-        # 创建项目
-        # 注意：新的 N-Way 分析中，role_labels 仅作标记，不影响分析逻辑
-        project = await service.create_comparison_project(
-            title=request.title,
-            product_ids=product_ids,
-            description=request.description,
-            role_labels=role_labels
-        )
+        # 根据分析类型创建项目
+        analysis_type = request.analysis_type or "comparison"
+        
+        # 根据分析类型验证产品数量
+        if analysis_type == "market_insight":
+            if len(product_ids) > 10:
+                raise ValueError("市场洞察最多支持 10 个产品")
+            
+            # [NEW] 前置检查：市场洞察需要所有产品都已完成单产品分析
+            from app.services.project_learning_service import ProjectLearningService
+            learning_service = ProjectLearningService(db)
+            incomplete_products = await learning_service.get_incomplete_products(product_ids)
+            
+            if incomplete_products:
+                # 构建错误信息
+                incomplete_asins = [p.get("asin", "Unknown") for p in incomplete_products[:5]]
+                if len(incomplete_products) > 5:
+                    incomplete_asins.append(f"等共 {len(incomplete_products)} 个")
+                raise ValueError(
+                    f"以下产品尚未完成分析：{', '.join(incomplete_asins)}。"
+                    f"市场洞察需要所有产品都已完成单产品分析（有维度和标签），请等待分析完成后重试。"
+                )
+            
+            project = await service.create_market_insight_project(
+                title=request.title,
+                product_ids=product_ids,
+                description=request.description,
+                role_labels=role_labels,
+                user_id=user_id
+            )
+        else:
+            # 对比分析最多支持 5 个产品
+            if len(product_ids) > 5:
+                raise ValueError("对比分析最多支持 5 个产品")
+            project = await service.create_comparison_project(
+                title=request.title,
+                product_ids=product_ids,
+                description=request.description,
+                role_labels=role_labels,
+                user_id=user_id
+            )
         
         # 如果需要自动触发分析
         if auto_run:
             # 使用后台任务异步执行（不阻塞 API 响应）
             # 注意：不能直接传递 db session，需要在后台任务中重新创建
             background_tasks.add_task(_run_analysis_background, project.id)
-            message = "项目已创建，分析任务已在后台启动"
+            type_name = "市场洞察" if analysis_type == "market_insight" else "对比分析"
+            message = f"{type_name}项目已创建，分析任务已在后台启动"
         else:
             message = "项目已创建，请手动触发分析"
         
@@ -224,6 +291,9 @@ async def list_projects(
     limit: int = Query(20, ge=1, le=100, description="每页数量"),
     offset: int = Query(0, ge=0, description="偏移量"),
     status: Optional[str] = Query(None, description="按状态筛选: pending/processing/completed/failed"),
+    admin_only: bool = Query(False, description="只显示包含管理员关注产品的项目（用于市场洞察广场）"),
+    my_only: bool = Query(False, description="只显示当前用户创建的项目"),
+    current_user: Optional[User] = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
     """
@@ -231,11 +301,22 @@ async def list_projects(
     
     - 按创建时间倒序排列
     - 支持分页和状态筛选
+    - admin_only=true 时只返回包含管理员关注产品的项目（用于市场洞察广场）
+    - my_only=true 时只返回当前用户创建的项目
     """
     service = AnalysisService(db)
     
     try:
-        projects = await service.list_projects(limit=limit, offset=offset, status=status)
+        # 获取当前用户ID
+        user_id = current_user.id if current_user and my_only else None
+        
+        projects = await service.list_projects(
+            limit=limit, 
+            offset=offset, 
+            status=status,
+            admin_only=admin_only,
+            user_id=user_id
+        )
         
         return AnalysisProjectListResponse(
             success=True,
@@ -391,6 +472,62 @@ async def delete_project(
     return {"success": True, "message": "项目已删除"}
 
 
+# [NEW] 产品分析状态检查接口
+@router.post("/products/analysis-status", response_model=ProductAnalysisStatusResponse)
+async def check_products_analysis_status(
+    request: ProductAnalysisStatusRequest,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    检查多个产品的分析完成状态
+    
+    用于市场洞察功能：
+    - 市场洞察需要所有选中产品都已完成单产品分析（有维度和标签）
+    - 返回每个产品的状态，前端可据此显示提示
+    """
+    from app.services.project_learning_service import ProjectLearningService
+    
+    try:
+        learning_service = ProjectLearningService(db)
+        status = await learning_service.check_products_analysis_status(request.product_ids)
+        
+        # 转换为响应格式
+        products = []
+        incomplete_count = 0
+        
+        for product_id, info in status.items():
+            is_ready = info.get("is_ready", False)
+            if not is_ready:
+                incomplete_count += 1
+            
+            products.append(ProductAnalysisStatusItem(
+                product_id=product_id,
+                asin=info.get("asin", "Unknown"),
+                title=info.get("title", "Unknown")[:50],  # 截断标题
+                has_dimensions=info.get("has_dimensions", False),
+                has_labels=info.get("has_labels", False),
+                is_ready=is_ready
+            ))
+        
+        all_ready = incomplete_count == 0
+        
+        message = None
+        if not all_ready:
+            message = f"有 {incomplete_count} 个产品尚未完成分析，请等待分析完成后再创建市场洞察"
+        
+        return ProductAnalysisStatusResponse(
+            success=True,
+            all_ready=all_ready,
+            products=products,
+            incomplete_count=incomplete_count,
+            message=message
+        )
+        
+    except Exception as e:
+        logger.error(f"检查产品分析状态失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.post("/preview", response_model=ComparisonPreviewResponse)
 async def get_comparison_preview(
     request: ComparisonPreviewRequest,
@@ -415,6 +552,356 @@ async def get_comparison_preview(
         logger.error(f"获取对比预览失败: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+
+# ==========================================
+# Project-Level Review Query APIs (for Market Insight)
+# ==========================================
+
+@router.get("/projects/{project_id}/reviews-by-label")
+async def get_project_reviews_by_label(
+    project_id: UUID,
+    dimension: str = Query(..., description="5W 维度类型: buyer/user/where/when/why/what"),
+    label: str = Query(..., description="标签名称"),
+    limit: int = Query(100, ge=1, le=500, description="每个产品返回数量"),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    [Market Insight] 根据标签查询所有产品的相关评论
+    
+    逻辑：
+    1. 优先通过 project_label_mappings 找到项目级标签对应的所有产品级标签
+    2. 如果找不到项目级标签，回退到直接从产品级评论中查询（兼容 data_statistics 中的产品级标签统计）
+    3. 查询每个产品中匹配的评论
+    4. 返回所有产品的评论列表（按产品分组）
+    """
+    from app.models.product import Product
+    from app.models.review import Review
+    from app.models.theme_highlight import ReviewThemeHighlight
+    from app.models.project_learning import ProjectContextLabel, ProjectLabelMapping
+    from app.models.product_context_label import ProductContextLabel
+    from app.models.analysis import AnalysisProject
+    
+    products_data = []
+    total_reviews = 0
+    
+    # 1. 查找项目级标签
+    stmt = (
+        select(ProjectContextLabel)
+        .where(ProjectContextLabel.project_id == project_id)
+        .where(ProjectContextLabel.type == dimension)
+        .where(ProjectContextLabel.name == label)
+    )
+    result = await db.execute(stmt)
+    project_label = result.scalar_one_or_none()
+    
+    if project_label:
+        # 方式一：通过项目级标签映射查询
+        # 获取所有映射的产品级标签
+        mapping_stmt = (
+            select(ProjectLabelMapping, ProductContextLabel, Product)
+            .join(ProductContextLabel, ProjectLabelMapping.product_label_id == ProductContextLabel.id)
+            .join(Product, ProjectLabelMapping.product_id == Product.id)
+            .where(ProjectLabelMapping.project_label_id == project_label.id)
+        )
+        mapping_result = await db.execute(mapping_stmt)
+        mappings = mapping_result.all()
+        
+        for mapping, product_label, product in mappings:
+            # 查询该产品标签对应的评论
+            reviews_stmt = (
+                select(Review, ReviewThemeHighlight.confidence, ReviewThemeHighlight.explanation)
+                .join(ReviewThemeHighlight, ReviewThemeHighlight.review_id == Review.id)
+                .where(
+                    Review.product_id == product.id,
+                    ReviewThemeHighlight.theme_type == dimension,
+                    ReviewThemeHighlight.label_name == product_label.name
+                )
+                .limit(limit)
+            )
+            reviews_result = await db.execute(reviews_stmt)
+            reviews = reviews_result.all()
+            
+            if reviews:
+                product_reviews = [
+                    {
+                        "id": str(r.id),
+                        "author": r.author or "匿名",
+                        "rating": r.rating,
+                        "date": r.review_date.isoformat() if r.review_date else None,
+                        "title_original": r.title_original,
+                        "title_translated": r.title_translated,
+                        "body_original": r.body_original,
+                        "body_translated": r.body_translated,
+                        "verified_purchase": r.verified_purchase,
+                        "confidence": confidence or "high",
+                        "explanation": explanation,
+                    }
+                    for r, confidence, explanation in reviews
+                ]
+                
+                products_data.append({
+                    "product_id": str(product.id),
+                    "asin": product.asin,
+                    "title": (product.title_translated or product.title or product.asin)[:60],
+                    "image_url": product.image_url,
+                    "product_label": product_label.name,
+                    "review_count": len(product_reviews),
+                    "reviews": product_reviews
+                })
+                total_reviews += len(product_reviews)
+    else:
+        # 方式二：回退到直接从产品级评论中查询
+        # 当 data_statistics 中的标签是产品级标签统计时使用此方式
+        from app.models.analysis import AnalysisProjectItem
+        
+        # 获取项目关联的所有产品（通过 AnalysisProjectItem）
+        items_stmt = (
+            select(AnalysisProjectItem, Product)
+            .join(Product, AnalysisProjectItem.product_id == Product.id)
+            .where(AnalysisProjectItem.project_id == project_id)
+        )
+        items_result = await db.execute(items_stmt)
+        project_items = items_result.all()
+        
+        for item, product in project_items:
+            # 直接查询产品评论中匹配标签的记录
+            reviews_stmt = (
+                select(Review, ReviewThemeHighlight.confidence, ReviewThemeHighlight.explanation)
+                .join(ReviewThemeHighlight, ReviewThemeHighlight.review_id == Review.id)
+                .where(
+                    Review.product_id == product.id,
+                    ReviewThemeHighlight.theme_type == dimension,
+                    ReviewThemeHighlight.label_name == label
+                )
+                .limit(limit)
+            )
+            reviews_result = await db.execute(reviews_stmt)
+            reviews = reviews_result.all()
+            
+            if reviews:
+                product_reviews = [
+                    {
+                        "id": str(r.id),
+                        "author": r.author or "匿名",
+                        "rating": r.rating,
+                        "date": r.review_date.isoformat() if r.review_date else None,
+                        "title_original": r.title_original,
+                        "title_translated": r.title_translated,
+                        "body_original": r.body_original,
+                        "body_translated": r.body_translated,
+                        "verified_purchase": r.verified_purchase,
+                        "confidence": confidence or "high",
+                        "explanation": explanation,
+                    }
+                    for r, confidence, explanation in reviews
+                ]
+                
+                products_data.append({
+                    "product_id": str(product.id),
+                    "asin": product.asin,
+                    "title": (product.title_translated or product.title or product.asin)[:60],
+                    "image_url": product.image_url,
+                    "product_label": label,
+                    "review_count": len(product_reviews),
+                    "reviews": product_reviews
+                })
+                total_reviews += len(product_reviews)
+    
+    return {
+        "success": True,
+        "project_label": label,
+        "dimension": dimension,
+        "total_reviews": total_reviews,
+        "products": products_data
+    }
+
+
+@router.get("/projects/{project_id}/reviews-by-dimension")
+async def get_project_reviews_by_dimension(
+    project_id: UUID,
+    dimension_type: str = Query(..., description="维度类型: strength/weakness/suggestion/scenario/emotion"),
+    dimension: str = Query(..., description="维度名称"),
+    limit: int = Query(100, ge=1, le=500, description="每个产品返回数量"),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    [Market Insight] 根据维度查询所有产品的相关评论
+    
+    逻辑：
+    1. 优先通过 project_dimension_mappings 找到项目级维度对应的所有产品级维度
+    2. 如果找不到项目级维度，回退到直接从产品级评论中查询（兼容 data_statistics 中的产品级维度统计）
+    3. 查询每个产品中匹配的评论
+    4. 返回所有产品的评论列表（按产品分组）
+    """
+    from app.models.product import Product
+    from app.models.review import Review
+    from app.models.insight import ReviewInsight
+    from app.models.project_learning import ProjectDimension, ProjectDimensionMapping
+    from app.models.product_dimension import ProductDimension
+    from app.models.analysis import AnalysisProject
+    
+    # 映射 insight 类型
+    insight_type_map = {
+        'strength': 'strength',
+        'weakness': 'weakness',
+        'pros': 'strength',  # 兼容旧参数
+        'cons': 'weakness',  # 兼容旧参数
+        'suggestion': 'suggestion',
+        'scenario': 'scenario',
+        'emotion': 'emotion'
+    }
+    insight_type = insight_type_map.get(dimension_type, dimension_type)
+    
+    # 映射到 ProductDimension 的 dimension_type
+    dim_type_map = {
+        'strength': 'product',
+        'weakness': 'product',
+        'pros': 'product',
+        'cons': 'product',
+        'suggestion': 'product',
+        'scenario': 'scenario',
+        'emotion': 'emotion'
+    }
+    db_dim_type = dim_type_map.get(dimension_type, 'product')
+    
+    products_data = []
+    total_reviews = 0
+    
+    # 1. 查找项目级维度
+    stmt = (
+        select(ProjectDimension)
+        .where(ProjectDimension.project_id == project_id)
+        .where(ProjectDimension.dimension_type == db_dim_type)
+        .where(ProjectDimension.name == dimension)
+    )
+    result = await db.execute(stmt)
+    project_dimension = result.scalar_one_or_none()
+    
+    if project_dimension:
+        # 方式一：通过项目级维度映射查询
+        # 获取所有映射的产品级维度
+        mapping_stmt = (
+            select(ProjectDimensionMapping, ProductDimension, Product)
+            .join(ProductDimension, ProjectDimensionMapping.product_dimension_id == ProductDimension.id)
+            .join(Product, ProjectDimensionMapping.product_id == Product.id)
+            .where(ProjectDimensionMapping.project_dimension_id == project_dimension.id)
+        )
+        mapping_result = await db.execute(mapping_stmt)
+        mappings = mapping_result.all()
+        
+        for mapping, product_dim, product in mappings:
+            # 查询该产品维度对应的评论（通过 insights 表）
+            reviews_stmt = (
+                select(Review, ReviewInsight.confidence, ReviewInsight.analysis)
+                .join(ReviewInsight, ReviewInsight.review_id == Review.id)
+                .where(
+                    Review.product_id == product.id,
+                    ReviewInsight.insight_type == insight_type,
+                    ReviewInsight.dimension == product_dim.name
+                )
+                .limit(limit)
+            )
+            reviews_result = await db.execute(reviews_stmt)
+            reviews = reviews_result.all()
+            
+            if reviews:
+                product_reviews = [
+                    {
+                        "id": str(r.id),
+                        "author": r.author or "匿名",
+                        "rating": r.rating,
+                        "date": r.review_date.isoformat() if r.review_date else None,
+                        "title_original": r.title_original,
+                        "title_translated": r.title_translated,
+                        "body_original": r.body_original,
+                        "body_translated": r.body_translated,
+                        "verified_purchase": r.verified_purchase,
+                        "confidence": confidence or "high",
+                        "explanation": analysis,
+                    }
+                    for r, confidence, analysis in reviews
+                ]
+                
+                products_data.append({
+                    "product_id": str(product.id),
+                    "asin": product.asin,
+                    "title": (product.title_translated or product.title or product.asin)[:60],
+                    "image_url": product.image_url,
+                    "product_dimension": product_dim.name,
+                    "review_count": len(product_reviews),
+                    "reviews": product_reviews
+                })
+                total_reviews += len(product_reviews)
+    else:
+        # 方式二：回退到直接从产品级评论中查询
+        # 当 data_statistics 中的维度是产品级维度统计时使用此方式
+        from app.models.analysis import AnalysisProjectItem
+        
+        # 获取项目关联的所有产品（通过 AnalysisProjectItem）
+        items_stmt = (
+            select(AnalysisProjectItem, Product)
+            .join(Product, AnalysisProjectItem.product_id == Product.id)
+            .where(AnalysisProjectItem.project_id == project_id)
+        )
+        items_result = await db.execute(items_stmt)
+        project_items = items_result.all()
+        
+        for item, product in project_items:
+            # 直接查询产品评论中匹配维度的记录
+            reviews_stmt = (
+                select(Review, ReviewInsight.confidence, ReviewInsight.analysis)
+                .join(ReviewInsight, ReviewInsight.review_id == Review.id)
+                .where(
+                    Review.product_id == product.id,
+                    ReviewInsight.insight_type == insight_type,
+                    ReviewInsight.dimension == dimension
+                )
+                .limit(limit)
+            )
+            reviews_result = await db.execute(reviews_stmt)
+            reviews = reviews_result.all()
+            
+            if reviews:
+                product_reviews = [
+                    {
+                        "id": str(r.id),
+                        "author": r.author or "匿名",
+                        "rating": r.rating,
+                        "date": r.review_date.isoformat() if r.review_date else None,
+                        "title_original": r.title_original,
+                        "title_translated": r.title_translated,
+                        "body_original": r.body_original,
+                        "body_translated": r.body_translated,
+                        "verified_purchase": r.verified_purchase,
+                        "confidence": confidence or "high",
+                        "explanation": analysis,
+                    }
+                    for r, confidence, analysis in reviews
+                ]
+                
+                products_data.append({
+                    "product_id": str(product.id),
+                    "asin": product.asin,
+                    "title": (product.title_translated or product.title or product.asin)[:60],
+                    "image_url": product.image_url,
+                    "product_dimension": dimension,
+                    "review_count": len(product_reviews),
+                    "reviews": product_reviews
+                })
+                total_reviews += len(product_reviews)
+    
+    return {
+        "success": True,
+        "project_dimension": dimension,
+        "dimension_type": dimension_type,
+        "total_reviews": total_reviews,
+        "products": products_data
+    }
+
+
+# ==========================================
+# Product-Level Review Query APIs (for Comparison)
+# ==========================================
 
 @router.get("/products/{asin}/reviews-by-label")
 async def get_reviews_by_label(

@@ -238,6 +238,116 @@ Extract **Top 5-8 typical labels per category**. **Output all labels in Chinese*
 Output JSON only, no other text."""
 
 
+# =============================================================================
+# [NEW] 项目级学习与映射 Prompt - 用于市场洞察功能
+# =============================================================================
+PROJECT_LEVEL_LEARNING_PROMPT = """你是一位资深的市场研究专家和数据分析师。你需要为一个**细分市场洞察项目**完成以下任务：
+
+1. **学习项目级统一维度**：聚合多个产品的维度，形成市场级别的统一维度体系
+2. **学习项目级统一5W标签**：聚合多个产品的5W标签，形成市场级别的统一标签体系
+3. **建立映射关系**：记录每个项目级维度/标签对应哪些产品级维度/标签
+
+# 评论样本（来自 {product_count} 个产品的采样，共约 100 条）
+{reviews_text}
+
+# 各产品的现有维度和标签
+{products_data}
+
+# 任务说明
+
+## 1. 项目级维度学习
+将各产品的维度聚合为市场级别的统一维度：
+- **产品维度 (product)**：用于评价产品属性（功能表现、质量做工等），5-8个
+- **场景维度 (scenario)**：用于分类使用场景（家居日常、办公场景等），3-5个
+- **情绪维度 (emotion)**：用于分类情绪反馈（惊喜好评、失望不满等），3-5个
+
+要求：
+- 合并语义相同的维度（如"便携"和"携带方便"应合并为"便携性能"）
+- 保持粒度一致，不要太粗也不要太细
+- 记录每个项目维度映射自哪些产品维度
+
+## 2. 项目级5W标签学习
+将各产品的5W标签聚合为市场级别的统一标签：
+- **buyer**: 购买者身份（5-8个）
+- **user**: 使用者身份（5-8个）
+- **where**: 使用地点（5-8个）
+- **when**: 使用时刻（5-8个）
+- **why**: 购买动机（5-8个）
+- **what**: 待办任务/用途（5-8个）
+
+要求：
+- 合并同义词（如"老人"和"老年人"应合并为"老年群体"）
+- 保持粒度一致
+- 记录每个项目标签映射自哪些产品标签
+
+# 输出格式 (JSON Only)
+{{
+  "project_dimensions": {{
+    "product": [
+      {{
+        "name": "便携性能",
+        "description": "产品的便携程度和移动使用体验",
+        "mapped_from": [
+          {{"product_id": "产品ID1", "dimension_name": "便携"}},
+          {{"product_id": "产品ID2", "dimension_name": "携带方便"}}
+        ]
+      }}
+    ],
+    "scenario": [
+      {{
+        "name": "家居日常",
+        "description": "在家中日常生活场景下的使用",
+        "mapped_from": [
+          {{"product_id": "产品ID1", "dimension_name": "居家使用"}}
+        ]
+      }}
+    ],
+    "emotion": [
+      {{
+        "name": "惊喜好评",
+        "description": "超出预期的正面情感反馈",
+        "mapped_from": [
+          {{"product_id": "产品ID1", "dimension_name": "惊喜"}}
+        ]
+      }}
+    ]
+  }},
+  "project_labels": {{
+    "buyer": [
+      {{
+        "name": "宝妈群体",
+        "description": "为孩子购买产品的母亲",
+        "mapped_from": [
+          {{"product_id": "产品ID1", "label_name": "妈妈"}},
+          {{"product_id": "产品ID2", "label_name": "宝妈"}}
+        ]
+      }}
+    ],
+    "user": [
+      {{
+        "name": "老年群体",
+        "description": "实际使用产品的老年人",
+        "mapped_from": [
+          {{"product_id": "产品ID1", "label_name": "老人"}},
+          {{"product_id": "产品ID2", "label_name": "老年人"}}
+        ]
+      }}
+    ],
+    "where": [...],
+    "when": [...],
+    "why": [...],
+    "what": [...]
+  }}
+}}
+
+重要提示：
+1. 所有输出必须是中文
+2. product_id 必须使用输入中给定的产品 ID（不要修改）
+3. dimension_name 和 label_name 必须与输入中的产品维度/标签名称完全一致
+4. 如果某个项目级维度/标签只来自一个产品，mapped_from 数组中只有一个元素也是允许的
+5. 请只输出 JSON，不要有其他解释文字"""
+
+
 # [UPDATED] 维度发现 Prompt (加入产品信息版)
 DIMENSION_DISCOVERY_PROMPT = """你是一位资深的产品经理和用户研究专家。请基于以下**产品官方信息**和**用户评论样本**，构建该产品的核心评价维度模型。
 
@@ -841,6 +951,7 @@ class TranslationService:
             self.client = OpenAI(
                 api_key=settings.QWEN_API_KEY,
                 base_url=settings.QWEN_API_BASE,
+                timeout=120.0,  # 2分钟超时，适合复杂任务
             )
         self.model = settings.QWEN_MODEL
     
@@ -2243,6 +2354,144 @@ class TranslationService:
             
         except Exception as e:
             logger.warning(f"Theme extraction failed: {e}")
+            return {}
+    
+    @retry(
+        stop=stop_after_attempt(2),
+        wait=wait_exponential(multiplier=1, min=2, max=10),
+        retry=retry_if_exception_type((Exception,)),
+        reraise=True
+    )
+    def learn_project_level(
+        self,
+        reviews_text: str,
+        products_data: str,
+        product_count: int
+    ) -> dict:
+        """
+        项目级维度/标签学习与映射 - 用于市场洞察功能。
+        
+        一次 AI 调用完成：
+        1. 学习项目级统一维度（聚合自多个产品）
+        2. 学习项目级统一5W标签（聚合自多个产品）
+        3. 建立项目级 -> 产品级的映射关系
+        
+        Args:
+            reviews_text: 采样的评论文本（已格式化）
+            products_data: 所有产品的维度和标签数据（已格式化）
+            product_count: 产品数量
+            
+        Returns:
+            学习结果字典，格式：
+            {
+                "project_dimensions": {
+                    "product": [{"name": "...", "description": "...", "mapped_from": [...]}],
+                    "scenario": [...],
+                    "emotion": [...]
+                },
+                "project_labels": {
+                    "buyer": [{"name": "...", "description": "...", "mapped_from": [...]}],
+                    "user": [...],
+                    "where": [...],
+                    "when": [...],
+                    "why": [...],
+                    "what": [...]
+                }
+            }
+        """
+        if not self._check_client():
+            logger.error("Translation service not configured for project level learning")
+            return {}
+        
+        if not reviews_text or not products_data:
+            logger.warning("评论样本或产品数据为空，无法进行项目级学习")
+            return {}
+        
+        try:
+            # 构建 Prompt
+            prompt = PROJECT_LEVEL_LEARNING_PROMPT.format(
+                reviews_text=reviews_text,
+                products_data=products_data,
+                product_count=product_count
+            )
+            
+            logger.info(f"🎓 开始项目级学习，产品数量: {product_count}，Prompt长度: {len(prompt)}")
+            
+            # 调用 AI（使用更长超时）
+            response = self.client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": "你是一位专业的市场研究专家。请按照指定的 JSON 格式输出结果，不要有任何其他文字。"},
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0.3,  # 较低的温度，确保输出稳定
+                max_tokens=4000,  # 控制输出长度
+                timeout=180.0,  # 3分钟超时，项目级学习需要更长时间
+            )
+            
+            result_text = response.choices[0].message.content.strip()
+            
+            # 清理 markdown 代码块
+            if result_text.startswith("```json"):
+                result_text = result_text[7:]
+            if result_text.startswith("```"):
+                result_text = result_text[3:]
+            if result_text.endswith("```"):
+                result_text = result_text[:-3]
+            result_text = result_text.strip()
+            
+            # 解析 JSON
+            parsed = json.loads(result_text)
+            
+            # 验证结构
+            valid_result = {
+                "project_dimensions": {},
+                "project_labels": {}
+            }
+            
+            # 验证维度
+            project_dimensions = parsed.get("project_dimensions", {})
+            for dim_type in ["product", "scenario", "emotion"]:
+                dims = project_dimensions.get(dim_type, [])
+                valid_dims = []
+                for dim in dims:
+                    if isinstance(dim, dict) and dim.get("name"):
+                        valid_dims.append({
+                            "name": dim["name"].strip(),
+                            "description": (dim.get("description") or "").strip(),
+                            "mapped_from": dim.get("mapped_from", [])
+                        })
+                if valid_dims:
+                    valid_result["project_dimensions"][dim_type] = valid_dims
+            
+            # 验证标签
+            project_labels = parsed.get("project_labels", {})
+            for label_type in ["buyer", "user", "where", "when", "why", "what"]:
+                labels = project_labels.get(label_type, [])
+                valid_labels = []
+                for label in labels:
+                    if isinstance(label, dict) and label.get("name"):
+                        valid_labels.append({
+                            "name": label["name"].strip(),
+                            "description": (label.get("description") or "").strip(),
+                            "mapped_from": label.get("mapped_from", [])
+                        })
+                if valid_labels:
+                    valid_result["project_labels"][label_type] = valid_labels
+            
+            # 统计
+            dim_count = sum(len(v) for v in valid_result["project_dimensions"].values())
+            label_count = sum(len(v) for v in valid_result["project_labels"].values())
+            logger.info(f"✅ 项目级学习完成：{dim_count} 个维度，{label_count} 个标签")
+            
+            return valid_result
+            
+        except json.JSONDecodeError as e:
+            logger.error(f"项目级学习 JSON 解析失败: {e}")
+            logger.debug(f"原始响应: {result_text[:500]}...")
+            return {}
+        except Exception as e:
+            logger.error(f"项目级学习失败: {e}")
             return {}
 
 

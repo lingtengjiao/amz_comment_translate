@@ -104,6 +104,13 @@ class Review(Base):
     # Review link
     review_url: Mapped[str | None] = mapped_column(String(500), nullable=True, comment="亚马逊评论原文链接")
     
+    # Product variant info
+    variant: Mapped[str | None] = mapped_column(
+        String(500),
+        nullable=True,
+        comment="产品变体信息（颜色、尺寸等）"
+    )
+    
     # Analysis results
     sentiment: Mapped[str] = mapped_column(
         String(20),

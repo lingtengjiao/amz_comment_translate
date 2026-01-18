@@ -342,3 +342,53 @@ body {
   border-top: 1px solid #f1f5f9;
   background: #fafafa;
 }
+
+/* ============================================================================
+ * [NEW] Search Results Page Styles
+ * ============================================================================ */
+
+.search-info {
+  background: linear-gradient(135deg, #f0f9ff, #e0f2fe);
+  border-radius: 12px;
+  padding: 16px;
+  border: 1px solid #bae6fd;
+  text-align: center;
+}
+
+.search-icon {
+  font-size: 36px;
+  margin-bottom: 8px;
+}
+
+.search-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: #0369a1;
+  margin-bottom: 4px;
+}
+
+.product-count {
+  font-size: 13px;
+  color: #0284c7;
+  font-weight: 500;
+}
+
+.status-badge-info {
+  background: rgba(14, 165, 233, 0.1);
+  border-color: rgba(14, 165, 233, 0.3);
+}
+
+.status-badge-info .status-dot {
+  background: #0ea5e9;
+}
+
+.status-badge-info .status-text {
+  color: #0284c7;
+}
+
+.search-hint {
+  font-size: 11px;
+  color: #64748b;
+  margin-top: 8px;
+  line-height: 1.4;
+}

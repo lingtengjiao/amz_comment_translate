@@ -3,6 +3,7 @@ import { lazy, Suspense } from 'react';
 import { ThemeProvider } from './contexts/ThemeContext';
 import { AuthProvider } from './contexts/AuthContext';
 import { ProtectedRoute } from './components/ProtectedRoute';
+import { AdminRoute } from './components/AdminRoute';
 import { Toaster } from './components/ui/sonner';
 
 // Lazy load route components
@@ -13,6 +14,7 @@ const ReviewReader = lazy(() => import('./components/ReviewReader').then(m => ({
 const ReportPage = lazy(() => import('./components/ReportPage').then(m => ({ default: m.ReportPage })));
 const WorkbenchPage = lazy(() => import('./components/WorkbenchPage').then(m => ({ default: m.default })));
 const AnalysisResultPage = lazy(() => import('./components/AnalysisResultPage').then(m => ({ default: m.default })));
+const AnalyticsDashboard = lazy(() => import('./components/analytics/AnalyticsDashboard').then(m => ({ default: m.default })));
 
 // Loading fallback component
 function LoadingFallback() {
@@ -45,6 +47,9 @@ export default function App() {
               <Route path="/reader/:taskId" element={<ProtectedRoute><ReviewReader /></ProtectedRoute>} />
               <Route path="/report/:asin" element={<ProtectedRoute><ReportPage /></ProtectedRoute>} />
               <Route path="/report/:asin/:reportId" element={<ProtectedRoute><ReportPage /></ProtectedRoute>} />
+              
+              {/* 管理员专属路由 */}
+              <Route path="/analytics" element={<AdminRoute><AnalyticsDashboard /></AdminRoute>} />
               
               {/* 默认重定向 */}
               <Route path="*" element={<Navigate to="/home/home" replace />} />

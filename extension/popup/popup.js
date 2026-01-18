@@ -10,9 +10,12 @@ document.addEventListener('DOMContentLoaded', async () => {
   const userBar = document.getElementById('user-bar');
   const notAmazonView = document.getElementById('not-amazon');
   const onAmazonView = document.getElementById('on-amazon');
+  const onSearchPageView = document.getElementById('on-search-page');  // [NEW]
   const asinDisplay = document.getElementById('asin-display');
   const titleDisplay = document.getElementById('title-display');
   const openPanelBtn = document.getElementById('open-panel-btn');
+  const openSelectorBtn = document.getElementById('open-selector-btn');  // [NEW]
+  const searchProductCount = document.getElementById('search-product-count');  // [NEW]
   const loginForm = document.getElementById('login-form');
   const loginEmail = document.getElementById('login-email');
   const loginPassword = document.getElementById('login-password');
@@ -46,17 +49,28 @@ document.addEventListener('DOMContentLoaded', async () => {
   // ==========================================
   // 显示主界面
   // ==========================================
-  function showMainView(user, isAmazon = false) {
+  function showMainView(user, pageType = 'not-amazon', productCount = 0) {
     loginView.style.display = 'none';
     userBar.style.display = 'flex';
     userName.textContent = user?.name || user?.email?.split('@')[0] || '用户';
     
-    if (isAmazon) {
-      notAmazonView.style.display = 'none';
+    // 隐藏所有视图
+    notAmazonView.style.display = 'none';
+    onAmazonView.style.display = 'none';
+    if (onSearchPageView) onSearchPageView.style.display = 'none';
+    
+    // 根据页面类型显示对应视图
+    if (pageType === 'search') {
+      if (onSearchPageView) {
+        onSearchPageView.style.display = 'block';
+        if (searchProductCount) {
+          searchProductCount.textContent = `找到 ${productCount} 个产品`;
+        }
+      }
+    } else if (pageType === 'product') {
       onAmazonView.style.display = 'block';
     } else {
       notAmazonView.style.display = 'block';
-      onAmazonView.style.display = 'none';
     }
   }
 
@@ -121,7 +135,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   // 配置（与 content.js 保持一致）
   // ==========================================
   const CONFIG = {
-    DASHBOARD_URL: 'http://localhost:3000'  // 本地前端地址
+    DASHBOARD_URL: 'https://98kamz.com'  // 生产前端地址
   };
 
   // 设置"进入我的洞察"链接
@@ -149,34 +163,25 @@ document.addEventListener('DOMContentLoaded', async () => {
       tab.url.includes('amazon.co.uk') ||
       tab.url.includes('amazon.de') ||
       tab.url.includes('amazon.fr') ||
-      tab.url.includes('amazon.co.jp')
+      tab.url.includes('amazon.co.jp') ||
+      tab.url.includes('amazon.com.au')
     );
 
-    showMainView(authState.user, isAmazon);
-
     if (!isAmazon) {
+      showMainView(authState.user, 'not-amazon');
       return;
     }
 
-    // 获取页面信息
+    // [NEW] 获取页面类型信息
     let retries = 3;
-    let response = null;
+    let pageTypeResponse = null;
     
-    while (retries > 0 && !response) {
+    while (retries > 0 && !pageTypeResponse) {
       try {
-        response = await chrome.tabs.sendMessage(tab.id, { type: 'GET_PAGE_INFO' });
-        
-        if (response && response.asin) {
-          asinDisplay.textContent = `ASIN: ${response.asin}`;
-          titleDisplay.textContent = response.title || '商品标题获取中...';
-          break;
-        } else if (response) {
-          asinDisplay.textContent = 'ASIN: 未检测到';
-          titleDisplay.textContent = '请进入商品详情页';
-          break;
-        }
+        pageTypeResponse = await chrome.tabs.sendMessage(tab.id, { type: 'GET_PAGE_TYPE' });
+        break;
       } catch (error) {
-        console.error(`Error getting page info (retries left: ${retries - 1}):`, error);
+        console.error(`Error getting page type (retries left: ${retries - 1}):`, error);
         
         if (error.message && error.message.includes('Receiving end')) {
           try {
@@ -197,9 +202,31 @@ document.addEventListener('DOMContentLoaded', async () => {
       }
     }
     
-    if (!response) {
-      asinDisplay.textContent = 'ASIN: --';
-      titleDisplay.textContent = '无法获取商品信息（请刷新页面）';
+    // [NEW] 根据页面类型显示不同界面
+    if (pageTypeResponse?.isSearchResultsPage) {
+      // 搜索结果页
+      showMainView(authState.user, 'search', pageTypeResponse.productCount || 0);
+    } else if (pageTypeResponse?.isProductPage) {
+      // 产品详情页
+      showMainView(authState.user, 'product');
+      
+      // 获取产品信息
+      try {
+        const response = await chrome.tabs.sendMessage(tab.id, { type: 'GET_PAGE_INFO' });
+        if (response && response.asin) {
+          asinDisplay.textContent = `ASIN: ${response.asin}`;
+          titleDisplay.textContent = response.title || '商品标题获取中...';
+        } else {
+          asinDisplay.textContent = 'ASIN: 未检测到';
+          titleDisplay.textContent = '请进入商品详情页';
+        }
+      } catch (error) {
+        asinDisplay.textContent = 'ASIN: --';
+        titleDisplay.textContent = '无法获取商品信息（请刷新页面）';
+      }
+    } else {
+      // 其他 Amazon 页面
+      showMainView(authState.user, 'not-amazon');
     }
   }
 
@@ -216,6 +243,22 @@ document.addEventListener('DOMContentLoaded', async () => {
       alert('无法打开采集面板，请刷新页面后重试');
     }
   });
+
+  // ==========================================
+  // [NEW] 打开产品选择器（搜索结果页）
+  // ==========================================
+  if (openSelectorBtn) {
+    openSelectorBtn.addEventListener('click', async () => {
+      try {
+        const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+        await chrome.tabs.sendMessage(tab.id, { type: 'OPEN_PRODUCT_SELECTOR' });
+        window.close();
+      } catch (error) {
+        console.error('Error opening product selector:', error);
+        alert('无法打开产品选择器，请刷新页面后重试');
+      }
+    });
+  }
 
   // 启动初始化
   await init();

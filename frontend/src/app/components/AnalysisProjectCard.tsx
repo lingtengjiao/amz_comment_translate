@@ -1,10 +1,27 @@
 import { useNavigate } from 'react-router-dom';
-import { GitCompare, Clock, CheckCircle2, XCircle, Loader2, Calendar } from 'lucide-react';
+import { GitCompare, Clock, CheckCircle2, XCircle, Loader2, Calendar, TrendingUp, BarChart3 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { Badge } from './ui/badge';
 import type { AnalysisProject } from '@/api/types';
 import { formatDistanceToNow } from 'date-fns';
 import { zhCN } from 'date-fns/locale/zh-CN';
+
+const analysisTypeConfig = {
+  comparison: {
+    label: '对比分析',
+    icon: BarChart3,
+    color: 'text-rose-600',
+    bgColor: 'bg-rose-50 dark:bg-rose-900/20',
+    borderColor: 'border-rose-200 dark:border-rose-800',
+  },
+  market_insight: {
+    label: '市场洞察',
+    icon: TrendingUp,
+    color: 'text-blue-600',
+    bgColor: 'bg-blue-50 dark:bg-blue-900/20',
+    borderColor: 'border-blue-200 dark:border-blue-800',
+  },
+};
 
 interface AnalysisProjectCardProps {
   project: AnalysisProject;
@@ -45,6 +62,8 @@ export function AnalysisProjectCard({ project }: AnalysisProjectCardProps) {
   const navigate = useNavigate();
   const statusInfo = statusConfig[project.status];
   const StatusIcon = statusInfo.icon;
+  const typeInfo = analysisTypeConfig[project.analysis_type as keyof typeof analysisTypeConfig] || analysisTypeConfig.comparison;
+  const TypeIcon = typeInfo.icon;
 
   const handleClick = () => {
     navigate(`/analysis/${project.id}`);
@@ -66,9 +85,15 @@ export function AnalysisProjectCard({ project }: AnalysisProjectCardProps) {
     >
       <CardHeader className="pb-3">
         <div className="flex items-start justify-between gap-2">
-          <CardTitle className="text-lg font-semibold line-clamp-2 flex-1">
-            {project.title}
-          </CardTitle>
+          <div className="flex-1">
+            <div className="flex items-center gap-2 mb-1">
+              <TypeIcon className={`size-4 ${typeInfo.color}`} />
+              <span className={`text-xs font-medium ${typeInfo.color}`}>{typeInfo.label}</span>
+            </div>
+            <CardTitle className="text-lg font-semibold line-clamp-2">
+              {project.title}
+            </CardTitle>
+          </div>
           <Badge
             variant="outline"
             className={`${statusInfo.bgColor} ${statusInfo.borderColor} ${statusInfo.color} border shrink-0`}
@@ -98,8 +123,8 @@ export function AnalysisProjectCard({ project }: AnalysisProjectCardProps) {
             </div>
           </div>
           {project.status === 'completed' && (
-            <span className="text-rose-600 dark:text-rose-400 font-medium">
-              查看报告 →
+            <span className={`${typeInfo.color} font-medium`}>
+              查看{project.analysis_type === 'market_insight' ? '洞察' : '报告'} →
             </span>
           )}
         </div>

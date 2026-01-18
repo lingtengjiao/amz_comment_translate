@@ -11,6 +11,7 @@ import { HomeSection } from './sections/HomeSection';
 import { MyProjectsSection } from './sections/MyProjectsSection';
 import { ProductCenterSection } from './sections/ProductCenterSection';
 import { AICompareSection } from './sections/AICompareSection';
+import { MarketInsightSection } from './sections/MarketInsightSection';
 import { ReportsSection } from './sections/ReportsSection';
 import type { AppSection } from './types/homepage.types';
 
@@ -21,7 +22,7 @@ function HomeContent() {
   const scrollContainerRef = useRef<HTMLDivElement>(null);
 
   // 计算当前有效的 section（直接从 URL 获取，不依赖 state）
-  const validSections: AppSection[] = ['home', 'my-projects', 'product-center', 'ai-compare', 'reports'];
+  const validSections: AppSection[] = ['home', 'my-projects', 'product-center', 'ai-compare', 'market-insight', 'reports'];
   const currentSection: AppSection = section && validSections.includes(section as AppSection) 
     ? (section as AppSection) 
     : 'home';
@@ -61,6 +62,8 @@ function HomeContent() {
         return <ProductCenterSection />;
       case 'ai-compare':
         return <AICompareSection />;
+      case 'market-insight':
+        return <MarketInsightSection />;
       case 'reports':
         return <ReportsSection />;
       default:

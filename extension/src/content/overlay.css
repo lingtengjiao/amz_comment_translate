@@ -56,7 +56,7 @@
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 16px 20px;
+  padding: 10px 16px;
   background: linear-gradient(135deg, #f43f5e 0%, #ec4899 100%);
   border-bottom: none;
 }
@@ -100,66 +100,66 @@
 /* Content */
 .voc-content {
   flex: 1;
-  padding: 20px;
+  padding: 12px 14px;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 10px;
   background: var(--voc-bg);
 }
 
 /* Product Info */
 .voc-product-info {
   background: var(--voc-bg-card);
-  border-radius: 12px;
-  padding: 16px;
+  border-radius: 10px;
+  padding: 10px 12px;
   border: 1px solid var(--voc-border);
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
 }
 
 .voc-asin {
-  font-size: 12px;
+  font-size: 11px;
   color: #f43f5e;
   font-weight: 600;
-  margin-bottom: 6px;
+  margin-bottom: 4px;
   font-family: 'Monaco', 'Consolas', monospace;
   letter-spacing: 0.5px;
 }
 
 .voc-product-title {
   color: var(--voc-text);
-  font-size: 14px;
-  line-height: 1.4;
+  font-size: 13px;
+  line-height: 1.35;
 }
 
 /* Status Section */
 .voc-status {
   background: var(--voc-bg-card);
-  border-radius: 12px;
-  padding: 20px;
+  border-radius: 10px;
+  padding: 12px;
   border: 1px solid var(--voc-border);
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
 }
 
 .voc-message {
   color: var(--voc-text);
-  font-size: 15px;
+  font-size: 14px;
   font-weight: 500;
-  margin-bottom: 16px;
-  line-height: 1.5;
+  margin-bottom: 10px;
+  line-height: 1.4;
 }
 
 /* Progress Bar */
 .voc-progress-container {
-  margin-bottom: 12px;
+  margin-bottom: 8px;
 }
 
 .voc-progress-bar {
-  height: 8px;
+  height: 6px;
   background: #e2e8f0;
-  border-radius: 4px;
+  border-radius: 3px;
   overflow: hidden;
-  margin-bottom: 8px;
+  margin-bottom: 6px;
 }
 
 .voc-progress-fill {
@@ -208,14 +208,14 @@
 /* Configuration */
 .voc-config {
   background: var(--voc-bg-card);
-  border-radius: 12px;
-  padding: 16px;
+  border-radius: 10px;
+  padding: 12px;
   border: 1px solid var(--voc-border);
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
 }
 
 .voc-config-row {
-  margin-bottom: 16px;
+  margin-bottom: 10px;
 }
 
 .voc-config-row:last-child {
@@ -225,31 +225,31 @@
 .voc-config-row > label {
   display: block;
   color: var(--voc-text-muted);
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.5px;
-  margin-bottom: 10px;
+  margin-bottom: 6px;
 }
 
 .voc-stars {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: 6px;
 }
 
 .voc-stars label {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 8px 12px;
+  gap: 4px;
+  padding: 6px 10px;
   background: white;
   border: 1.5px solid var(--voc-border);
-  border-radius: 8px;
+  border-radius: 6px;
   color: var(--voc-text);
   cursor: pointer;
   transition: all 0.2s;
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 500;
 }
 
@@ -273,12 +273,12 @@
 
 #voc-pages-per-star {
   width: 100%;
-  padding: 10px 12px;
+  padding: 8px 10px;
   background: white;
   border: 1.5px solid var(--voc-border);
-  border-radius: 8px;
+  border-radius: 6px;
   color: var(--voc-text);
-  font-size: 14px;
+  font-size: 13px;
   cursor: pointer;
   transition: border-color 0.2s;
   font-weight: 500;
@@ -295,8 +295,8 @@
 .voc-mode-options,
 .voc-media-options {
   display: flex;
-  gap: 12px;
-  margin-top: 8px;
+  gap: 8px;
+  margin-top: 6px;
   flex-wrap: wrap;
 }
 
@@ -304,15 +304,15 @@
 .voc-media-options label {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 8px 14px;
+  gap: 4px;
+  padding: 6px 10px;
   background: white;
   border: 1.5px solid var(--voc-border);
-  border-radius: 8px;
+  border-radius: 6px;
   color: var(--voc-text);
   cursor: pointer;
   transition: all 0.2s;
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 500;
 }
 
@@ -339,16 +339,16 @@
   margin-top: auto;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 8px;
 }
 
 .voc-btn {
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 14px 20px;
-  border-radius: 10px;
-  font-size: 15px;
+  padding: 12px 16px;
+  border-radius: 8px;
+  font-size: 14px;
   font-weight: 600;
   cursor: pointer;
   transition: all 0.2s;
@@ -436,15 +436,15 @@
 
 /* ================= Workflow Mode Selection ================= */
 .voc-workflow-section {
-  margin-top: 8px;
-  padding-top: 16px;
+  margin-top: 6px;
+  padding-top: 10px;
   border-top: 1px dashed var(--voc-border);
 }
 
 .voc-workflow-options {
   display: flex;
-  gap: 12px;
-  margin-top: 10px;
+  gap: 8px;
+  margin-top: 6px;
 }
 
 .voc-workflow-card {
@@ -453,10 +453,10 @@
   flex-direction: column;
   align-items: center;
   text-align: center;
-  padding: 16px 12px;
+  padding: 10px 8px;
   background: white;
   border: 2px solid var(--voc-border);
-  border-radius: 12px;
+  border-radius: 10px;
   cursor: pointer;
   transition: all 0.2s ease;
   position: relative;
@@ -480,16 +480,16 @@
 }
 
 .voc-workflow-icon {
-  font-size: 28px;
-  margin-bottom: 8px;
+  font-size: 22px;
+  margin-bottom: 4px;
   display: block;
 }
 
 .voc-workflow-title {
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 700;
   color: var(--voc-text);
-  margin-bottom: 4px;
+  margin-bottom: 2px;
   display: block;
 }
 
@@ -498,9 +498,9 @@
 }
 
 .voc-workflow-desc {
-  font-size: 11px;
+  font-size: 10px;
   color: var(--voc-text-muted);
-  line-height: 1.3;
+  line-height: 1.25;
   display: block;
 }
 
@@ -508,17 +508,607 @@
 .voc-workflow-card:has(input:checked)::after {
   content: '✓';
   position: absolute;
-  top: 8px;
-  right: 8px;
-  width: 20px;
-  height: 20px;
+  top: 4px;
+  right: 4px;
+  width: 16px;
+  height: 16px;
   background: #f43f5e;
   color: white;
   border-radius: 50%;
-  font-size: 12px;
+  font-size: 10px;
   font-weight: bold;
   display: flex;
   align-items: center;
   justify-content: center;
+}
+
+/* ========== Rufus AI Section ========== */
+.voc-rufus-section {
+  margin-top: 12px;
+  padding-top: 10px;
+}
+
+.voc-section-divider {
+  height: 1px;
+  background: linear-gradient(to right, transparent, var(--voc-border), transparent);
+  margin-bottom: 10px;
+}
+
+.voc-rufus-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.voc-rufus-icon {
+  font-size: 16px;
+}
+
+.voc-rufus-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--voc-text-primary);
+}
+
+.voc-rufus-desc {
+  font-size: 11px;
+  color: var(--voc-text-muted);
+  margin-bottom: 8px;
+  line-height: 1.35;
+}
+
+.voc-btn-secondary {
+  background: linear-gradient(135deg, #6366f1, #8b5cf6);
+  color: white;
+  border: none;
+  padding: 8px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 500;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  transition: all 0.2s ease;
+  width: 100%;
+  justify-content: center;
+}
+
+.voc-btn-secondary:hover {
+  background: linear-gradient(135deg, #4f46e5, #7c3aed);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(99, 102, 241, 0.3);
+}
+
+.voc-btn-secondary:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.voc-rufus-status {
+  margin-top: 6px;
+  font-size: 11px;
+  color: var(--voc-text-muted);
+  text-align: center;
+  min-height: 16px;
+}
+
+.voc-rufus-result {
+  margin-top: 8px;
+  padding: 8px;
+  background: var(--voc-bg-secondary);
+  border-radius: 6px;
+  font-size: 12px;
+  color: var(--voc-text-primary);
+  line-height: 1.4;
+  max-height: 150px;
+  overflow-y: auto;
+  border: 1px solid var(--voc-border);
+}
+
+.voc-rufus-result::-webkit-scrollbar {
+  width: 6px;
+}
+
+.voc-rufus-result::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.voc-rufus-result::-webkit-scrollbar-thumb {
+  background: var(--voc-border);
+  border-radius: 3px;
+}
+
+.voc-rufus-result::-webkit-scrollbar-thumb:hover {
+  background: var(--voc-text-muted);
+}
+
+/* ========== Rufus Topic Buttons ========== */
+.voc-rufus-topics {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.voc-rufus-topic-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 8px 4px;
+  background: white;
+  border: 1.5px solid var(--voc-border);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  min-height: 50px;
+}
+
+.voc-rufus-topic-btn:hover {
+  border-color: #6366f1;
+  background: #eef2ff;
+  transform: translateY(-1px);
+}
+
+.voc-rufus-topic-btn:active {
+  transform: translateY(0);
+}
+
+.voc-rufus-topic-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.voc-rufus-topic-btn.voc-topic-active {
+  border-color: #6366f1;
+  background: linear-gradient(135deg, #6366f1, #8b5cf6);
+  color: white;
+}
+
+.voc-rufus-topic-btn.voc-topic-active .voc-topic-name {
+  color: white;
+}
+
+.voc-topic-icon {
+  font-size: 16px;
+  margin-bottom: 2px;
+}
+
+.voc-topic-name {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--voc-text);
+  text-align: center;
+  line-height: 1.2;
+}
+
+/* ========== Rufus Progress Bar ========== */
+.voc-rufus-progress-container {
+  margin: 8px 0;
+}
+
+.voc-rufus-progress-bar {
+  height: 4px;
+  background: #e2e8f0;
+  border-radius: 2px;
+  overflow: hidden;
+  margin-bottom: 4px;
+}
+
+.voc-rufus-progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #6366f1, #8b5cf6);
+  border-radius: 2px;
+  transition: width 0.3s ease;
+  width: 0%;
+}
+
+.voc-rufus-progress-text {
+  text-align: right;
+  font-size: 10px;
+  color: var(--voc-text-muted);
+  font-weight: 500;
+}
+
+/* ============================================================================
+ * [NEW] Product Selector Styles - 搜索结果页产品选择器
+ * ============================================================================ */
+
+/* Product Selector Container */
+#voc-product-selector {
+  position: fixed;
+  top: 0;
+  right: -500px;
+  width: 480px;
+  height: 100vh;
+  z-index: 2147483647;
+  font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+  font-size: 14px;
+  transition: right 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  pointer-events: none;
+}
+
+#voc-product-selector.voc-visible {
+  right: 0;
+  pointer-events: auto;
+}
+
+/* Selector Panel */
+.voc-selector-panel {
+  width: 100%;
+  height: 100%;
+  background: var(--voc-bg);
+  box-shadow: var(--voc-shadow);
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid var(--voc-border);
+}
+
+/* Selector Content */
+.voc-selector-content {
+  flex: 1;
+  padding: 12px 16px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  background: var(--voc-bg);
+}
+
+/* Selector Header */
+.voc-selector-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 12px;
+  background: var(--voc-bg-card);
+  border-radius: 8px;
+  border: 1px solid var(--voc-border);
+}
+
+.voc-selector-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+#voc-selector-count {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--voc-text);
+}
+
+.voc-selector-hint {
+  font-size: 11px;
+  color: var(--voc-text-muted);
+}
+
+.voc-selector-actions-top {
+  display: flex;
+  gap: 6px;
+}
+
+.voc-btn-sm {
+  padding: 6px 12px;
+  font-size: 12px;
+  font-weight: 500;
+  border: 1px solid var(--voc-border);
+  background: white;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s;
+  color: var(--voc-text);
+}
+
+.voc-btn-sm:hover {
+  border-color: #f43f5e;
+  color: #f43f5e;
+  background: #fef2f2;
+}
+
+/* Product List */
+.voc-product-list {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-right: 4px;
+  min-height: 200px;
+  max-height: calc(100vh - 350px);
+}
+
+.voc-product-list::-webkit-scrollbar {
+  width: 6px;
+}
+
+.voc-product-list::-webkit-scrollbar-track {
+  background: #f1f5f9;
+  border-radius: 3px;
+}
+
+.voc-product-list::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 3px;
+}
+
+.voc-product-list::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
+}
+
+/* Loading & Empty States */
+.voc-loading,
+.voc-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100px;
+  color: var(--voc-text-muted);
+  font-size: 13px;
+}
+
+/* Product Item */
+.voc-product-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px;
+  background: white;
+  border: 1.5px solid var(--voc-border);
+  border-radius: 8px;
+  transition: all 0.2s;
+  cursor: pointer;
+}
+
+.voc-product-item:hover {
+  border-color: #f43f5e;
+  background: #fffbfb;
+  transform: translateX(-2px);
+}
+
+.voc-product-item:has(.voc-product-check:checked) {
+  border-color: #f43f5e;
+  background: linear-gradient(135deg, #fff5f5, #fff0f5);
+  box-shadow: 0 2px 8px rgba(244, 63, 94, 0.1);
+}
+
+/* Custom Checkbox */
+.voc-product-checkbox {
+  position: relative;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.voc-product-checkbox input {
+  position: absolute;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.voc-checkmark {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  background: white;
+  border: 2px solid var(--voc-border);
+  border-radius: 4px;
+  transition: all 0.2s;
+}
+
+.voc-product-checkbox:hover .voc-checkmark {
+  border-color: #f43f5e;
+}
+
+.voc-product-checkbox input:checked ~ .voc-checkmark {
+  background: linear-gradient(135deg, #f43f5e, #ec4899);
+  border-color: #f43f5e;
+}
+
+.voc-product-checkbox input:checked ~ .voc-checkmark::after {
+  content: '✓';
+  color: white;
+  font-size: 12px;
+  font-weight: bold;
+}
+
+/* Product Image */
+.voc-product-image {
+  width: 60px;
+  height: 60px;
+  flex-shrink: 0;
+  background: #f8fafc;
+  border-radius: 6px;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.voc-product-image img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+
+/* Product Details */
+.voc-product-details {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.voc-product-title-text {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--voc-text);
+  line-height: 1.3;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.voc-product-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  font-size: 11px;
+}
+
+.voc-product-asin {
+  color: #f43f5e;
+  font-family: 'Monaco', 'Consolas', monospace;
+  font-weight: 600;
+}
+
+.voc-product-price {
+  color: #059669;
+  font-weight: 600;
+}
+
+.voc-product-rating {
+  color: #f59e0b;
+}
+
+.voc-product-reviews {
+  color: var(--voc-text-muted);
+}
+
+.voc-sponsored-tag {
+  padding: 2px 6px;
+  background: #fef3c7;
+  color: #92400e;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 500;
+}
+
+/* Action Buttons Section */
+.voc-selector-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-top: 12px;
+  border-top: 1px solid var(--voc-border);
+}
+
+.voc-action-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.voc-action-row .voc-btn {
+  flex: 1;
+  padding: 10px 14px;
+  font-size: 13px;
+}
+
+.voc-action-hint {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--voc-text-muted);
+  width: 140px;
+}
+
+.voc-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  transform: none !important;
+  box-shadow: none !important;
+}
+
+/* Status Messages */
+.voc-selector-status {
+  padding: 8px 12px;
+  border-radius: 6px;
+  font-size: 12px;
+  text-align: center;
+  min-height: 20px;
+}
+
+.voc-status-info {
+  background: #eff6ff;
+  color: #1e40af;
+}
+
+.voc-status-success {
+  background: #ecfdf5;
+  color: #059669;
+}
+
+.voc-status-error {
+  background: #fef2f2;
+  color: #dc2626;
+}
+
+.voc-status-warning {
+  background: #fffbeb;
+  color: #d97706;
+}
+
+/* ============================================================================
+ * [NEW] Load More Button Styles - 加载更多按钮
+ * ============================================================================ */
+
+.voc-load-more-section {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 0;
+  border-top: 1px dashed var(--voc-border);
+  margin-top: 8px;
+}
+
+.voc-btn-load-more {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 10px 24px;
+  background: linear-gradient(135deg, #3b82f6, #6366f1);
+  color: white;
+  border: none;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+  min-width: 160px;
+}
+
+.voc-btn-load-more:hover:not(:disabled) {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 16px rgba(59, 130, 246, 0.35);
+}
+
+.voc-btn-load-more:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.voc-load-more-icon {
+  font-size: 14px;
+}
+
+.voc-load-more-text {
+  font-size: 13px;
+}
+
+.voc-page-info {
+  font-size: 11px;
+  color: var(--voc-text-muted);
+  font-weight: 500;
 }
 

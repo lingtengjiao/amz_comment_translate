@@ -571,6 +571,7 @@ products_router = APIRouter(prefix="/products", tags=["Products"])
 @products_router.get("", response_model=ProductListResponse)
 async def get_products(
     my_only: bool = Query(False, description="只显示我的项目"),
+    admin_only: bool = Query(False, description="只显示管理员关注的产品（用于洞察广场）"),
     db: AsyncSession = Depends(get_db),
     current_user: Optional[User] = Depends(get_current_user)
 ):
@@ -578,6 +579,7 @@ async def get_products(
     Get all products with their review statistics.
     
     - 如果 my_only=True 且用户已登录，只返回用户关联的产品
+    - 如果 admin_only=True，只返回管理员用户关注的产品（用于洞察广场）
     - 返回数据中包含 is_my_project 字段标记用户是否已关联
     """
     from app.models.user_project import UserProject
@@ -592,7 +594,21 @@ async def get_products(
         )
         my_product_ids = {row[0] for row in result.all()}
     
-    if my_only and current_user:
+    if admin_only:
+        # 只获取管理员关注的产品（用于洞察广场）
+        admin_result = await db.execute(
+            select(UserProject.product_id)
+            .join(User, UserProject.user_id == User.id)
+            .where(User.is_admin == True)
+            .where(UserProject.is_deleted == False)
+        )
+        admin_product_ids = {row[0] for row in admin_result.all()}
+        
+        if not admin_product_ids:
+            return ProductListResponse(total=0, products=[])
+        
+        products = await service.get_products_by_ids(list(admin_product_ids))
+    elif my_only and current_user:
         # 只获取用户关联的产品
         if not my_product_ids:
             return ProductListResponse(total=0, products=[])
@@ -2249,6 +2265,8 @@ async def get_all_reports(
         default=None,
         description="按类型筛选: comprehensive, operations, product, supply_chain"
     ),
+    my_only: bool = Query(default=False, description="只返回当前用户关注的产品的报告"),
+    current_user: Optional[User] = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
     """
@@ -2258,15 +2276,27 @@ async def get_all_reports(
     
     **筛选参数：**
     - `report_type`: 可选，按报告类型筛选
+    - `my_only`: 可选，只返回当前用户关注的产品的报告
     - `limit`: 最大返回数量，默认100
     """
     from sqlalchemy import select, desc
     from app.models.product import Product
     from app.models.report import ProductReport
+    from app.models.user import UserProject
     
     try:
         # 构建查询
         query = select(ProductReport).join(Product)
+        
+        # 用户关注过滤：只返回用户关注的产品的报告
+        if my_only and current_user:
+            query = query.join(
+                UserProject,
+                UserProject.product_id == Product.id
+            ).where(
+                UserProject.user_id == current_user.id,
+                UserProject.is_deleted == False
+            )
         
         # 类型筛选
         if report_type:

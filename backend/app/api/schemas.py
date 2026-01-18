@@ -69,6 +69,8 @@ class ReviewRawData(BaseModel):
     video_url: Optional[str] = Field(None, description="Video URL if present")
     # Review link
     review_url: Optional[str] = Field(None, description="Amazon review original link")
+    # Variant info
+    variant: Optional[str] = Field(None, description="Product variant info (color, size, etc.)")
 
 
 class ReviewIngestRequest(BaseModel):
@@ -878,4 +880,77 @@ class ProductReportCreateResponse(BaseModel):
     stats: Optional[dict] = Field(None, description="分析统计数据")
     report_type_config: Optional[ReportTypeInfo] = Field(None, description="报告类型配置信息")
     error: Optional[str] = Field(None, description="错误信息")
+
+
+# ============== Rufus Conversation Schemas ==============
+
+class RufusConversationRequest(BaseModel):
+    """
+    Request body for POST /api/v1/rufus/conversation
+    Contains Rufus AI conversation data from Chrome extension.
+    """
+    asin: str = Field(..., min_length=5, max_length=20, description="Amazon ASIN")
+    marketplace: str = Field("US", description="Amazon marketplace")
+    question: str = Field(..., min_length=1, description="Question asked to Rufus")
+    answer: str = Field(..., min_length=1, description="Rufus's response")
+    question_type: str = Field("wish_it_had", description="Type of question (wish_it_had, comparison, etc.)")
+    question_index: int = Field(0, ge=0, description="Index of question within the topic (0-based)")
+    conversation_id: Optional[str] = Field(None, description="Optional conversation ID from Rufus")
+    raw_html: Optional[str] = Field(None, description="Optional raw HTML of the response for debugging")
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "asin": "B00MYWGTGQ",
+                "marketplace": "US",
+                "question": "In the current reviews, what features do buyers most commonly mention using the 'I wish it had...' phrase?",
+                "answer": "Based on customer reviews, buyers commonly wish this product had...",
+                "question_type": "wish_it_had",
+                "question_index": 0,
+                "conversation_id": "rufus-12345"
+            }
+        }
+    )
+
+
+class RufusConversationResponse(BaseModel):
+    """Response for Rufus conversation API"""
+    success: bool
+    message: str
+    conversation_id: Optional[UUID] = Field(None, description="Saved conversation ID")
+    asin: Optional[str] = Field(None, description="Product ASIN")
+    
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "success": True,
+                "message": "Conversation saved successfully",
+                "conversation_id": "550e8400-e29b-41d4-a716-446655440000",
+                "asin": "B00MYWGTGQ"
+            }
+        }
+    )
+
+
+class RufusConversationDetail(BaseModel):
+    """Detailed Rufus conversation data for retrieval"""
+    id: UUID
+    asin: str
+    marketplace: str
+    question: str
+    answer: str
+    question_type: str
+    question_index: int = 0
+    conversation_id: Optional[str] = None
+    created_at: datetime
+    user_id: Optional[UUID] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class RufusConversationListResponse(BaseModel):
+    """Response for listing Rufus conversations"""
+    success: bool
+    conversations: List[RufusConversationDetail] = Field(default_factory=list)
+    total: int = Field(0, description="Total conversations count")
 

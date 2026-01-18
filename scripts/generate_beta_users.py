@@ -1,12 +1,18 @@
 #!/usr/bin/env python3
 """
-生成10个内测用户的SQL脚本（随机密码）
+生成100个内测用户的SQL脚本（随机密码）
 """
 import secrets
 import string
-from passlib.context import CryptContext
+import hashlib
+import base64
 
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+def hash_password(password: str) -> str:
+    """使用 bcrypt 算法生成密码哈希（兼容 passlib 的 bcrypt）"""
+    # 使用 Python 内置的方式生成 bcrypt 兼容的哈希
+    # 注意：这里使用简化版本，生产环境建议使用 passlib 或 bcrypt 库
+    import crypt
+    return crypt.crypt(password, crypt.mksalt(crypt.METHOD_BLOWFISH))
 
 def generate_random_password(length=12):
     """生成随机密码"""
@@ -21,20 +27,20 @@ def generate_random_password(length=12):
             any(c in "!@#$%^&*" for c in password)):
             return password
 
-# 生成10个用户及其随机密码
+# 生成100个用户及其随机密码
 users = []
-for i in range(1, 11):
+for i in range(1, 101):
     email = f"beta{i}@lesong.com"
     name = f"Beta User {i}"
     password = generate_random_password(12)
-    password_hash = pwd_context.hash(password)
+    password_hash = hash_password(password)
     users.append((email, name, password, password_hash))
 
 # 输出SQL
 print("-- " + "=" * 77)
-print("-- 创建 10 个内测用户（每个用户随机密码）")
+print("-- 创建 100 个内测用户（每个用户随机密码）")
 print("-- ")
-print("-- 生成时间: 2026-01-11")
+print("-- 生成时间: 2026-01-12")
 print("-- " + "=" * 77)
 print()
 

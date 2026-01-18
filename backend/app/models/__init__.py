@@ -15,6 +15,10 @@ from app.models.user import User
 from app.models.user_project import UserProject
 from app.models.analysis_lock import ProductAnalysisLock, LockStatus
 from app.models.product_time_series import ProductTimeSeries
+# Analytics Models
+from app.models.analytics import UserEvent, UserSession, DailyStat
+# Rufus Conversation Model
+from app.models.rufus_conversation import RufusConversation
 
 __all__ = [
     "Product", 
@@ -42,5 +46,11 @@ __all__ = [
     "ProductAnalysisLock",
     "LockStatus",
     "ProductTimeSeries",
+    # Analytics Models
+    "UserEvent",
+    "UserSession",
+    "DailyStat",
+    # Rufus Conversation Model
+    "RufusConversation",
 ]
 

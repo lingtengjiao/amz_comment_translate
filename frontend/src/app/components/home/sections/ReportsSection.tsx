@@ -43,8 +43,8 @@ export function ReportsSection() {
   const loadReports = async () => {
     setLoading(true);
     try {
-      // 使用新的 getAllReports API 一次性获取所有报告
-      const reportsRes = await apiService.getAllReports(200);
+      // 只获取当前用户关注的产品的报告
+      const reportsRes = await apiService.getAllReports(200, undefined, true);
       
       if (reportsRes.reports) {
         const allReports: ReportWithProduct[] = reportsRes.reports.map((report: any) => ({

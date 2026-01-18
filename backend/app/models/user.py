@@ -13,6 +13,7 @@ from app.db.session import Base
 
 if TYPE_CHECKING:
     from app.models.user_project import UserProject
+    from app.models.rufus_conversation import RufusConversation
 
 
 class User(Base):
@@ -89,6 +90,13 @@ class User(Base):
         "UserProject",
         back_populates="user",
         cascade="all, delete-orphan"
+    )
+    
+    # 关系：用户的 Rufus 对话记录
+    rufus_conversations: Mapped[List["RufusConversation"]] = relationship(
+        "RufusConversation",
+        back_populates="user",
+        lazy="selectin"
     )
     
     def __repr__(self) -> str:
