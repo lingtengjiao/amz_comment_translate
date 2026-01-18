@@ -97,8 +97,12 @@ jobs:
             --exclude '.playwright-mcp' \
             --exclude '*.zip' \
             --exclude 'nginx/ssl' \
+            --exclude '22905189_98kamz.com_nginx' \
             -e "ssh -o StrictHostKeyChecking=no" \
             ./ ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_A_IP }}:${{ env.SERVER_A_PROJECT_DIR }}/
+          
+          # 等待服务器处理完文件操作
+          sleep 5
 
       - name: 🔧 Create .env file on Server A
         run: |
