@@ -96,6 +96,7 @@ jobs:
             --exclude 'redis_data' \
             --exclude '.playwright-mcp' \
             --exclude '*.zip' \
+            --exclude 'nginx/ssl' \
             -e "ssh -o StrictHostKeyChecking=no" \
             ./ ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_A_IP }}:${{ env.SERVER_A_PROJECT_DIR }}/
 
