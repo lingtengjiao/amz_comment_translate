@@ -2282,9 +2282,17 @@ async def get_all_reports(
     from sqlalchemy import select, desc
     from app.models.product import Product
     from app.models.report import ProductReport
-    from app.models.user import UserProject
+    from app.models.user_project import UserProject
     
     try:
+        # 如果 my_only=True 但用户未登录，返回空列表
+        if my_only and not current_user:
+            return ProductReportListResponse(
+                success=True,
+                reports=[],
+                total=0
+            )
+        
         # 构建查询
         query = select(ProductReport).join(Product)
         
@@ -2307,6 +2315,14 @@ async def get_all_reports(
         
         result = await db.execute(query)
         reports = result.scalars().all()
+        
+        # 如果没有报告，直接返回空列表
+        if not reports:
+            return ProductReportListResponse(
+                success=True,
+                reports=[],
+                total=0
+            )
         
         # 获取关联的产品信息
         product_ids = [r.product_id for r in reports]
