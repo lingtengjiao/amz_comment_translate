@@ -17,6 +17,8 @@
 # - SERVER_B_IP: Worker 服务器 IP (115.190.185.29)
 # - SERVER_USER: SSH 用户名 (root)
 # - QWEN_API_KEY: 通义千问 API 密钥
+# - SSL_CERT_PEM: SSL 证书内容 (base64 编码)
+# - SSL_CERT_KEY: SSL 私钥内容 (base64 编码)
 # =============================================================================
 
 name: 🚀 Deploy to Production
@@ -106,6 +108,13 @@ jobs:
           QWEN_API_KEY=${{ secrets.QWEN_API_KEY }}
           QWEN_API_BASE=https://dashscope.aliyuncs.com/compatible-mode/v1
           ENVFILE"
+
+      - name: 🔐 Create SSL certificates on Server A
+        run: |
+          ssh -o StrictHostKeyChecking=no ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_A_IP }} "mkdir -p ${{ env.SERVER_A_PROJECT_DIR }}/nginx/ssl"
+          echo "${{ secrets.SSL_CERT_PEM }}" | base64 -d | ssh -o StrictHostKeyChecking=no ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_A_IP }} "cat > ${{ env.SERVER_A_PROJECT_DIR }}/nginx/ssl/98kamz.com.pem"
+          echo "${{ secrets.SSL_CERT_KEY }}" | base64 -d | ssh -o StrictHostKeyChecking=no ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_A_IP }} "cat > ${{ env.SERVER_A_PROJECT_DIR }}/nginx/ssl/98kamz.com.key"
+          ssh -o StrictHostKeyChecking=no ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_A_IP }} "chmod 600 ${{ env.SERVER_A_PROJECT_DIR }}/nginx/ssl/98kamz.com.key"
 
       - name: 🏗️ Build and restart services on Server A
         run: |
