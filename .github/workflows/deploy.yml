@@ -99,15 +99,13 @@ jobs:
 
       - name: 🔧 Create .env file on Server A
         run: |
-          ssh -o StrictHostKeyChecking=no ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_A_IP }} << 'EOF'
-          cat > ${{ env.SERVER_A_PROJECT_DIR }}/.env << 'ENVFILE'
+          ssh -o StrictHostKeyChecking=no ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_A_IP }} "cat > ${{ env.SERVER_A_PROJECT_DIR }}/.env << 'ENVFILE'
           POSTGRES_USER=vocmaster
           POSTGRES_PASSWORD=vocmaster123
           POSTGRES_DB=vocmaster
           QWEN_API_KEY=${{ secrets.QWEN_API_KEY }}
           QWEN_API_BASE=https://dashscope.aliyuncs.com/compatible-mode/v1
-          ENVFILE
-          EOF
+          ENVFILE"
 
       - name: 🏗️ Build and restart services on Server A
         run: |
@@ -184,16 +182,14 @@ jobs:
 
       - name: 🔧 Create .env file on Server B
         run: |
-          ssh -o StrictHostKeyChecking=no ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_B_IP }} << 'EOF'
-          cat > ${{ env.SERVER_B_PROJECT_DIR }}/.env << 'ENVFILE'
+          ssh -o StrictHostKeyChecking=no ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_B_IP }} "cat > ${{ env.SERVER_B_PROJECT_DIR }}/.env << 'ENVFILE'
           MASTER_IP=${{ secrets.SERVER_A_IP }}
           POSTGRES_USER=vocmaster
           POSTGRES_PASSWORD=vocmaster123
           POSTGRES_DB=vocmaster
           QWEN_API_KEY=${{ secrets.QWEN_API_KEY }}
           QWEN_API_BASE=https://dashscope.aliyuncs.com/compatible-mode/v1
-          ENVFILE
-          EOF
+          ENVFILE"
 
       - name: 🏗️ Build and restart services on Server B
         run: |
