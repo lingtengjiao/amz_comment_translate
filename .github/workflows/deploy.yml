@@ -109,16 +109,19 @@ jobs:
           QWEN_API_BASE=https://dashscope.aliyuncs.com/compatible-mode/v1
           ENVFILE"
 
-      - name: 🔐 Create SSL certificates on Server A
+      - name: 🔐 Ensure SSL certificates on Server A
         run: |
-          ssh -o StrictHostKeyChecking=no ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_A_IP }} "mkdir -p ${{ env.SERVER_A_PROJECT_DIR }}/nginx/ssl"
-          # 使用 printf 确保正确处理 base64 内容
-          printf '%s' '${{ secrets.SSL_CERT_PEM }}' | base64 -d > /tmp/cert.pem
-          printf '%s' '${{ secrets.SSL_CERT_KEY }}' | base64 -d > /tmp/cert.key
-          scp -o StrictHostKeyChecking=no /tmp/cert.pem ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_A_IP }}:${{ env.SERVER_A_PROJECT_DIR }}/nginx/ssl/98kamz.com.pem
-          scp -o StrictHostKeyChecking=no /tmp/cert.key ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_A_IP }}:${{ env.SERVER_A_PROJECT_DIR }}/nginx/ssl/98kamz.com.key
-          ssh -o StrictHostKeyChecking=no ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_A_IP }} "chmod 600 ${{ env.SERVER_A_PROJECT_DIR }}/nginx/ssl/98kamz.com.key"
-          rm -f /tmp/cert.pem /tmp/cert.key
+          # 检查证书是否已存在，如果不存在则创建
+          ssh -o StrictHostKeyChecking=no ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_A_IP }} "
+            mkdir -p ${{ env.SERVER_A_PROJECT_DIR }}/nginx/ssl
+            if [ ! -f ${{ env.SERVER_A_PROJECT_DIR }}/nginx/ssl/98kamz.com.key ]; then
+              echo 'SSL certificates not found, please upload manually'
+              exit 1
+            else
+              echo 'SSL certificates exist, skipping creation'
+              chmod 600 ${{ env.SERVER_A_PROJECT_DIR }}/nginx/ssl/98kamz.com.key
+            fi
+          "
 
       - name: 🏗️ Build and restart services on Server A
         run: |
