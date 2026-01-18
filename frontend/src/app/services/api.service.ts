@@ -22,8 +22,8 @@ import type {
   Sentiment
 } from '../types/api.types';
 
-// 配置基础URL
-const API_BASE_URL = process.env.REACT_APP_API_BASE_URL || 'http://localhost:3000/api';
+// 配置基础URL - 生产环境使用相对路径，开发环境使用本地代理
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api';
 
 /**
  * 通用请求方法
