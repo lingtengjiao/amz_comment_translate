@@ -20,12 +20,12 @@
     "https://*.amazon.fr/*",
     "https://*.amazon.co.jp/*",
     "https://*.amazon.com.au/*",
-    "https://98kamz.com/*"
+    "http://115.191.30.209/*"
   ],
   
   "externally_connectable": {
     "matches": [
-      "https://98kamz.com/*"
+      "http://115.191.30.209/*"
     ]
   },
   

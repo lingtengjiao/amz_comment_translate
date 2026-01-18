@@ -23,8 +23,8 @@
   // Configuration
   // 生产环境配置
   const CONFIG = {
-  API_BASE_URL: 'https://98kamz.com/api/v1',
-  DASHBOARD_URL: 'https://98kamz.com',  // 生产前端地址
+  API_BASE_URL: 'http://115.191.30.209/api/v1',
+  DASHBOARD_URL: 'http://115.191.30.209',  // 生产前端地址
   DELAY_BETWEEN_PAGES: { min: 2000, max: 5000 }, // Increased for safety
   DELAY_BETWEEN_STARS: { min: 3000, max: 6000 },
   BATCH_SIZE: 20
