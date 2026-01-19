@@ -77,7 +77,7 @@ export function MyProjectsSection() {
   // 删除项目
   const handleDelete = async (asin: string, e: React.MouseEvent) => {
     e.stopPropagation();
-    if (!confirm('确定要从我的洞察中移除这个产品吗？')) return;
+    if (!confirm('确定要从我的产品洞察中移除这个产品吗？')) return;
     
     try {
       await apiService.removeFromMyProjects(asin);
@@ -103,7 +103,7 @@ export function MyProjectsSection() {
       <div className="sticky top-[57px] z-[9] bg-white pb-2 pt-6">
         <div className="flex items-center justify-between mb-4">
           <div>
-            <h3 className="text-lg font-semibold text-slate-900 mb-1">我的洞察</h3>
+            <h3 className="text-lg font-semibold text-slate-900 mb-1">我的产品洞察</h3>
             <p className="text-sm text-slate-600">你分析过的产品都在这里</p>
           </div>
         </div>

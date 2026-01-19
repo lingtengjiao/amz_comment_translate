@@ -492,6 +492,7 @@ Different insight types MUST use different dimension categories:
 
 # [UPDATED] 跨语言洞察提取 Prompt - 5类洞察系统 (无维度 Schema 版本，英文输入 → 中文输出)
 # [UPDATED 2026-01-15] 添加置信度字段
+# [UPDATED 2026-01-19] 为不同洞察类型提供独立的默认维度示例，避免维度混用
 INSIGHT_EXTRACTION_PROMPT = """# Role
 Amazon Review Analyst (Cross-language Expert) with STRICT evidence standards
 
@@ -516,49 +517,59 @@ Analyze the following **English review** and extract key user insights. **At lea
 - **low**: Fallback for very vague reviews
   - ⚠️ Only for "Good", "OK", "Nice" with no details
 
-# 5 Insight Types (CRITICAL - Distinguish Carefully)
-Break down the review into specific insights and categorize into one of these 5 types:
+# 5 Insight Types with SPECIFIC Dimension Categories
+Break down the review into specific insights. **CRITICAL: Use the correct dimension category for each type!**
 
-1. **strength (Product Advantage)**: Features or experiences explicitly praised.
-   - Example insights: "吸力强劲", "续航超出预期"
-   - Use: Listing selling points
+## 1. strength / weakness / suggestion (Use PRODUCT Dimensions)
+These types describe product features. Use product-related dimensions:
+- **产品质量**: 耐用性、做工、材质
+- **功能表现**: 核心功能的实际效果
+- **设计外观**: 外形、颜色、尺寸
+- **性价比**: 价格与价值的匹配
+- **安全性**: 使用安全相关问题
 
-2. **weakness (Pain Point)**: Defects, bugs, or complaints.
-   - Example insights: "电池续航太短", "塑料感强"
-   - Use: Product improvement
+## 2. scenario (Use SCENARIO Dimensions)
+Describes **specific usage contexts**. ⚠️ Must use SCENARIO dimensions, NOT product dimensions!
+- **家居日常**: 在家中日常生活使用
+- **户外活动**: 户外、旅行、露营场景
+- **工作办公**: 办公室或工作场景
+- **亲子互动**: 家长与孩子共同使用
+- **礼品赠送**: 作为礼物购买或赠送
 
-3. **suggestion (Feature Request)**: Improvement suggestions.
-   - Example insights: "如果能加LED灯就好了"
-   - Use: PM requirements
-
-4. **scenario (Usage Scenario)**: **Specific** usage processes.
-   - Example insights: "清理车库锯末时吸嘴被堵"
-   - ⚠️ Must be dynamic behavior, not simple nouns!
-
-5. **emotion (Emotional Insight)**: Strong emotions expressed.
-   - Example insights: "极其失望", "这是买过最好的东西"
-   - Use: Sentiment alerts
-
-# Dimension Detection
-Auto-detect dimension based on review content (e.g.: 整体满意度, 产品质量, 使用体验, 物流服务, 性价比).
+## 3. emotion (Use EMOTION Dimensions)
+Describes **user's emotional state**. ⚠️ Must use EMOTION dimensions, NOT product dimensions!
+- **惊喜好评**: 超出预期的正面情绪，强烈推荐
+- **失望不满**: 期望落空，批评抱怨
+- **物超所值**: 感觉价格划算，购买决策正确
+- **担忧警惕**: 对安全性或质量产生忧虑
+- **后悔购买**: 觉得不值，希望退货
 
 # Output Format (JSON Array)
 [
   {{
     "type": "strength", 
-    "dimension": "整体满意度",
-    "quote": "Amazing toy", 
-    "quote_translated": "太棒的玩具了",
-    "analysis": "用户对产品高度认可，表达强烈正面情感",
+    "dimension": "产品质量",
+    "quote": "Very durable material", 
+    "quote_translated": "材料非常耐用",
+    "analysis": "用户对产品的耐用性表示认可",
+    "sentiment": "positive",
+    "confidence": "high"
+  }},
+  {{
+    "type": "scenario",
+    "dimension": "亲子互动",
+    "quote": "My kids love playing with it",
+    "quote_translated": "我的孩子们喜欢玩这个",
+    "analysis": "产品被用于亲子游戏场景",
     "sentiment": "positive",
     "confidence": "high"
   }},
   {{
     "type": "emotion",
-    "dimension": "购买体验",
-    "quote": "Great buy",
-    "quote_translated": "买得太值了",
-    "analysis": "用户认为这次购买物超所值",
+    "dimension": "惊喜好评",
+    "quote": "Best purchase ever!",
+    "quote_translated": "有史以来最棒的购买！",
+    "analysis": "用户对产品超出预期，表达强烈好评",
     "sentiment": "positive",
     "confidence": "high"
   }}
@@ -566,11 +577,14 @@ Auto-detect dimension based on review content (e.g.: 整体满意度, 产品质�
 
 # Critical Rules
 1. **每条评论必须至少提取1个洞察**, even for very short reviews.
-2. For short positive reviews (e.g., "Amazing!", "Love it!"), extract as emotion type with dimension "整体满意度".
-3. For short negative reviews (e.g., "Terrible"), extract as weakness type with dimension "整体满意度".
-4. Be specific: not "质量不好" but "塑料感强" or "按键松动".
+2. **CRITICAL**: Match dimension to insight type correctly:
+   - strength/weakness/suggestion → Product dimensions (产品质量, 功能表现, etc.)
+   - scenario → Scenario dimensions (家居日常, 亲子互动, etc.)
+   - emotion → Emotion dimensions (惊喜好评, 失望不满, etc.)
+3. For short positive reviews (e.g., "Amazing!"), extract as emotion with dimension "惊喜好评".
+4. For short negative reviews (e.g., "Terrible"), extract as emotion with dimension "失望不满".
 5. NEVER return empty array []. At least 1 insight required.
-6. Scenario must be **dynamic behavior**, not simple place/time nouns.
+6. Scenario must be **dynamic behavior in specific context**, not simple place/time nouns.
 7. **All Chinese output must be natural, fluent Simplified Chinese.**
 8. **Always include confidence field** (high/medium/low) for each insight.
 """
@@ -1293,8 +1307,9 @@ class TranslationService:
             logger.error("Translation service not configured for dimension learning")
             return []
         
-        if not reviews_text or len(reviews_text) < 5:
-            logger.warning("样本数量不足（至少需要5条评论），无法有效学习维度")
+        # [UPDATED 2026-01-19] 降低最低样本要求
+        if not reviews_text or len(reviews_text) < 1:
+            logger.warning("没有可用样本，无法学习维度")
             return []
         
         # 限制样本量防止超 token
@@ -1394,9 +1409,10 @@ class TranslationService:
             logger.error("Translation service not configured for raw dimension learning")
             return {}
         
-        if not raw_reviews or len(raw_reviews) < 5:
-            logger.warning("样本数量不足（至少需要5条英文评论），无法有效学习维度")
-            return {}
+        # [UPDATED 2026-01-19] 降低最低样本要求，只要有评论就尝试学习
+        if not raw_reviews or len(raw_reviews) < 1:
+            logger.warning("没有可用样本，无法学习维度")
+            return None
         
         # 限制样本量防止超 token
         sample_texts = raw_reviews[:50]
@@ -1429,7 +1445,8 @@ class TranslationService:
             
             if not isinstance(parsed, dict):
                 logger.warning(f"跨语言维度发现返回格式不正确: {type(parsed)}")
-                return {}
+                # [FIX] 返回 None 而不是空字典，让调用方知道是解析失败
+                return None
             
             # [UPDATED] 解析3类维度
             valid_result = {}
@@ -1496,15 +1513,24 @@ class TranslationService:
                     logger.warning("[跨语言学习] AI返回旧格式，已自动补充场景和情绪维度")
             
             total_dims = sum(len(v) for v in valid_result.values())
+            
+            # [FIX 2026-01-19] 结果校验 - 确保每类维度至少有 2 个
+            product_count = len(valid_result.get('product', []))
+            scenario_count = len(valid_result.get('scenario', []))
+            emotion_count = len(valid_result.get('emotion', []))
+            
+            if product_count < 2 or scenario_count < 2 or emotion_count < 2:
+                logger.warning(f"[跨语言学习] 维度数量不足: 产品={product_count}, 场景={scenario_count}, 情绪={emotion_count}，需要每类至少2个")
+                return None  # 返回 None 表示学习失败，触发重试
+            
             logger.info(f"[跨语言学习] 从 {len(sample_texts)} 条英文评论学习到 {total_dims} 个中文维度 "
-                       f"(产品:{len(valid_result.get('product', []))}, "
-                       f"场景:{len(valid_result.get('scenario', []))}, "
-                       f"情绪:{len(valid_result.get('emotion', []))})")
+                       f"(产品:{product_count}, 场景:{scenario_count}, 情绪:{emotion_count})")
             return valid_result
             
         except Exception as e:
             logger.error(f"跨语言维度学习失败: {e}")
-            return {}
+            # [FIX] 返回 None 而不是空字典，触发重试
+            return None
 
     @retry(
         stop=stop_after_attempt(2),
@@ -1545,8 +1571,9 @@ class TranslationService:
             logger.error("Translation service not configured for raw context learning")
             return {}
         
-        if not raw_reviews or len(raw_reviews) < 10:
-            logger.warning("样本数量不足（至少需要10条英文评论），无法有效学习 5W 标签")
+        # [UPDATED 2026-01-19] 降低最低样本要求，只要有评论就尝试学习
+        if not raw_reviews or len(raw_reviews) < 1:
+            logger.warning("没有可用样本，无法学习 5W 标签")
             return {}
         
         # 限制样本量防止超 token
@@ -1660,8 +1687,9 @@ class TranslationService:
             logger.error("Translation service not configured for context learning")
             return {}
         
-        if not reviews_text or len(reviews_text) < 30:
-            logger.warning("样本数量不足（至少需要30条评论），无法有效学习 5W 标签")
+        # [UPDATED 2026-01-19] 降低最低样本要求
+        if not reviews_text or len(reviews_text) < 1:
+            logger.warning("没有可用样本，无法学习 5W 标签")
             return {}
         
         # 限制样本量防止超 token（50条评论约 4000-6000 tokens）

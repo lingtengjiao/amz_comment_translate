@@ -57,7 +57,7 @@ export function ProductCenterSection() {
     try {
       await apiService.addToMyProjects(asin);
       setMyAsins(prev => new Set([...prev, asin]));
-      toast.success('已添加到我的洞察');
+      toast.success('已添加到我的产品洞察');
     } catch (err: any) {
       toast.error('添加失败');
     } finally {
@@ -101,7 +101,7 @@ export function ProductCenterSection() {
         <div className="flex items-center justify-between mb-4">
           <div>
             <h3 className="text-lg font-semibold text-slate-900 mb-1">洞察广场</h3>
-            <p className="text-sm text-slate-600">精选热门产品，一键添加到我的洞察</p>
+            <p className="text-sm text-slate-600">精选热门产品，一键添加到我的产品洞察</p>
           </div>
         </div>
 

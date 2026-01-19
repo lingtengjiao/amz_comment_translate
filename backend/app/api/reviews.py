@@ -989,10 +989,11 @@ async def start_deep_analysis(
     )
     review_count = review_count_result.scalar() or 0
     
-    if review_count < 10:
+    # [UPDATED 2026-01-19] 移除评论数量限制，只要有评论就可以进行分析
+    if review_count < 1:
         raise HTTPException(
             status_code=400, 
-            detail=f"数据量不足：当前仅有 {review_count} 条评论，需要至少 10 条才能进行分析"
+            detail=f"没有可分析的评论，请先采集评论数据"
         )
     
     # ==========================================
@@ -1195,10 +1196,11 @@ async def collection_complete(
     # 模式 A: ONE_STEP_INSIGHT - 一步到位，全自动分析
     # ==========================================
     
-    if review_count < 10:
+    # [UPDATED 2026-01-19] 移除评论数量限制，只要有评论就可以进行分析
+    if review_count < 1:
         raise HTTPException(
             status_code=400, 
-            detail=f"数据量不足：当前仅有 {review_count} 条评论，需要至少 10 条才能进行分析"
+            detail=f"没有可分析的评论，请先采集评论数据"
         )
     
     # 检查是否已有 AUTO_ANALYSIS 任务在运行
@@ -2256,6 +2258,47 @@ async def get_report_types():
         types=[ReportTypeInfo(**c.to_dict()) for c in configs],
         total=len(configs)
     )
+
+
+@products_router.get("/reports/stats/weekly")
+async def get_weekly_report_count(
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    获取本周生成的报告数量统计
+    
+    返回本周（从周一开始）生成的报告总数
+    """
+    from sqlalchemy import select, func
+    from app.models.report import ProductReport
+    from datetime import datetime, timedelta
+    
+    try:
+        # 计算本周的开始时间（周一 00:00:00 UTC）
+        from datetime import timezone
+        today = datetime.now(timezone.utc)
+        # 获取本周一（weekday() 返回 0-6，0 是周一）
+        days_since_monday = today.weekday()
+        week_start = (today - timedelta(days=days_since_monday)).replace(hour=0, minute=0, second=0, microsecond=0)
+        
+        # 查询本周生成的报告数量（状态为 completed）
+        result = await db.execute(
+            select(func.count(ProductReport.id))
+            .where(
+                ProductReport.created_at >= week_start,
+                ProductReport.status == "completed"
+            )
+        )
+        count = result.scalar() or 0
+        
+        return {
+            "success": True,
+            "count": count,
+            "week_start": week_start.isoformat()
+        }
+    except Exception as e:
+        logger.error(f"获取本周报告统计失败: {e}")
+        raise HTTPException(status_code=500, detail=f"获取统计失败: {str(e)}")
 
 
 @products_router.get("/reports/all", response_model=ProductReportListResponse)

@@ -1427,7 +1427,8 @@ def task_extract_themes(self, product_id: str):
             )
             sample_reviews = sample_result.all()
             
-            if len(sample_reviews) >= 30:
+            # [UPDATED 2026-01-19] 降低最低样本要求，只要有评论就进行学习
+            if len(sample_reviews) >= 1:
                 # 准备样本文本
                 sample_texts = []
                 for row in sample_reviews:
@@ -1435,7 +1436,8 @@ def task_extract_themes(self, product_id: str):
                     if text and text.strip():
                         sample_texts.append(text.strip())
                 
-                if len(sample_texts) >= 30:
+                if len(sample_texts) >= 1:
+                    logger.info(f"📝 样本数量: {len(sample_texts)} 条，开始学习 5W 标签库...")
                     # [UPDATED] 调用 AI 学习标签库（传入产品信息）
                     learned_labels = translation_service.learn_context_labels(
                         reviews_text=sample_texts,
@@ -1466,9 +1468,9 @@ def task_extract_themes(self, product_id: str):
                     else:
                         logger.warning(f"⚠️ AI 学习标签库失败，将使用开放提取模式")
                 else:
-                    logger.warning(f"⚠️ 有效样本不足（需要至少30条），将使用开放提取模式")
+                    logger.warning(f"⚠️ 没有有效样本，将使用开放提取模式")
             else:
-                logger.warning(f"⚠️ 已翻译评论不足（需要至少30条），将使用开放提取模式")
+                logger.warning(f"⚠️ 没有可用评论，将使用开放提取模式")
         
         # Step 2: 获取标签库 Schema（如果存在或刚生成）
         if label_count > 0 or labels_generated:
@@ -2169,9 +2171,12 @@ def task_scientific_learning_and_analysis(self, product_id: str):
         sample_result = db.execute(sample_stmt)
         raw_samples = [r[0] for r in sample_result.all() if r[0] and r[0].strip()]
         
-        if len(raw_samples) < 10:
-            logger.warning(f"[科学学习] 样本不足（{len(raw_samples)} 条），需要至少 10 条英文评论")
-            return {"success": False, "error": f"样本不足: {len(raw_samples)} 条，需要至少 10 条"}
+        # [UPDATED 2026-01-19] 移除最低样本数限制，只要有评论就进行学习
+        if len(raw_samples) < 1:
+            logger.warning(f"[科学学习] 没有可用样本，跳过学习")
+            return {"success": False, "error": "没有可用评论样本"}
+        
+        logger.info(f"[科学学习] 样本数量: {len(raw_samples)} 条英文评论")
         
         logger.info(f"[科学学习] 采样完成: {len(raw_samples)} 条高质量英文评论")
         
@@ -2189,11 +2194,22 @@ def task_scientific_learning_and_analysis(self, product_id: str):
         dimensions_learned = 0
         if dim_count == 0:
             logger.info(f"[科学学习] 学习3类产品维度中...")
-            dims_result = translation_service.learn_dimensions_from_raw(
-                raw_reviews=raw_samples,
-                product_title=product_title,
-                bullet_points="\n".join(bullet_points) if bullet_points else ""
-            )
+            
+            # [FIX 2026-01-19] 增加重试机制，最多重试3次
+            dims_result = None
+            max_retries = 3
+            for attempt in range(max_retries):
+                dims_result = translation_service.learn_dimensions_from_raw(
+                    raw_reviews=raw_samples,
+                    product_title=product_title,
+                    bullet_points="\n".join(bullet_points) if bullet_points else ""
+                )
+                if dims_result and isinstance(dims_result, dict):
+                    break  # 学习成功
+                logger.warning(f"[科学学习] 维度学习第 {attempt + 1} 次失败，"
+                              f"{'重试中...' if attempt < max_retries - 1 else '已达最大重试次数'}")
+                if attempt < max_retries - 1:
+                    time.sleep(2)  # 等待 2 秒后重试
             
             # [UPDATED 2026-01-16] 解析3类维度并保存
             if dims_result and isinstance(dims_result, dict):
@@ -2230,6 +2246,10 @@ def task_scientific_learning_and_analysis(self, product_id: str):
                     dimensions_learned += 1
                 db.commit()
                 logger.info(f"[科学学习] 维度学习完成(旧格式): {dimensions_learned} 个")
+            else:
+                # [FIX 2026-01-19] 维度学习失败，阻断流程
+                logger.error(f"[科学学习] ❌ 维度学习失败（重试 {max_retries} 次后仍然失败），阻断后续流程")
+                raise ValueError(f"维度学习失败，无法继续分析流程。请检查 AI 服务或重试。")
         else:
             logger.info(f"[科学学习] 产品已有 {dim_count} 个维度，跳过学习")
         
@@ -2450,7 +2470,9 @@ def task_full_auto_analysis(self, product_id: str, task_id: str):
         sample_result = db.execute(sample_stmt)
         raw_samples = [r[0] for r in sample_result.all() if r[0] and r[0].strip()]
         
-        if len(raw_samples) >= 10:
+        # [UPDATED 2026-01-19] 移除最低样本数限制，只要有评论就进行学习
+        if len(raw_samples) >= 1:
+            logger.info(f"[全自动分析] 样本数量: {len(raw_samples)} 条英文评论")
             # 学习维度
             dim_count_result = db.execute(
                 select(func.count(ProductDimension.id))
@@ -2460,50 +2482,66 @@ def task_full_auto_analysis(self, product_id: str, task_id: str):
             
             if dim_count == 0:
                 logger.info(f"[全自动分析] 学习3类产品维度中...")
-                try:
-                    dims_result = translation_service.learn_dimensions_from_raw(
-                        raw_reviews=raw_samples,
-                        product_title=product_title,
-                        bullet_points="\n".join(bullet_points) if bullet_points else ""
-                    )
-                    # [UPDATED 2026-01-16] 支持3类维度体系
-                    dimensions_learned = 0
-                    if dims_result and isinstance(dims_result, dict):
-                        # 新格式：3类维度
-                        for dim_type in ["product", "scenario", "emotion"]:
-                            type_dims = dims_result.get(dim_type, [])
-                            for dim in type_dims:
-                                if isinstance(dim, dict) and dim.get("name"):
-                                    dimension = ProductDimension(
-                                        product_id=product_id,
-                                        name=dim["name"].strip(),
-                                        description=dim.get("description", "").strip() or None,
-                                        dimension_type=dim_type,
-                                        is_ai_generated=True
-                                    )
-                                    db.add(dimension)
-                                    dimensions_learned += 1
-                        db.commit()
-                        logger.info(f"[全自动分析] 3类维度学习完成: {dimensions_learned} 个 "
-                                   f"(产品:{len(dims_result.get('product', []))}, "
-                                   f"场景:{len(dims_result.get('scenario', []))}, "
-                                   f"情绪:{len(dims_result.get('emotion', []))})")
-                    elif dims_result and isinstance(dims_result, list):
-                        # 向后兼容：旧格式
-                        for dim in dims_result:
-                            dimension = ProductDimension(
-                                product_id=product_id,
-                                name=dim["name"],
-                                description=dim.get("description", ""),
-                                dimension_type="product",
-                                is_ai_generated=True
-                            )
-                            db.add(dimension)
-                            dimensions_learned += 1
-                        db.commit()
-                        logger.info(f"[全自动分析] 维度学习完成(旧格式): {dimensions_learned} 个")
-                except Exception as e:
-                    logger.error(f"[全自动分析] 维度学习失败: {e}")
+                
+                # [FIX 2026-01-19] 增加重试机制，最多重试3次
+                dims_result = None
+                max_retries = 3
+                for attempt in range(max_retries):
+                    try:
+                        dims_result = translation_service.learn_dimensions_from_raw(
+                            raw_reviews=raw_samples,
+                            product_title=product_title,
+                            bullet_points="\n".join(bullet_points) if bullet_points else ""
+                        )
+                        if dims_result and isinstance(dims_result, dict):
+                            break  # 学习成功
+                        logger.warning(f"[全自动分析] 维度学习第 {attempt + 1} 次失败，"
+                                      f"{'重试中...' if attempt < max_retries - 1 else '已达最大重试次数'}")
+                    except Exception as e:
+                        logger.error(f"[全自动分析] 维度学习第 {attempt + 1} 次异常: {e}")
+                    if attempt < max_retries - 1:
+                        time.sleep(2)  # 等待 2 秒后重试
+                
+                # [UPDATED 2026-01-16] 支持3类维度体系
+                dimensions_learned = 0
+                if dims_result and isinstance(dims_result, dict):
+                    # 新格式：3类维度
+                    for dim_type in ["product", "scenario", "emotion"]:
+                        type_dims = dims_result.get(dim_type, [])
+                        for dim in type_dims:
+                            if isinstance(dim, dict) and dim.get("name"):
+                                dimension = ProductDimension(
+                                    product_id=product_id,
+                                    name=dim["name"].strip(),
+                                    description=dim.get("description", "").strip() or None,
+                                    dimension_type=dim_type,
+                                    is_ai_generated=True
+                                )
+                                db.add(dimension)
+                                dimensions_learned += 1
+                    db.commit()
+                    logger.info(f"[全自动分析] 3类维度学习完成: {dimensions_learned} 个 "
+                               f"(产品:{len(dims_result.get('product', []))}, "
+                               f"场景:{len(dims_result.get('scenario', []))}, "
+                               f"情绪:{len(dims_result.get('emotion', []))})")
+                elif dims_result and isinstance(dims_result, list):
+                    # 向后兼容：旧格式
+                    for dim in dims_result:
+                        dimension = ProductDimension(
+                            product_id=product_id,
+                            name=dim["name"],
+                            description=dim.get("description", ""),
+                            dimension_type="product",
+                            is_ai_generated=True
+                        )
+                        db.add(dimension)
+                        dimensions_learned += 1
+                    db.commit()
+                    logger.info(f"[全自动分析] 维度学习完成(旧格式): {dimensions_learned} 个")
+                else:
+                    # [FIX 2026-01-19] 维度学习失败，阻断流程
+                    logger.error(f"[全自动分析] ❌ 维度学习失败（重试 {max_retries} 次后仍然失败），阻断后续流程")
+                    raise ValueError(f"维度学习失败，无法继续分析流程。请检查 AI 服务或重试。")
             
             # 学习5W标签
             label_count_result = db.execute(
@@ -2542,7 +2580,7 @@ def task_full_auto_analysis(self, product_id: str, task_id: str):
                 except Exception as e:
                     logger.error(f"[全自动分析] 5W标签学习失败: {e}")
         else:
-            logger.warning(f"[全自动分析] 样本不足（{len(raw_samples)} 条），跳过学习")
+            logger.warning(f"[全自动分析] 没有可用样本，跳过学习")
         
         # ==========================================
         # Step 2: 触发洞察+主题提取
@@ -2739,7 +2777,7 @@ def task_full_auto_analysis(self, product_id: str, task_id: str):
                     result = await summary_service.generate_report(
                         product_id=product_id,
                         report_type="comprehensive",  # 综合战略版
-                        min_reviews=10,
+                        min_reviews=30,  # [UPDATED 2026-01-19] 报告需要至少30条评论
                         save_to_db=True,
                         force_regenerate=False,  # [NEW] 不强制重新生成，检查去重
                         require_full_completion=False  # [优化] 允许90%完成度生成报告
@@ -2957,7 +2995,7 @@ def task_generate_report(self, product_id: str, report_type: str = "comprehensiv
                     result = await summary_service.generate_report(
                         product_id=product_id,
                         report_type=report_type,
-                        min_reviews=10,
+                        min_reviews=30,  # [UPDATED 2026-01-19] 报告需要至少30条评论
                         save_to_db=True
                     )
                     return result

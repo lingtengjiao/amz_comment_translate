@@ -171,7 +171,7 @@ export function HomeSection() {
         
         if (result && (result as any).success) {
           toast.success(
-            `已添加 ${asins.length} 个产品到采集队列，扩展正在后台采集数据，请稍后在"我的洞察"中查看`
+            `已添加 ${asins.length} 个产品到采集队列，扩展正在后台采集数据，请稍后在"我的产品洞察"中查看`
           );
           // 清空输入框，防止用户再次点击发送相同的 ASIN
           setCrawlInput('');

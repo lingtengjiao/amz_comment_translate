@@ -1797,6 +1797,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         .then(result => sendResponse(result))
         .catch(error => sendResponse({ success: false, error: error.message }));
       return true;
+    
+    case 'SAVE_TO_COLLECTION':
+      handleSaveToCollection(message.keyword, message.marketplace, message.products)
+        .then(result => sendResponse(result))
+        .catch(error => sendResponse({ success: false, error: error.message }));
+      return true;
 
     default:
       sendResponse({ error: 'Unknown message type' });
@@ -2828,6 +2834,80 @@ async function handleMarketInsightAnalysis(products, marketplace) {
     return {
       success: false,
       error: result.error || '创建市场洞察项目失败'
+    };
+  }
+}
+
+/**
+ * [NEW] 处理保存到产品库
+ * 将搜索结果保存到关键词产品库
+ */
+async function handleSaveToCollection(keyword, marketplace, products) {
+  console.log('[SaveToCollection] Saving', products.length, 'products for keyword:', keyword);
+  
+  if (!keyword) {
+    return { success: false, error: '缺少搜索关键词' };
+  }
+  
+  if (!products || products.length === 0) {
+    return { success: false, error: '没有可保存的产品' };
+  }
+  
+  // 验证必要字段
+  const validProducts = products.filter(p => p.asin && p.image_url && p.product_url);
+  if (validProducts.length === 0) {
+    return { success: false, error: '没有包含完整信息的产品' };
+  }
+  
+  try {
+    const response = await fetchWithTimeout(
+      `${API_BASE_URL}/keyword-collections`,
+      {
+        method: 'POST',
+        headers: {
+          ...getAuthHeaders(),
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          keyword,
+          marketplace: marketplace || 'amazon.com',
+          products: validProducts
+        })
+      },
+      30000 // 30 seconds timeout
+    );
+    
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      // 处理 FastAPI 验证错误格式
+      let errorMsg = `HTTP ${response.status}`;
+      if (errorData.detail) {
+        if (typeof errorData.detail === 'string') {
+          errorMsg = errorData.detail;
+        } else if (Array.isArray(errorData.detail)) {
+          // Pydantic 验证错误: [{"loc": [...], "msg": "...", "type": "..."}]
+          errorMsg = errorData.detail.map(e => e.msg || JSON.stringify(e)).join('; ');
+        } else {
+          errorMsg = JSON.stringify(errorData.detail);
+        }
+      }
+      throw new Error(errorMsg);
+    }
+    
+    const data = await response.json();
+    console.log('[SaveToCollection] Successfully saved collection:', data);
+    
+    return {
+      success: true,
+      message: `已保存 ${validProducts.length} 个产品`,
+      collection: data
+    };
+    
+  } catch (error) {
+    console.error('[SaveToCollection] Error:', error);
+    return {
+      success: false,
+      error: error.message || '保存失败'
     };
   }
 }

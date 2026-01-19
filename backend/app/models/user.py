@@ -14,6 +14,7 @@ from app.db.session import Base
 if TYPE_CHECKING:
     from app.models.user_project import UserProject
     from app.models.rufus_conversation import RufusConversation
+    from app.models.keyword_collection import KeywordCollection
 
 
 class User(Base):
@@ -97,6 +98,13 @@ class User(Base):
         "RufusConversation",
         back_populates="user",
         lazy="selectin"
+    )
+    
+    # 关系：用户的关键词产品库
+    keyword_collections: Mapped[List["KeywordCollection"]] = relationship(
+        "KeywordCollection",
+        back_populates="user",
+        cascade="all, delete-orphan"
     )
     
     def __repr__(self) -> str:

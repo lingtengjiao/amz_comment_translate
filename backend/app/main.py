@@ -23,6 +23,7 @@ from app.api.user_projects import router as user_projects_router
 from app.api.keepa import router as keepa_router
 from app.api.analytics import router as analytics_router
 from app.api.rufus import router as rufus_router
+from app.api.keyword_collections import router as keyword_collections_router
 
 # Configure logging
 logging.basicConfig(
@@ -116,6 +117,7 @@ app.include_router(system_router, prefix="/api/v1")  # Worker 健康检查
 app.include_router(keepa_router, prefix="/api/v1")  # Keepa 时序数据接口
 app.include_router(analytics_router, prefix="/api/v1")  # 用户行为分析接口
 app.include_router(rufus_router, prefix="/api/v1")  # Rufus AI 对话接口
+app.include_router(keyword_collections_router, prefix="/api/v1")  # 关键词产品库接口
 
 
 # Error handlers

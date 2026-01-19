@@ -840,7 +840,7 @@ class SummaryService:
         self, 
         product_id: UUID,
         report_type: str = ReportType.COMPREHENSIVE.value,
-        min_reviews: int = 10,
+        min_reviews: int = 30,  # [UPDATED 2026-01-19] 报告生成需要至少30条评论
         save_to_db: bool = True,
         force_regenerate: bool = False,  # [NEW] 是否强制重新生成（忽略去重）
         require_full_completion: bool = True  # [NEW] 是否要求洞察和主题100%完成
@@ -851,7 +851,7 @@ class SummaryService:
         Args:
             product_id: 产品 UUID
             report_type: 报告类型 (使用 ReportType 枚举值)
-            min_reviews: 最少评论数（默认 10）
+            min_reviews: 最少评论数（默认 30，报告生成需要足够数据量保证质量）
             save_to_db: 是否存入数据库（默认 True）
             force_regenerate: 是否强制重新生成（默认 False，会检查去重）
             require_full_completion: 是否要求洞察和主题100%完成（默认 True）
@@ -934,13 +934,14 @@ class SummaryService:
             # 2. 检查数据量
             total_reviews = await self._count_translated_reviews(product_id)
             
+            # [UPDATED 2026-01-19] 报告生成需要至少30条评论以保证分析质量
             if total_reviews < min_reviews:
                 return {
                     "success": False,
                     "report": None,
                     "stats": {"total_reviews": total_reviews},
                     "report_type_config": type_config.to_dict(),
-                    "error": f"数据量不足（当前 {total_reviews} 条，需要至少 {min_reviews} 条）。请先采集更多评论并完成翻译。"
+                    "error": f"评论数据不足，无法生成高质量报告。当前仅有 {total_reviews} 条评论，建议采集至少 {min_reviews} 条评论后再生成报告。"
                 }
             
             # [NEW] 2.5 检查洞察和主题是否100%完成

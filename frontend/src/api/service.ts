@@ -757,6 +757,27 @@ export async function getReportHistory(
 }
 
 /**
+ * 获取本周生成的报告数量统计
+ * 
+ * @returns 本周报告数量
+ */
+export async function getWeeklyReportCount(): Promise<{ success: boolean; count: number; week_start: string }> {
+  const response = await fetch(`${API_BASE}/products/reports/stats/weekly`);
+  if (!response.ok) {
+    const errorText = await response.text();
+    let message = response.statusText;
+    try {
+      const errorJson = JSON.parse(errorText);
+      message = errorJson.detail || errorJson.message || message;
+    } catch {
+      message = errorText || message;
+    }
+    throw new ApiError(response.status, message);
+  }
+  return response.json();
+}
+
+/**
  * 获取所有产品的报告列表（用于报告库页面）
  * 按创建时间倒序排列
  * 
@@ -1285,6 +1306,7 @@ const apiService = {
   getReportPreview,
   getReportHistory,
   getAllReports,
+  getWeeklyReportCount,
   getLatestReport,
   getReportById,
   deleteReport,
@@ -1310,6 +1332,20 @@ const apiService = {
   removeFromMyProjects,
   getProjectStatus,
   toggleProjectFavorite,
+  
+  // [NEW] 关键词产品库
+  getKeywordCollections,
+  getKeywordCollectionsGrouped,
+  getKeywordCollectionDetail,
+  deleteKeywordCollection,
+  updateKeywordCollectionDescription,
+  
+  // [NEW] 产品管理（产品画板功能）
+  updateCollectionProduct,
+  deleteCollectionProduct,
+  batchUpdateCollectionProducts,
+  saveBoardConfig,
+  saveViewConfig,
 };
 
 // ============== 用户项目 API ==============
@@ -1368,6 +1404,283 @@ async function toggleProjectFavorite(asin: string): Promise<{ success: boolean; 
   const result = await request<{ success: boolean; is_favorite: boolean }>(
     `/user/projects/${asin}/favorite`,
     { method: 'POST' }
+  );
+  return result.data;
+}
+
+// ============== 关键词产品库 API ==============
+
+export interface CollectionProduct {
+  id: string;
+  asin: string;
+  title: string | null;
+  image_url: string;
+  product_url: string;
+  price: string | null;  // 字符串格式，如 "$29.99"
+  rating: number | null;
+  review_count: number | null;
+  sales_volume: number | null;  // 初步估算销售量
+  sales_volume_manual: number | null;  // 补充数据的销售量
+  sales_volume_text: string | null;
+  is_sponsored: boolean;
+  position: number | null;  // 页面位置（不是排名）
+  major_category_rank: number | null;  // 大类排名
+  minor_category_rank: number | null;  // 小类排名
+  major_category_name: string | null;  // 大类名称
+  minor_category_name: string | null;  // 小类名称
+  year: number | null;      // 产品上架年份
+  brand: string | null;     // 产品品牌
+  created_at: string;
+}
+
+export interface UpdateProductParams {
+  asin?: string;
+  title?: string;
+  image_url?: string;
+  product_url?: string;
+  price?: string;
+  rating?: number;
+  review_count?: number;
+  sales_volume?: number;  // 初步估算销售量
+  sales_volume_manual?: number;  // 补充数据的销售量
+  sales_volume_text?: string;
+  is_sponsored?: boolean;
+  position?: number;  // 页面位置（不是排名）
+  major_category_rank?: number;  // 大类排名
+  minor_category_rank?: number;  // 小类排名
+  major_category_name?: string;  // 大类名称
+  minor_category_name?: string;  // 小类名称
+  year?: number;
+  brand?: string;
+}
+
+export interface BatchUpdateProductItem {
+  asin: string;
+  year?: number;
+  brand?: string;
+  sales_volume?: number;  // 初步估算销售量
+  sales_volume_manual?: number;  // 补充数据的销售量（月销量）
+  price?: string;
+  rating?: number;
+  review_count?: number;
+  major_category_rank?: number;  // 大类BSR
+  minor_category_rank?: number;  // 小类BSR
+  major_category_name?: string;  // 大类目
+  minor_category_name?: string;  // 小类目
+}
+
+export interface BoardConfig {
+  boards: Array<{ id: string; name: string }>;
+  productBoards: Record<string, string>;  // key: productId, value: boardId
+}
+
+export interface ViewConfig {
+  viewMode?: 'custom' | 'price' | 'sales' | 'year' | 'brand' | 'ranking';  // 当前视图模式
+  colorRules?: Array<{
+    id: string;
+    name: string;
+    color: string;
+    conditions: Array<{
+      id: string;
+      field: string;
+      operator: string;
+      value: number;
+    }>;
+    matchAll: boolean;
+  }>;
+  yearRanges?: Array<{
+    id: string;
+    name: string;
+    min: number;
+    max: number;
+  }>;
+  rankingRanges?: Array<{
+    id: string;
+    name: string;
+    min: number;
+    max: number;
+  }>;
+  rankingMetric?: 'major' | 'minor';
+  priceRanges?: Array<{
+    id: string;
+    name: string;
+    min: number;
+    max: number;
+  }>;
+  salesRanges?: Array<{
+    id: string;
+    name: string;
+    min: number;
+    max: number;
+  }>;
+  brandRanges?: Array<{
+    id: string;
+    name: string;
+    brands: string[];
+  }>;
+}
+
+export interface KeywordCollection {
+  id: string;
+  keyword: string;
+  marketplace: string | null;
+  product_count: number;
+  description: string | null;
+  board_config: BoardConfig | null;  // 画板配置
+  view_config: ViewConfig | null;  // 视图配置
+  created_at: string;
+  updated_at: string | null;
+  products?: CollectionProduct[];
+}
+
+export interface GroupedCollection {
+  keyword: string;
+  marketplace: string | null;
+  total_snapshots: number;
+  total_products: number;
+  first_snapshot: string;
+  latest_snapshot: string;
+  snapshots: KeywordCollection[];
+}
+
+interface KeywordCollectionsListResponse {
+  total: number;
+  collections: KeywordCollection[];
+}
+
+interface GroupedCollectionsResponse {
+  total_keywords: number;
+  total_collections: number;
+  groups: GroupedCollection[];
+}
+
+async function getKeywordCollections(params?: {
+  keyword?: string;
+  marketplace?: string;
+  limit?: number;
+  offset?: number;
+}): Promise<KeywordCollectionsListResponse> {
+  const searchParams = new URLSearchParams();
+  if (params?.keyword) searchParams.set('keyword', params.keyword);
+  if (params?.marketplace) searchParams.set('marketplace', params.marketplace);
+  if (params?.limit) searchParams.set('limit', params.limit.toString());
+  if (params?.offset) searchParams.set('offset', params.offset.toString());
+  
+  const query = searchParams.toString();
+  const result = await request<KeywordCollectionsListResponse>(`/keyword-collections${query ? `?${query}` : ''}`);
+  return result.data;
+}
+
+async function getKeywordCollectionsGrouped(): Promise<GroupedCollectionsResponse> {
+  const result = await request<GroupedCollectionsResponse>('/keyword-collections/grouped');
+  return result.data;
+}
+
+async function getKeywordCollectionDetail(collectionId: string): Promise<KeywordCollection> {
+  const result = await request<KeywordCollection>(`/keyword-collections/${collectionId}`);
+  return result.data;
+}
+
+async function deleteKeywordCollection(collectionId: string): Promise<{ message: string }> {
+  const result = await request<{ message: string }>(`/keyword-collections/${collectionId}`, {
+    method: 'DELETE',
+  });
+  return result.data;
+}
+
+async function updateKeywordCollectionDescription(
+  collectionId: string, 
+  description: string
+): Promise<KeywordCollection> {
+  const result = await request<KeywordCollection>(`/keyword-collections/${collectionId}`, {
+    method: 'PUT',
+    body: JSON.stringify({ description }),
+  });
+  return result.data;
+}
+
+// ============== 产品管理 API（产品画板功能） ==============
+
+async function updateCollectionProduct(
+  collectionId: string,
+  productId: string,
+  data: UpdateProductParams
+): Promise<CollectionProduct> {
+  const result = await request<CollectionProduct>(
+    `/keyword-collections/${collectionId}/products/${productId}`,
+    {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    }
+  );
+  return result.data;
+}
+
+async function deleteCollectionProduct(
+  collectionId: string,
+  productId: string
+): Promise<{ success: boolean; message: string }> {
+  const result = await request<{ success: boolean; message: string }>(
+    `/keyword-collections/${collectionId}/products/${productId}`,
+    { method: 'DELETE' }
+  );
+  return result.data;
+}
+
+async function batchUpdateCollectionProducts(
+  collectionId: string,
+  products: BatchUpdateProductItem[]
+): Promise<{
+  success: boolean;
+  message: string;
+  updated_count: number;
+  not_found_count: number;
+  not_found_asins: string[];
+}> {
+  const result = await request<{
+    success: boolean;
+    message: string;
+    updated_count: number;
+    not_found_count: number;
+    not_found_asins: string[];
+  }>(
+    `/keyword-collections/${collectionId}/products/batch-update`,
+    {
+      method: 'POST',
+      body: JSON.stringify({ products }),
+    }
+  );
+  return result.data;
+}
+
+async function saveBoardConfig(
+  collectionId: string,
+  boards: Array<{ id: string; name: string }>,
+  productBoards: Record<string, string>
+): Promise<{ success: boolean; message: string; board_count: number }> {
+  const result = await request<{ success: boolean; message: string; board_count: number }>(
+    `/keyword-collections/${collectionId}/board-config`,
+    {
+      method: 'PUT',
+      body: JSON.stringify({ 
+        boards, 
+        productBoards
+      }),
+    }
+  );
+  return result.data;
+}
+
+async function saveViewConfig(
+  collectionId: string,
+  viewConfig: ViewConfig
+): Promise<{ success: boolean; message: string }> {
+  const result = await request<{ success: boolean; message: string }>(
+    `/keyword-collections/${collectionId}/view-config`,
+    {
+      method: 'PUT',
+      body: JSON.stringify(viewConfig),
+    }
   );
   return result.data;
 }

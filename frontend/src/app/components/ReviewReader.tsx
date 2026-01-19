@@ -17,7 +17,6 @@ import {
   Eye
 } from 'lucide-react';
 import { useState, useMemo, useRef, useEffect, useCallback } from 'react';
-import { useVirtualizer } from '@tanstack/react-virtual';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Button } from './ui/button';
 import { Card } from './ui/card';
@@ -57,15 +56,17 @@ export function ReviewReader() {
   const [ratingFilter, setRatingFilter] = useState<FilterRating>('all');
   const [sentimentFilter, setSentimentFilter] = useState<FilterSentiment>('all');
   const [highlightEnabled, setHighlightEnabled] = useState(false);
-  const [insightsExpanded, setInsightsExpanded] = useState(true); // 默认展开所有洞察
+  // 洞察展开状态：从 localStorage 读取用户偏好，默认收起以节省浏览空间
+  const [insightsExpanded, setInsightsExpanded] = useState(() => {
+    const saved = localStorage.getItem('insightsExpanded');
+    return saved !== null ? saved === 'true' : false; // 默认收起
+  });
   const [activeThemes, setActiveThemes] = useState<string[]>([]);
   const [sortOption, setSortOption] = useState<SortOption>('date-desc');
   const [searchQuery, setSearchQuery] = useState('');
   const [isTranslating, setIsTranslating] = useState(false);
   const [translationProgress, setTranslationProgress] = useState(0);
   const [isFullAnalysis, setIsFullAnalysis] = useState(false); // 完整分析模式（翻译+洞察+主题）
-  // 虚拟滚动：滚动容器 ref
-  const reviewListRef = useRef<HTMLDivElement>(null);
   const [showHiddenModal, setShowHiddenModal] = useState(false);
   const [editingReview, setEditingReview] = useState<Review | null>(null);
   const [deleteConfirm, setDeleteConfirm] = useState<{ show: boolean; reviewId: string | null }>({
@@ -89,6 +90,9 @@ export function ReviewReader() {
   const [apiSentimentDistribution, setApiSentimentDistribution] = useState<{positive: number; neutral: number; negative: number}>({ positive: 0, neutral: 0, negative: 0 });
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [newlyTranslatedIds, setNewlyTranslatedIds] = useState<Set<string>>(new Set()); // 跟踪刚刚翻译完成的评论（触发打字机动画）
+  const [loadedReviews, setLoadedReviews] = useState<Review[]>([]); // 已加载的评论列表（分页累积）
+  const [isLoadingMore, setIsLoadingMore] = useState(false); // 是否正在加载更多
+  const [hasMoreReviews, setHasMoreReviews] = useState(true); // 是否还有更多评论
   const pageSize = 50;
   const pageContainerRef = useRef<HTMLDivElement | null>(null);
   const pollingRef = useRef<{ active: boolean; timer: NodeJS.Timeout | null }>({ active: false, timer: null }); // 轮询状态管理
@@ -107,7 +111,7 @@ export function ReviewReader() {
     themes: string;
   } | null>(null);
 
-  // 加载产品统计信息和评论
+  // 加载产品统计信息和评论（初始加载，只加载第一页）
   const fetchData = useCallback(async () => {
     if (!asin) return;
     
@@ -115,14 +119,19 @@ export function ReviewReader() {
     setError(null);
     
     try {
-      // 并行获取产品统计和评论
+      // 并行获取产品统计和第一页评论
       const [statsResponse, reviewsResponse] = await Promise.all([
         apiService.getProductStats(asin),
-        apiService.getReviews({ asin, page: currentPage, pageSize })
+        apiService.getReviews({ asin, page: 1, pageSize })
       ]);
       
       const reviews = transformReviews(reviewsResponse.reviews);
       const taskData = transformStatsToTask(statsResponse, reviews);
+      
+      // 重置分页状态
+      setCurrentPage(1);
+      setLoadedReviews(reviews);
+      setHasMoreReviews(reviews.length >= pageSize && reviews.length < statsResponse.product.total_reviews);
       
       setTask(taskData);
       setTotalReviews(statsResponse.product.total_reviews);
@@ -245,7 +254,40 @@ export function ReviewReader() {
     } finally {
       setLoading(false);
     }
-  }, [asin, currentPage]);
+  }, [asin, pageSize]);
+
+  // 加载更多评论
+  const loadMoreReviews = useCallback(async () => {
+    if (!asin || isLoadingMore || !hasMoreReviews) return;
+    
+    setIsLoadingMore(true);
+    try {
+      const nextPage = currentPage + 1;
+      const reviewsResponse = await apiService.getReviews({ asin, page: nextPage, pageSize });
+      const newReviews = transformReviews(reviewsResponse.reviews);
+      
+      if (newReviews.length > 0) {
+        setLoadedReviews(prev => [...prev, ...newReviews]);
+        setCurrentPage(nextPage);
+        setHasMoreReviews(newReviews.length >= pageSize);
+        
+        // 更新 task 中的评论列表
+        if (task) {
+          setTask({
+            ...task,
+            reviews: [...task.reviews, ...newReviews]
+          });
+        }
+      } else {
+        setHasMoreReviews(false);
+      }
+    } catch (err) {
+      console.error('Failed to load more reviews:', err);
+      toast.error('加载更多评论失败', '请重试');
+    } finally {
+      setIsLoadingMore(false);
+    }
+  }, [asin, currentPage, pageSize, isLoadingMore, hasMoreReviews, task]);
 
   useEffect(() => {
     fetchData();
@@ -267,6 +309,11 @@ export function ReviewReader() {
     
     checkReports();
   }, [asin]);
+
+  // 保存洞察展开偏好到 localStorage
+  useEffect(() => {
+    localStorage.setItem('insightsExpanded', String(insightsExpanded));
+  }, [insightsExpanded]);
 
   // 清理轮询定时器（组件卸载或完整分析完成时）
   useEffect(() => {
@@ -340,88 +387,81 @@ export function ReviewReader() {
     if (!asin) return;
     
     try {
-      // 同时获取产品统计信息和评论
-      const [statsResponse, reviewsResponse] = await Promise.all([
-        apiService.getProductStats(asin),
-        apiService.getReviews({ asin, page: currentPage, pageSize })
-      ]);
-      
-      // 更新产品信息（标题和五点翻译）
+      // 获取产品统计信息
+      const statsResponse = await apiService.getProductStats(asin);
       const product = statsResponse.product;
       
-      const newReviews = transformReviews(reviewsResponse.reviews);
+      // 更新已加载的评论：重新获取所有已加载页面的评论
+      const pagesToLoad = Math.ceil(loadedReviews.length / pageSize);
+      const allReviewsPromises = [];
+      for (let page = 1; page <= pagesToLoad; page++) {
+        allReviewsPromises.push(apiService.getReviews({ asin, page, pageSize }));
+      }
+      const allReviewsResponses = await Promise.all(allReviewsPromises);
+      const allNewReviews = allReviewsResponses.flatMap(res => transformReviews(res.reviews));
       
-      // 使用函数式更新，避免闭包问题
-      setTask(prevTask => {
-        if (!prevTask) {
-          // 如果没有 task，使用产品统计创建新的 task
-          const newTask = transformStatsToTask(statsResponse, newReviews);
-          return newTask;
+      // 找出新翻译完成的评论（之前没有翻译，现在有了）
+      const freshlyTranslatedIds: string[] = [];
+      const currentReviewsMap = new Map(loadedReviews.map(r => [r.id, r]));
+      
+      allNewReviews.forEach(newReview => {
+        const oldReview = currentReviewsMap.get(newReview.id);
+        // 检测：之前没有翻译 -> 现在有翻译
+        if (oldReview && !oldReview.translatedText && newReview.translatedText) {
+          freshlyTranslatedIds.push(newReview.id);
         }
+      });
+      
+      // 标记新翻译的评论（触发打字机动画）
+      if (freshlyTranslatedIds.length > 0) {
+        console.log('New translations detected:', freshlyTranslatedIds);
         
-        // 更新产品信息
-        const updatedTask = {
-          ...prevTask,
-          titleTranslated: product.title_translated || prevTask.titleTranslated,
-          bulletPointsTranslated: product.bullet_points_translated || prevTask.bulletPointsTranslated
-        };
-        
-        // 找出新翻译完成的评论（之前没有翻译，现在有了）
-        const freshlyTranslatedIds: string[] = [];
-        const currentReviewsMap = new Map(prevTask.reviews.map(r => [r.id, r]));
-        
-        newReviews.forEach(newReview => {
-          const oldReview = currentReviewsMap.get(newReview.id);
-          // 检测：之前没有翻译 -> 现在有翻译
-          if (oldReview && !oldReview.translatedText && newReview.translatedText) {
-            freshlyTranslatedIds.push(newReview.id);
-          }
+        setNewlyTranslatedIds(prev => {
+          const updated = new Set(prev);
+          freshlyTranslatedIds.forEach(id => updated.add(id));
+          return updated;
         });
         
-        // 标记新翻译的评论（触发打字机动画）
-        if (freshlyTranslatedIds.length > 0) {
-          console.log('New translations detected:', freshlyTranslatedIds);
-          
+        // 8秒后移除标记（让动画有时间完成）
+        setTimeout(() => {
           setNewlyTranslatedIds(prev => {
             const updated = new Set(prev);
-            freshlyTranslatedIds.forEach(id => updated.add(id));
+            freshlyTranslatedIds.forEach(id => updated.delete(id));
             return updated;
           });
-          
-          // 8秒后移除标记（让动画有时间完成）
-          setTimeout(() => {
-            setNewlyTranslatedIds(prev => {
-              const updated = new Set(prev);
-              freshlyTranslatedIds.forEach(id => updated.delete(id));
-              return updated;
-            });
-          }, 8000);
+        }, 8000);
+      }
+      
+      // 增量合并：保留本地状态（如 isPinned, isHidden），更新翻译内容
+      const mergedReviews = allNewReviews.map(newReview => {
+        const oldReview = currentReviewsMap.get(newReview.id);
+        if (oldReview) {
+          // 保留本地 UI 状态，更新翻译数据
+          return {
+            ...newReview,
+            isPinned: oldReview.isPinned,
+            isHidden: oldReview.isHidden,
+          };
         }
-        
-        // 增量合并：保留本地状态（如 isPinned, isHidden），更新翻译内容
-        const mergedReviews = newReviews.map(newReview => {
-          const oldReview = currentReviewsMap.get(newReview.id);
-          if (oldReview) {
-            // 保留本地 UI 状态，更新翻译数据
-            return {
-              ...newReview,
-              isPinned: oldReview.isPinned,
-              isHidden: oldReview.isHidden,
-            };
-          }
-          return newReview;
-        });
-        
-        return {
-          ...updatedTask,
-          reviews: mergedReviews
-        };
+        return newReview;
       });
+      
+      setLoadedReviews(mergedReviews);
+      
+      // 更新 task
+      if (task) {
+        setTask({
+          ...task,
+          titleTranslated: product.title_translated || task.titleTranslated,
+          bulletPointsTranslated: product.bullet_points_translated || task.bulletPointsTranslated,
+          reviews: mergedReviews
+        });
+      }
       
     } catch (err) {
       console.error('Failed to update reviews incrementally:', err);
     }
-  }, [asin, currentPage, pageSize]);
+  }, [asin, pageSize, loadedReviews, task]);
 
   // 轮询翻译进度（仅在非完整分析模式下使用）
   useEffect(() => {
@@ -464,30 +504,36 @@ export function ReviewReader() {
 
   // Review action handlers
   const handleEdit = (id: string) => {
-    if (!task) return;
-    const review = task.reviews.find(r => r.id === id);
+    // 从 loadedReviews 中查找评论
+    const review = loadedReviews.find(r => r.id === id);
     if (review) {
       setEditingReview(review);
     }
   };
 
   const handleSaveEdit = async (id: string, updates: { originalText: string; translatedText: string; originalTitle?: string; translatedTitle?: string }) => {
-    if (!task) return;
     try {
-      const response = await apiService.updateReview(id, {
+      await apiService.updateReview(id, {
         originalText: updates.originalText,
         translatedText: updates.translatedText,
         originalTitle: updates.originalTitle,
         translatedTitle: updates.translatedTitle
       });
       
-      // Update local state
-      setTask({
-        ...task,
-        reviews: task.reviews.map(r =>
-          r.id === id ? { ...r, ...updates } : r
-        )
-      });
+      // 同时更新 loadedReviews 和 task.reviews
+      setLoadedReviews(prev => prev.map(r =>
+        r.id === id ? { ...r, ...updates } : r
+      ));
+      
+      if (task) {
+        setTask({
+          ...task,
+          reviews: task.reviews.map(r =>
+            r.id === id ? { ...r, ...updates } : r
+          )
+        });
+      }
+      
       toast.success('评论编辑成功');
     } catch (err) {
       console.error('Failed to update review:', err);
@@ -500,15 +546,20 @@ export function ReviewReader() {
   };
 
   const confirmDelete = async () => {
-    if (!task || !deleteConfirm.reviewId) return;
+    if (!deleteConfirm.reviewId) return;
     try {
       await apiService.deleteReview(deleteConfirm.reviewId);
       
-      // Update local state
-      setTask({
-        ...task,
-        reviews: task.reviews.filter(r => r.id !== deleteConfirm.reviewId)
-      });
+      // 同时更新 loadedReviews 和 task.reviews
+      setLoadedReviews(prev => prev.filter(r => r.id !== deleteConfirm.reviewId));
+      
+      if (task) {
+        setTask({
+          ...task,
+          reviews: task.reviews.filter(r => r.id !== deleteConfirm.reviewId)
+        });
+      }
+      
       setDeleteConfirm({ show: false, reviewId: null });
       toast.success('评论删除成功');
       fetchData(); // Refresh data to update counts
@@ -524,8 +575,7 @@ export function ReviewReader() {
   };
 
   const handleToggleHidden = async (id: string) => {
-    if (!task) return;
-    const review = task.reviews.find(r => r.id === id);
+    const review = loadedReviews.find(r => r.id === id);
     if (!review) return;
     
     const newHiddenState = !review.isHidden;
@@ -533,13 +583,20 @@ export function ReviewReader() {
     try {
       await apiService.toggleReviewVisibility(id, newHiddenState);
       
-      // Update local state
-      setTask({
-        ...task,
-        reviews: task.reviews.map(r => 
-          r.id === id ? { ...r, isHidden: newHiddenState } : r
-        )
-      });
+      // 同时更新 loadedReviews 和 task.reviews
+      setLoadedReviews(prev => prev.map(r => 
+        r.id === id ? { ...r, isHidden: newHiddenState } : r
+      ));
+      
+      if (task) {
+        setTask({
+          ...task,
+          reviews: task.reviews.map(r => 
+            r.id === id ? { ...r, isHidden: newHiddenState } : r
+          )
+        });
+      }
+      
       toast.success(review.isHidden ? '评论已显示' : '评论已隐藏');
       fetchData(); // Refresh data to update counts
     } catch (err) {
@@ -549,8 +606,7 @@ export function ReviewReader() {
   };
 
   const handleTogglePin = async (id: string) => {
-    if (!task) return;
-    const review = task.reviews.find(r => r.id === id);
+    const review = loadedReviews.find(r => r.id === id);
     if (!review) return;
     
     const newPinnedState = !review.isPinned;
@@ -558,13 +614,20 @@ export function ReviewReader() {
     try {
       await apiService.pinReview(id, newPinnedState);
       
-      // Update local state
-      setTask({
-        ...task,
-        reviews: task.reviews.map(r => 
-          r.id === id ? { ...r, isPinned: newPinnedState } : r
-        )
-      });
+      // 同时更新 loadedReviews 和 task.reviews
+      setLoadedReviews(prev => prev.map(r => 
+        r.id === id ? { ...r, isPinned: newPinnedState } : r
+      ));
+      
+      if (task) {
+        setTask({
+          ...task,
+          reviews: task.reviews.map(r => 
+            r.id === id ? { ...r, isPinned: newPinnedState } : r
+          )
+        });
+      }
+      
       toast.success(review.isPinned ? '评论已取消置顶' : '评论已置顶');
     } catch (err) {
       console.error('Failed to toggle review pin:', err);
@@ -591,7 +654,7 @@ export function ReviewReader() {
   const allTags = useMemo(() => {
     // 收集所有评论的主题高亮数据
     const allHighlights: ReviewThemeHighlight[] = [];
-    task?.reviews.forEach(review => {
+    loadedReviews.forEach(review => {
       if (review.themeHighlights) {
         review.themeHighlights.forEach(h => {
           // 找到已有的同类型高亮并合并内容项
@@ -618,11 +681,10 @@ export function ReviewReader() {
     
     // 从后端 AI 提取的内容构建主题标签（5W 模型）
     return buildThemeTagsFromHighlights(allHighlights);
-  }, [task?.reviews]);
+  }, [loadedReviews]);
 
   const handleManageTags = (id: string) => {
-    if (!task) return;
-    const review = task.reviews.find(r => r.id === id);
+    const review = loadedReviews.find(r => r.id === id);
     const currentTags = review?.tags?.join(', ') || '';
     const newTagsInput = prompt('请输入标签（用逗号分隔）：', currentTags);
     
@@ -632,19 +694,25 @@ export function ReviewReader() {
         .map(tag => tag.trim())
         .filter(tag => tag.length > 0);
       
-      setTask({
-        ...task,
-        reviews: task.reviews.map(r => 
-          r.id === id ? { ...r, tags: newTags } : r
-        )
-      });
+      // 同时更新 loadedReviews 和 task.reviews
+      setLoadedReviews(prev => prev.map(r => 
+        r.id === id ? { ...r, tags: newTags } : r
+      ));
+      
+      if (task) {
+        setTask({
+          ...task,
+          reviews: task.reviews.map(r => 
+            r.id === id ? { ...r, tags: newTags } : r
+          )
+        });
+      }
     }
   };
 
   const filteredReviews = useMemo(() => {
-    if (!task) return [];
-    
-    return task.reviews.filter(review => {
+    // 使用已加载的评论列表
+    return loadedReviews.filter(review => {
       const matchesRating = ratingFilter === 'all' || review.rating === parseInt(ratingFilter);
       const matchesSentiment = sentimentFilter === 'all' || review.sentiment === sentimentFilter;
       const matchesSearch = searchQuery === '' || 
@@ -652,11 +720,9 @@ export function ReviewReader() {
         review.translatedText.toLowerCase().includes(searchQuery.toLowerCase());
       return matchesRating && matchesSentiment && matchesSearch && !review.isHidden;
     });
-  }, [task, ratingFilter, sentimentFilter, searchQuery]);
+  }, [loadedReviews, ratingFilter, sentimentFilter, searchQuery]);
 
   const sortedReviews = useMemo(() => {
-    if (!task) return [];
-    
     const pinned = filteredReviews.filter(r => r.isPinned);
     const unpinned = filteredReviews.filter(r => !r.isPinned);
     
@@ -678,25 +744,15 @@ export function ReviewReader() {
     };
     
     return [...pinned.sort(sortFunc), ...unpinned.sort(sortFunc)];
-  }, [filteredReviews, sortOption, task]);
+  }, [filteredReviews, sortOption]);
 
-  // 虚拟滚动：只渲染可见区域的评论，性能恒定
-  const rowVirtualizer = useVirtualizer({
-    count: sortedReviews.length,
-    getScrollElement: () => reviewListRef.current,
-    estimateSize: () => 450, // 估计每条评论高度约 450px（包含洞察）
-    overscan: 2, // 预渲染可见区域外 2 个条目
-  });
-
-  // 统计媒体数量
+  // 统计媒体数量（基于已加载的评论）
   const mediaStats = useMemo(() => {
-    if (!task) return { totalImages: 0, totalVideos: 0, reviewsWithMedia: 0 };
-    
     let totalImages = 0;
     let totalVideos = 0;
     let reviewsWithMedia = 0;
     
-    task.reviews.forEach(review => {
+    loadedReviews.forEach(review => {
       const hasMedia = (review.images?.length || 0) + (review.videos?.length || 0) > 0;
       if (hasMedia) reviewsWithMedia++;
       totalImages += review.images?.length || 0;
@@ -704,7 +760,7 @@ export function ReviewReader() {
     });
     
     return { totalImages, totalVideos, reviewsWithMedia };
-  }, [task]);
+  }, [loadedReviews]);
 
   // 计算评分统计 - 使用后端返回的统计数据
   const ratingStats = useMemo(() => {
@@ -803,7 +859,27 @@ export function ReviewReader() {
             // 更新评论列表，显示新的洞察和主题
             await updateReviewsIncrementally();
             
-            // 卡住检测：检查进度是否有变化
+            // [FIX] 先检查是否全部完成，如果已完成则直接停止轮询，避免误报"卡住"
+            const allDone = withInsights >= total && withThemes >= total && total > 0;
+            
+            if (allDone) {
+              setAnalysisPhase('complete');
+              toast.success('完整分析完成！', `已处理 ${total} 条评论`);
+              setIsFullAnalysis(false);
+              setIsTranslating(false);
+              pollingRef.current.active = false; // 停止轮询
+              stuckDetectionRef.current = { lastProgress: 0, stuckCount: 0 };
+              setIsTaskStuck(false);
+              if (pollingRef.current.timer) {
+                clearTimeout(pollingRef.current.timer);
+                pollingRef.current.timer = null;
+              }
+              // 最后刷新一次数据
+              await fetchData();
+              return; // 直接返回，不进行后续的卡住检测
+            }
+            
+            // 卡住检测：检查进度是否有变化（仅在未完成时进行）
             const currentProgress = withInsights + withThemes;
             if (currentProgress === stuckDetectionRef.current.lastProgress) {
               stuckDetectionRef.current.stuckCount++;
@@ -830,25 +906,8 @@ export function ReviewReader() {
               stuckCount: stuckDetectionRef.current.stuckCount
             });
             
-            // 检查是否全部完成（洞察和主题都处理完所有已翻译评论）
-            const allDone = withInsights >= total && withThemes >= total;
-            
-            if (allDone) {
-              setAnalysisPhase('complete');
-              toast.success('完整分析完成！', `已处理 ${total} 条评论`);
-              setIsFullAnalysis(false);
-              setIsTranslating(false);
-              pollingRef.current.active = false; // 停止轮询
-              stuckDetectionRef.current = { lastProgress: 0, stuckCount: 0 };
-              setIsTaskStuck(false);
-              if (pollingRef.current.timer) {
-                clearTimeout(pollingRef.current.timer);
-                pollingRef.current.timer = null;
-              }
-              // 最后刷新一次数据
-              await fetchData();
-            } else if (pollingRef.current.active && !manuallyStoppedRef.current) {
-              // 继续轮询（仅在没有手动停止时）
+            // 继续轮询（仅在没有手动停止时）
+            if (pollingRef.current.active && !manuallyStoppedRef.current) {
               pollingRef.current.timer = setTimeout(checkPhase2Progress, 2000);
             }
           } catch (err) {
@@ -1141,9 +1200,9 @@ export function ReviewReader() {
                     </Button>
                   );
                 } else if (isFullAnalysis || isExtractingInsights || isExtractingThemes || isTranslating ||
-                           activeTasks.translation === 'processing' || 
-                           activeTasks.insights === 'processing' || 
-                           activeTasks.themes === 'processing') {
+                           (activeTasks && activeTasks.translation === 'processing') || 
+                           (activeTasks && activeTasks.insights === 'processing') || 
+                           (activeTasks && activeTasks.themes === 'processing')) {
                   // 🔥 统一显示"AI分析中"，计算综合进度
                   // 综合进度 = (翻译进度 + 洞察进度 + 主题进度) / 3
                   // 🔧 [FIX] 使用 Math.min(100, x) 确保进度不超过 100%
@@ -1296,9 +1355,9 @@ export function ReviewReader() {
 
           {/* AI分析进度条 - 统一显示 */}
           {(isTranslating || isFullAnalysis || isExtractingInsights || isExtractingThemes ||
-            activeTasks.translation === 'processing' || 
-            activeTasks.insights === 'processing' || 
-            activeTasks.themes === 'processing') && (
+            (activeTasks && activeTasks.translation === 'processing') || 
+            (activeTasks && activeTasks.insights === 'processing') || 
+            (activeTasks && activeTasks.themes === 'processing')) && (
             <div className="mt-3 space-y-2">
               {(() => {
                 // 🔧 [FIX] 计算综合进度，确保不超过 100%
@@ -1332,25 +1391,24 @@ export function ReviewReader() {
         </div>
       </header>
 
-      {/* Main Content - 产品信息和统计卡片 */}
-      <div className="max-w-[1600px] mx-auto px-4 sm:px-6 lg:px-8 py-6">
-        {/* Product Information Card */}
-        <ProductInfoCard task={task} ratingStats={ratingStats} isTranslating={isTranslating} />
-
-        {/* Statistics Cards */}
-        <StatsCards ratingStats={ratingStats} />
-      </div>
-
-      {/* Tabs Section - 独立区域，支持 sticky 吸顶 */}
-      <div className="max-w-[1600px] mx-auto px-4 sm:px-6 lg:px-8">
+      {/* Tabs Section */}
+      <div className="max-w-[1600px] mx-auto px-4 sm:px-6 lg:px-8 pb-8">
         <Tabs 
           defaultValue="reviews" 
           className="w-full"
           onValueChange={(value) => setActiveTab(value as 'reviews' | 'media')}
         >
-          {/* Sticky Filter Section - Tab 栏 + 筛选栏吸顶在 Header 下方 */}
-          <div className="sticky top-[57px] z-40 bg-white rounded-lg border border-gray-200 shadow-lg">
-            <TabsList className="w-full h-auto p-4 bg-transparent justify-start border-b border-gray-200">
+          {/* Product Information Card - 最上面 */}
+          <div className="py-4">
+            <ProductInfoCard task={task} ratingStats={ratingStats} isTranslating={isTranslating} />
+          </div>
+          
+          {/* 统计卡片 - 评分分布、情感分布 */}
+          <StatsCards ratingStats={ratingStats} />
+
+          {/* Tab 栏 + 筛选栏 - 一起吸顶 */}
+          <div className="sticky top-[57px] z-40 bg-white border border-gray-200 rounded-lg shadow-sm mt-4 mb-4">
+            <TabsList className="w-full h-auto p-4 bg-transparent justify-start border-b border-gray-100">
               <TabsTrigger 
                 value="reviews" 
                 className="data-[state=active]:bg-gray-100 data-[state=active]:shadow-sm px-6 py-2.5"
@@ -1365,38 +1423,32 @@ export function ReviewReader() {
                 买家秀 ({mediaStats.totalImages + mediaStats.totalVideos})
               </TabsTrigger>
             </TabsList>
-
-            {/* Filter Bar - 仅在评论内容 Tab 显示 */}
-            {activeTab === 'reviews' && <FilterBar
-              searchQuery={searchQuery}
-              setSearchQuery={setSearchQuery}
-              ratingFilter={ratingFilter}
-              setRatingFilter={setRatingFilter}
-              sentimentFilter={sentimentFilter}
-              setSentimentFilter={setSentimentFilter}
-              sortOption={sortOption}
-              setSortOption={setSortOption}
-              highlightEnabled={highlightEnabled}
-              setHighlightEnabled={setHighlightEnabled}
-              insightsExpanded={insightsExpanded}
-              setInsightsExpanded={setInsightsExpanded}
-            />}
             
-            {/* Theme Tag Bar - 5W 主题标签 - 已隐藏 */}
-            {/* {highlightEnabled && (
-              <ThemeTagBar 
-                allTags={allTags}
-                activeThemes={activeThemes}
-                onToggleTheme={handleToggleTheme}
+            {/* 筛选栏 - 仅在评论内容 Tab 显示 */}
+            {activeTab === 'reviews' && (
+              <FilterBar
+                searchQuery={searchQuery}
+                setSearchQuery={setSearchQuery}
+                ratingFilter={ratingFilter}
+                setRatingFilter={setRatingFilter}
+                sentimentFilter={sentimentFilter}
+                setSentimentFilter={setSentimentFilter}
+                sortOption={sortOption}
+                setSortOption={setSortOption}
+                highlightEnabled={highlightEnabled}
+                setHighlightEnabled={setHighlightEnabled}
+                insightsExpanded={insightsExpanded}
+                setInsightsExpanded={setInsightsExpanded}
               />
-            )} */}
+            )}
           </div>
 
           {/* 双语对照 Tab */}
           <TabsContent value="reviews" className="mt-0 border-0">
+
             {/* Hidden Reviews Button */}
-            {task.reviews.some(r => r.isHidden) && (
-              <div className="mt-6 mb-4">
+            {loadedReviews.some(r => r.isHidden) && (
+              <div className="mb-4">
                 <Button
                   onClick={() => setShowHiddenModal(true)}
                   variant="outline"
@@ -1404,70 +1456,68 @@ export function ReviewReader() {
                   className="gap-2"
                 >
                   <EyeOff className="size-4" />
-                  查看隐藏的评论 ({task.reviews.filter(r => r.isHidden).length})
+                  查看隐藏的评论 ({loadedReviews.filter(r => r.isHidden).length})
                 </Button>
               </div>
             )}
             
-            {/* Reviews List - 虚拟滚动优化，只渲染可见区域 */}
+            {/* Reviews List - 普通列表渲染 */}
             {sortedReviews.length === 0 ? (
-              <Card className="p-12 text-center bg-white border-gray-200 mt-6">
+              <Card className="p-12 text-center bg-white border-gray-200 mb-8">
                 <p className="text-gray-500">没有符合筛选条件的评论</p>
               </Card>
             ) : (
-              <div 
-                ref={reviewListRef}
-                className="mt-6 overflow-auto"
-                style={{ 
-                  height: isFullscreen ? 'calc(100vh - 280px)' : 'calc(100vh - 350px)',
-                  minHeight: '500px'
-                }}
-              >
-                <div
-                  style={{
-                    height: `${rowVirtualizer.getTotalSize()}px`,
-                    width: '100%',
-                    position: 'relative',
-                  }}
-                >
-                  {rowVirtualizer.getVirtualItems().map((virtualRow) => {
-                    const review = sortedReviews[virtualRow.index];
-                    return (
-                      <div
-                        key={review.id}
-                        data-index={virtualRow.index}
-                        ref={rowVirtualizer.measureElement}
-                        style={{
-                          position: 'absolute',
-                          top: 0,
-                          left: 0,
-                          width: '100%',
-                          transform: `translateY(${virtualRow.start}px)`,
-                          paddingBottom: '24px', // 评论间距
-                        }}
-                      >
-                        <ReviewCard
-                          review={review}
-                          highlightEnabled={highlightEnabled}
-                          activeThemes={activeThemes}
-                          allTags={allTags}
-                          sentimentConfig={sentimentConfig}
-                          onEdit={handleEdit}
-                          onDelete={handleDelete}
-                          onToggleHidden={handleToggleHidden}
-                          onTogglePin={handleTogglePin}
-                          isNewlyTranslated={newlyTranslatedIds.has(review.id)}
-                          insightsExpanded={insightsExpanded}
-                        />
-                      </div>
-                    );
-                  })}
+              <>
+                <div className="space-y-6">
+                  {sortedReviews.map((review) => (
+                    <ReviewCard
+                      key={review.id}
+                      review={review}
+                      highlightEnabled={highlightEnabled}
+                      activeThemes={activeThemes}
+                      allTags={allTags}
+                      sentimentConfig={sentimentConfig}
+                      onEdit={handleEdit}
+                      onDelete={handleDelete}
+                      onToggleHidden={handleToggleHidden}
+                      onTogglePin={handleTogglePin}
+                      isNewlyTranslated={newlyTranslatedIds.has(review.id)}
+                      insightsExpanded={insightsExpanded}
+                    />
+                  ))}
                 </div>
                 
-                {/* 底部信息 */}
-                <div className="text-center py-4 text-sm text-gray-500">
-                  共 {sortedReviews.length} 条评论
-                </div>
+                {/* 加载更多按钮 */}
+                {hasMoreReviews && (
+                  <div className="text-center py-6">
+                    <Button
+                      onClick={loadMoreReviews}
+                      disabled={isLoadingMore}
+                      variant="outline"
+                      className="gap-2"
+                    >
+                      {isLoadingMore ? (
+                        <>
+                          <RefreshCw className="size-4 animate-spin" />
+                          加载中...
+                        </>
+                      ) : (
+                        <>
+                          <RefreshCw className="size-4" />
+                          加载更多评论
+                        </>
+                      )}
+                    </Button>
+                  </div>
+                )}
+              </>
+            )}
+            
+            {/* 底部信息 */}
+            {sortedReviews.length > 0 && (
+              <div className="text-center py-4 text-sm text-gray-500">
+                已显示 {sortedReviews.length} / {totalReviews} 条评论
+                {!hasMoreReviews && sortedReviews.length < totalReviews && '（已全部加载）'}
               </div>
             )}
           </TabsContent>
@@ -1492,7 +1542,7 @@ export function ReviewReader() {
       {/* Hidden Reviews Modal */}
       {showHiddenModal && (
         <HiddenReviewsModal
-          hiddenReviews={task.reviews.filter(r => r.isHidden)}
+          hiddenReviews={loadedReviews.filter(r => r.isHidden)}
           onClose={() => setShowHiddenModal(false)}
           onRestore={handleToggleHidden}
         />

@@ -175,7 +175,7 @@ export function AICompareSection() {
       <div className="sticky top-[57px] z-[9] bg-white pb-5 pt-6">
         <div className="flex items-center justify-between mb-0">
           <div>
-            <h3 className="text-lg font-semibold text-slate-900 mb-1">AI 竞品对比项目</h3>
+            <h3 className="text-lg font-semibold text-slate-900 mb-1">竞品对比分析项目</h3>
             <p className="text-sm text-slate-600">AI 帮你生成的产品对比分析</p>
           </div>
           <Button 

@@ -196,9 +196,9 @@ export function MarketInsightSection() {
   const getStatusBadge = (status: string) => {
     switch (status) {
       case 'completed':
-        return <Badge className="bg-blue-50 text-blue-700 border-blue-200">已完成</Badge>;
+        return <Badge className="bg-rose-50 text-rose-700 border-rose-200">已完成</Badge>;
       case 'processing':
-        return <Badge className="bg-cyan-50 text-cyan-700 border-cyan-200">分析中</Badge>;
+        return <Badge className="bg-pink-50 text-pink-700 border-pink-200">分析中</Badge>;
       case 'failed':
         return <Badge className="bg-red-50 text-red-700 border-red-200">失败</Badge>;
       default:
@@ -209,18 +209,18 @@ export function MarketInsightSection() {
   return (
     <div>
       {/* 标题 */}
-      <div className="sticky top-[57px] z-[9] bg-white pb-5 pt-6">
-        <div className="flex items-center justify-between mb-0">
+      <div className="sticky top-[57px] z-[9] bg-white pb-2 pt-6">
+        <div className="flex items-center justify-between mb-4">
           <div>
             <h3 className="text-lg font-semibold text-slate-900 mb-1 flex items-center gap-2">
-              <TrendingUp className="w-5 h-5 text-blue-600" />
-              市场洞察分析
+              <TrendingUp className="w-5 h-5 text-rose-500" />
+              市场品类分析
             </h3>
             <p className="text-sm text-slate-600">聚合多产品数据，分析市场共性、趋势和机会</p>
           </div>
           <Button 
             onClick={handleOpenProductSelect}
-            className="bg-gradient-to-r from-blue-500 to-cyan-500 hover:from-blue-600 hover:to-cyan-600"
+            className="bg-gradient-to-r from-rose-500 to-pink-500 hover:from-rose-600 hover:to-pink-600"
           >
             <Plus className="w-4 h-4 mr-2" />
             新建市场洞察
@@ -231,7 +231,7 @@ export function MarketInsightSection() {
       {/* 加载状态 */}
       {loading && (
         <div className="flex items-center justify-center py-20">
-          <Loader2 className="w-8 h-8 animate-spin text-blue-500" />
+          <Loader2 className="w-8 h-8 animate-spin text-rose-500" />
         </div>
       )}
 
@@ -243,7 +243,7 @@ export function MarketInsightSection() {
           <p className="text-sm text-slate-400 mb-6">选择 2-10 个产品，聚合分析市场共性、趋势和机会</p>
           <Button 
             onClick={handleOpenProductSelect}
-            className="bg-gradient-to-r from-blue-500 to-cyan-500 hover:from-blue-600 hover:to-cyan-600"
+            className="bg-gradient-to-r from-rose-500 to-pink-500 hover:from-rose-600 hover:to-pink-600"
           >
             创建第一个市场洞察项目
           </Button>
@@ -256,7 +256,7 @@ export function MarketInsightSection() {
           {projects.map((project) => (
             <Card 
               key={project.id}
-              className="border border-slate-200 hover:border-blue-300 hover:shadow-md transition-all cursor-pointer group bg-white"
+              className="border border-slate-200 hover:border-rose-300 hover:shadow-md transition-all cursor-pointer group bg-white"
               onClick={() => navigate(`/analysis/${project.id}`)}
             >
               <CardContent className="p-5">
@@ -308,7 +308,7 @@ export function MarketInsightSection() {
                       e.stopPropagation();
                       navigate(`/analysis/${project.id}`);
                     }}
-                    className="text-sm text-blue-600 hover:text-blue-700 flex items-center gap-1"
+                    className="text-sm text-rose-600 hover:text-rose-700 flex items-center gap-1"
                   >
                     查看洞察
                     <ArrowRight className="w-4 h-4" />

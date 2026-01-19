@@ -102,8 +102,9 @@ class ContextService:
         )
         reviews = reviews_result.all()
         
-        if not reviews or len(reviews) < 30:
-            raise ValueError(f"样本不足：需要至少30条已翻译评论，当前只有 {len(reviews)} 条")
+        # [UPDATED 2026-01-19] 降低最低样本要求
+        if not reviews or len(reviews) < 1:
+            raise ValueError(f"没有可用评论样本")
         
         # 3. 准备样本文本（优先使用翻译文本）
         sample_texts = []
@@ -113,8 +114,9 @@ class ContextService:
             if text and text.strip():
                 sample_texts.append(text.strip())
         
-        if len(sample_texts) < 30:
-            raise ValueError(f"有效样本不足：需要至少30条有内容的评论")
+        # [UPDATED 2026-01-19] 降低最低样本要求
+        if len(sample_texts) < 1:
+            raise ValueError(f"没有有效样本内容")
         
         logger.info(f"开始为产品 {product.asin} 学习 5W 标签，样本数量: {len(sample_texts)}")
         

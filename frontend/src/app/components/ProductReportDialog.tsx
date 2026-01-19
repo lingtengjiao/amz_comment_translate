@@ -140,8 +140,9 @@ export const ProductReportDialog = memo(function ProductReportDialog({
   };
 
   // 检查是否可以生成报告
+  // [UPDATED 2026-01-19] 报告生成需要至少30条评论以保证质量
   const meetsRequirements = 
-    ratingStats.translatedReviews >= 10 &&
+    ratingStats.translatedReviews >= 30 &&
     ratingStats.reviewsWithInsights > 0 &&
     ratingStats.reviewsWithThemes > 0;
   
@@ -273,13 +274,13 @@ export const ProductReportDialog = memo(function ProductReportDialog({
             </h3>
             <div className="space-y-2">
               <div className="flex items-center gap-2 text-sm">
-                {ratingStats.translatedReviews >= 10 ? (
+                {ratingStats.translatedReviews >= 30 ? (
                   <CheckCircle2 className="size-4 text-rose-500 flex-shrink-0" />
                 ) : (
                   <XCircle className="size-4 text-red-500 flex-shrink-0" />
                 )}
-                <span className={ratingStats.translatedReviews >= 10 ? 'text-gray-700 dark:text-gray-300' : 'text-red-600 dark:text-red-400'}>
-                  已翻译评论: {ratingStats.translatedReviews} 条
+                <span className={ratingStats.translatedReviews >= 30 ? 'text-gray-700 dark:text-gray-300' : 'text-red-600 dark:text-red-400'}>
+                  已翻译评论: {ratingStats.translatedReviews} 条（需要至少 30 条）
                 </span>
               </div>
               <div className="flex items-center gap-2 text-sm">
@@ -306,7 +307,11 @@ export const ProductReportDialog = memo(function ProductReportDialog({
             {!meetsRequirements && (
               <div className="mt-3 p-3 bg-amber-50 dark:bg-amber-900/20 rounded-lg border border-amber-200 dark:border-amber-800">
                 <p className="text-xs text-amber-700 dark:text-amber-400">
-                  ⚠️ 请先完成翻译、洞察提取和完善洞察提取后才能生成报告
+                  {ratingStats.translatedReviews < 30 ? (
+                    <>⚠️ 评论数据不足，无法生成高质量报告。当前仅有 {ratingStats.translatedReviews} 条评论，建议采集至少 30 条评论后再生成报告。</>
+                  ) : (
+                    <>⚠️ 请先完成翻译、洞察提取和完善洞察提取后才能生成报告</>
+                  )}
                 </p>
               </div>
             )}

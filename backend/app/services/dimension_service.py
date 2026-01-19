@@ -75,8 +75,9 @@ class DimensionService:
         )
         reviews = reviews_result.all()
         
-        if not reviews or len(reviews) < 5:
-            raise ValueError(f"样本不足：需要至少5条评论，当前只有 {len(reviews)} 条")
+        # [UPDATED 2026-01-19] 降低最低样本要求
+        if not reviews or len(reviews) < 1:
+            raise ValueError(f"没有可用评论样本")
         
         # 3. 准备样本文本（优先使用翻译文本，更利于 AI 理解）
         sample_texts = []
@@ -86,8 +87,9 @@ class DimensionService:
             if text and text.strip():
                 sample_texts.append(text.strip())
         
-        if len(sample_texts) < 5:
-            raise ValueError(f"有效样本不足：需要至少5条有内容的评论")
+        # [UPDATED 2026-01-19] 降低最低样本要求
+        if len(sample_texts) < 1:
+            raise ValueError(f"没有有效样本内容")
         
         # 4. 准备产品信息（标题和五点描述）
         product_title = product.title or ""

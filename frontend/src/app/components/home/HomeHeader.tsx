@@ -3,9 +3,11 @@
  */
 import { useEffect, useState } from 'react';
 import { Bell, Clock } from 'lucide-react';
+import apiService from '../../../api/service';
 
 export function HomeHeader() {
   const [currentTime, setCurrentTime] = useState(new Date());
+  const [weeklyReportCount, setWeeklyReportCount] = useState<number | null>(null);
 
   // 更新时间
   useEffect(() => {
@@ -13,6 +15,27 @@ export function HomeHeader() {
       setCurrentTime(new Date());
     }, 1000);
     return () => clearInterval(timer);
+  }, []);
+
+  // 获取本周报告数量
+  useEffect(() => {
+    const fetchWeeklyReportCount = async () => {
+      try {
+        const response = await apiService.getWeeklyReportCount();
+        if (response.success) {
+          setWeeklyReportCount(response.count);
+        }
+      } catch (error) {
+        console.error('获取本周报告统计失败:', error);
+        // 失败时显示默认值 0
+        setWeeklyReportCount(0);
+      }
+    };
+    
+    fetchWeeklyReportCount();
+    // 每5分钟刷新一次
+    const interval = setInterval(fetchWeeklyReportCount, 5 * 60 * 1000);
+    return () => clearInterval(interval);
   }, []);
 
   // 格式化时间显示
@@ -41,7 +64,13 @@ export function HomeHeader() {
         <div className="flex items-center gap-2 px-3 py-1.5 bg-gradient-to-r from-rose-50 to-pink-50 rounded-lg border border-rose-100">
           <Bell className="w-4 h-4 text-rose-500" />
           <span className="text-sm text-slate-700">
-            本周已更新 <span className="font-semibold text-rose-600">1,247</span> 份洞察报告
+            本周已更新{' '}
+            <span className="font-semibold text-rose-600">
+              {weeklyReportCount !== null 
+                ? weeklyReportCount.toLocaleString('zh-CN')
+                : '...'}
+            </span>{' '}
+            份洞察报告
           </span>
         </div>
 

@@ -13,6 +13,7 @@ import { ProductCenterSection } from './sections/ProductCenterSection';
 import { AICompareSection } from './sections/AICompareSection';
 import { MarketInsightSection } from './sections/MarketInsightSection';
 import { ReportsSection } from './sections/ReportsSection';
+import { KeywordCollectionsSection } from './sections/KeywordCollectionsSection';
 import type { AppSection } from './types/homepage.types';
 
 function HomeContent() {
@@ -22,7 +23,7 @@ function HomeContent() {
   const scrollContainerRef = useRef<HTMLDivElement>(null);
 
   // 计算当前有效的 section（直接从 URL 获取，不依赖 state）
-  const validSections: AppSection[] = ['home', 'my-projects', 'product-center', 'ai-compare', 'market-insight', 'reports'];
+  const validSections: AppSection[] = ['home', 'my-projects', 'product-center', 'ai-compare', 'market-insight', 'reports', 'keyword-collections'];
   const currentSection: AppSection = section && validSections.includes(section as AppSection) 
     ? (section as AppSection) 
     : 'home';
@@ -66,6 +67,8 @@ function HomeContent() {
         return <MarketInsightSection />;
       case 'reports':
         return <ReportsSection />;
+      case 'keyword-collections':
+        return <KeywordCollectionsSection />;
       default:
         return <HomeSection />;
     }
@@ -85,6 +88,22 @@ function HomeContent() {
         <main className="flex-1 bg-white p-6">
           {renderContent()}
         </main>
+
+        {/* Footer with Beian Info */}
+        <footer className="bg-white border-t border-slate-200 py-4 px-6">
+          <div className="text-center">
+            <p className="text-xs text-slate-400">
+              <a 
+                href="https://beian.miit.gov.cn" 
+                target="_blank" 
+                rel="noopener noreferrer"
+                className="hover:text-rose-500 transition-colors"
+              >
+                浙ICP备2020037731号-3
+              </a>
+            </p>
+          </div>
+        </footer>
       </div>
     </div>
   );

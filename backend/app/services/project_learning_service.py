@@ -84,8 +84,9 @@ class ProjectLearningService:
             max_total_samples
         )
         
-        if len(sampled_reviews) < 10:
-            raise ValueError(f"样本不足：需要至少10条评论，当前只有 {len(sampled_reviews)} 条")
+        # [UPDATED 2026-01-19] 降低最低样本要求
+        if len(sampled_reviews) < 1:
+            raise ValueError(f"没有可用评论样本")
         
         logger.info(f"📝 采样完成：共 {len(sampled_reviews)} 条评论")
         

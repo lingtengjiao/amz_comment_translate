@@ -208,6 +208,67 @@ function isSearchResultsPage() {
 }
 
 /**
+ * [NEW] 从当前页面 URL 提取搜索关键词
+ * @returns {string|null} 搜索关键词
+ */
+function extractSearchKeyword() {
+  const url = new URL(window.location.href);
+  
+  // 尝试从 URL 参数获取关键词
+  // 常见参数: k, keywords, field-keywords
+  const keywordParams = ['k', 'keywords', 'field-keywords'];
+  for (const param of keywordParams) {
+    const value = url.searchParams.get(param);
+    if (value) {
+      return decodeURIComponent(value).trim();
+    }
+  }
+  
+  // 尝试从页面标题提取
+  const title = document.title;
+  // 格式: "Amazon.com : keyword" 或 "keyword : Amazon.com"
+  const colonMatch = title.match(/Amazon\.[^:]+\s*:\s*(.+)/i);
+  if (colonMatch) {
+    return colonMatch[1].trim();
+  }
+  
+  // 尝试从搜索框获取
+  const searchInput = document.querySelector('#twotabsearchtextbox');
+  if (searchInput && searchInput.value) {
+    return searchInput.value.trim();
+  }
+  
+  return null;
+}
+
+/**
+ * [NEW] 转换数字字符串（处理 K, M 后缀）
+ * @param {string} text - 包含数字的文本，如 "2.4K", "1.2M", "300"
+ * @returns {number|null} 转换后的数字，如 2400, 1200000, 300
+ */
+function convertNumberWithSuffix(text) {
+  if (!text) return null;
+  
+  // 移除逗号和其他非数字字符（保留小数点、K、M）
+  const cleaned = text.replace(/,/g, '').trim();
+  
+  // 匹配数字和 K/M 后缀
+  const match = cleaned.match(/(\d+\.?\d*)\s*([KMkm]?)/);
+  if (!match) return null;
+  
+  const number = parseFloat(match[1]);
+  const suffix = match[2].toUpperCase();
+  
+  if (suffix === 'K') {
+    return Math.round(number * 1000);
+  } else if (suffix === 'M') {
+    return Math.round(number * 1000000);
+  } else {
+    return Math.round(number);
+  }
+}
+
+/**
  * [NEW] 从搜索结果页面提取所有产品信息
  * @returns {Array} 产品信息数组
  */
@@ -248,13 +309,48 @@ function extractSearchResults() {
         if (match) rating = parseFloat(match[1]);
       }
       
-      // 提取评论数量
+      // 提取评论数量（支持 K/M 转换）
       let reviewCount = null;
       const reviewCountEl = item.querySelector('.s-underline-text, [aria-label*="ratings"], a[href*="customerReviews"]');
       if (reviewCountEl) {
-        const text = reviewCountEl.textContent?.replace(/,/g, '') || '';
-        const match = text.match(/(\d+)/);
-        if (match) reviewCount = parseInt(match[1]);
+        const text = reviewCountEl.textContent?.trim() || '';
+        // 尝试提取带 K/M 后缀的数字，如 "2.4K", "13.3K"
+        reviewCount = convertNumberWithSuffix(text);
+        
+        // 如果转换失败，尝试直接匹配数字
+        if (!reviewCount) {
+          const match = text.replace(/,/g, '').match(/(\d+)/);
+          if (match) reviewCount = parseInt(match[1]);
+        }
+      }
+      
+      // [NEW] 提取销量数据（"XK+ bought in past month"）
+      let salesVolume = null;
+      let salesVolumeText = null;
+      
+      // 在 item 内查找包含 "bought" 或 "sold" 的文本
+      const allTextElements = item.querySelectorAll('span, div, a, p');
+      for (const el of allTextElements) {
+        const text = el.textContent?.trim() || '';
+        if (!text) continue;
+        
+        // 跳过过长的文本（可能是无关的页面内容）
+        if (text.length > 200) continue;
+        
+        // 匹配 "XK+ bought in past month" 或 "XK+ bought in the past month" 格式
+        const salesMatch = text.match(/(\d+\.?\d*[KMkm]?\+?)\s*(?:bought|sold|purchased).*?(?:past|last)\s*(?:month|week|day)/i);
+        if (salesMatch) {
+          salesVolumeText = salesMatch[0].substring(0, 100);
+          salesVolume = convertNumberWithSuffix(salesMatch[1]);
+          break;
+        }
+        
+        // 匹配 "XK+ bought" 格式（更简单的格式）
+        const simpleMatch = text.match(/(\d+\.?\d*[KMkm]?\+?)\s*(?:bought|sold|purchased)/i);
+        if (simpleMatch && !salesVolume) {
+          salesVolumeText = simpleMatch[0].substring(0, 100);
+          salesVolume = convertNumberWithSuffix(simpleMatch[1]);
+        }
       }
       
       // 提取产品链接
@@ -268,6 +364,8 @@ function extractSearchResults() {
         price,
         rating,
         reviewCount,
+        salesVolume,        // [NEW] 销量数字
+        salesVolumeText,   // [NEW] 销量原始文本
         link,
         isSponsored: !!isSponsored,
         index: index + 1
@@ -781,10 +879,18 @@ function showOverlay(state) {
   if (!overlay) createOverlay();
   updateOverlay(state);
   overlay.classList.add('voc-visible');
+  // [NEW] 隐藏浮动按钮
+  if (floatingButton) {
+    floatingButton.style.display = 'none';
+  }
 }
 
 function hideOverlay() {
   if (overlay) overlay.classList.remove('voc-visible');
+  // [NEW] 重新显示浮动按钮
+  if (floatingButton) {
+    floatingButton.style.display = 'flex';
+  }
 }
 
 // ============================================================================
@@ -822,6 +928,11 @@ function showProductSelector() {
   updateLoadMoreButton();
   
   productSelector.classList.add('voc-visible');
+  
+  // [NEW] 隐藏浮动按钮
+  if (floatingButton) {
+    floatingButton.style.display = 'none';
+  }
 }
 
 /**
@@ -830,6 +941,10 @@ function showProductSelector() {
 function hideProductSelector() {
   if (productSelector) {
     productSelector.classList.remove('voc-visible');
+  }
+  // [NEW] 重新显示浮动按钮
+  if (floatingButton) {
+    floatingButton.style.display = 'flex';
   }
 }
 
@@ -890,6 +1005,13 @@ function createProductSelector() {
         </div>
         
         <div class="voc-selector-actions">
+          <div class="voc-action-row voc-save-library-row">
+            <button class="voc-btn voc-btn-save-library" id="voc-save-library-btn">
+              💾 保存到产品库
+            </button>
+            <span class="voc-action-hint">保存当前搜索结果快照</span>
+          </div>
+          <div class="voc-action-divider"></div>
           <div class="voc-action-row">
             <button class="voc-btn voc-btn-primary" id="voc-batch-insight-btn" disabled>
               📊 批量洞察分析
@@ -925,6 +1047,7 @@ function createProductSelector() {
   document.getElementById('voc-comparison-btn').addEventListener('click', handleComparison);
   document.getElementById('voc-market-insight-btn').addEventListener('click', handleMarketInsight);
   document.getElementById('voc-load-more-btn').addEventListener('click', handleLoadMore);
+  document.getElementById('voc-save-library-btn').addEventListener('click', handleSaveToLibrary);
 }
 
 /**
@@ -967,6 +1090,7 @@ function updateProductSelector(products, append = false) {
           ${p.price ? `<span class="voc-product-price">${p.price}</span>` : ''}
           ${p.rating ? `<span class="voc-product-rating">⭐ ${p.rating}</span>` : ''}
           ${p.reviewCount ? `<span class="voc-product-reviews">(${p.reviewCount})</span>` : ''}
+          ${p.salesVolume ? `<span class="voc-product-sales">📦 ${p.salesVolume.toLocaleString()}+</span>` : ''}
           ${p.isSponsored ? '<span class="voc-sponsored-tag">广告</span>' : ''}
         </div>
       </div>
@@ -1145,12 +1269,41 @@ function extractProductsFromDocument(doc) {
         if (match) rating = parseFloat(match[1]);
       }
       
+      // 提取评论数量（支持 K/M 转换）
       let reviewCount = null;
       const reviewCountEl = item.querySelector('.s-underline-text, [aria-label*="ratings"], a[href*="customerReviews"]');
       if (reviewCountEl) {
-        const text = reviewCountEl.textContent?.replace(/,/g, '') || '';
-        const match = text.match(/(\d+)/);
-        if (match) reviewCount = parseInt(match[1]);
+        const text = reviewCountEl.textContent?.trim() || '';
+        reviewCount = convertNumberWithSuffix(text);
+        if (!reviewCount) {
+          const match = text.replace(/,/g, '').match(/(\d+)/);
+          if (match) reviewCount = parseInt(match[1]);
+        }
+      }
+      
+      // [NEW] 提取销量数据
+      let salesVolume = null;
+      let salesVolumeText = null;
+      const allTextElements = item.querySelectorAll('span, div, a, p');
+      for (const el of allTextElements) {
+        const text = el.textContent?.trim() || '';
+        if (!text) continue;
+        
+        // 匹配 "XK+ bought in past month" 或 "XK+ bought in the past month" 格式
+        const salesMatch = text.match(/(\d+\.?\d*[KMkm]?\+?)\s*(?:bought|sold|purchased).*?(?:past|last)\s*(?:month|week|day)/i);
+        if (salesMatch) {
+          // 只保留匹配的部分，不要整个 text（可能包含大量无关内容）
+          salesVolumeText = salesMatch[0].substring(0, 100);
+          salesVolume = convertNumberWithSuffix(salesMatch[1]);
+          break;
+        }
+        
+        // 匹配 "XK+ bought" 格式（更简单的格式）
+        const simpleMatch = text.match(/(\d+\.?\d*[KMkm]?\+?)\s*(?:bought|sold|purchased)/i);
+        if (simpleMatch && !salesVolume) {
+          salesVolumeText = simpleMatch[0].substring(0, 100);
+          salesVolume = convertNumberWithSuffix(simpleMatch[1]);
+        }
       }
       
       const linkEl = item.querySelector('h2 a, .s-title-instructions-style a');
@@ -1163,6 +1316,8 @@ function extractProductsFromDocument(doc) {
         price,
         rating,
         reviewCount,
+        salesVolume,        // [NEW] 销量数字
+        salesVolumeText,   // [NEW] 销量原始文本
         link,
         isSponsored: !!isSponsored,
         index: index + 1
@@ -1356,6 +1511,358 @@ async function handleMarketInsight() {
       setSelectorStatus(`创建失败: ${response?.error || '未知错误'}`, 'error');
     }
   });
+}
+
+/**
+ * [NEW] 处理保存到产品库
+ */
+async function handleSaveToLibrary() {
+  // 获取所有已加载的产品（不仅仅是选中的）
+  const allProducts = getAllLoadedProducts();
+  const totalCards = document.querySelectorAll('[data-component-type="s-search-result"]').length;
+  
+  if (allProducts.length === 0) {
+    setSelectorStatus(`没有可保存的产品（检测到 ${totalCards} 个产品卡片，但都缺少必要信息）`, 'error');
+    return;
+  }
+  
+  // 如果有产品被过滤掉，显示提示
+  if (allProducts.length < totalCards) {
+    const skipped = totalCards - allProducts.length;
+    console.log(`[SaveToLibrary] 检测到 ${totalCards} 个产品，其中 ${skipped} 个因缺少必要信息被跳过`);
+  }
+  
+  // 获取搜索关键词
+  const keyword = extractSearchKeyword();
+  if (!keyword) {
+    setSelectorStatus('无法获取搜索关键词', 'error');
+    return;
+  }
+  
+  const marketplace = detectMarketplace();
+  const btn = document.getElementById('voc-save-library-btn');
+  
+  // 禁用按钮防止重复点击
+  if (btn) {
+    btn.disabled = true;
+    btn.innerHTML = '💾 保存中...';
+  }
+  
+  setSelectorStatus(`正在保存 ${allProducts.length} 个产品到产品库...`, 'info');
+  
+  chrome.runtime.sendMessage({
+    type: 'SAVE_TO_COLLECTION',
+    keyword: keyword,
+    marketplace: marketplace,
+    products: allProducts
+  }, (response) => {
+    if (btn) {
+      btn.disabled = false;
+      btn.innerHTML = '💾 保存到产品库';
+    }
+    
+    if (response?.success) {
+      // 显示实际保存的数量（可能少于 allProducts.length，因为后端会再次验证）
+      const savedCount = response.collection?.product_count || allProducts.length;
+      const message = savedCount === allProducts.length 
+        ? `已成功保存 ${savedCount} 个产品到产品库「${keyword}」`
+        : `已成功保存 ${savedCount} 个产品到产品库「${keyword}」（共 ${allProducts.length} 个，${allProducts.length - savedCount} 个因验证失败被跳过）`;
+      setSelectorStatus(message, 'success');
+    } else {
+      // 处理错误信息，可能是字符串、对象或数组
+      let errorMsg = '未知错误';
+      if (response?.error) {
+        if (typeof response.error === 'string') {
+          errorMsg = response.error;
+        } else if (Array.isArray(response.error)) {
+          // FastAPI 验证错误格式
+          errorMsg = response.error.map(e => e.msg || e.message || JSON.stringify(e)).join('; ');
+        } else if (typeof response.error === 'object') {
+          errorMsg = response.error.message || response.error.detail || JSON.stringify(response.error);
+        }
+      }
+      setSelectorStatus(`保存失败: ${errorMsg}`, 'error');
+      console.error('[SaveToLibrary] Error response:', response);
+    }
+  });
+}
+
+/**
+ * [NEW] 获取所有已加载的产品信息（用于保存到产品库）
+ * 优先使用 allLoadedProducts 数组（包含所有已加载页面的产品）
+ */
+function getAllLoadedProducts() {
+  // 如果 allLoadedProducts 数组有数据，直接使用（包含所有已加载页面的产品）
+  if (allLoadedProducts && allLoadedProducts.length > 0) {
+    console.log(`[getAllLoadedProducts] 使用已加载的产品数组: ${allLoadedProducts.length} 个产品`);
+    
+    // 转换为保存格式
+    const products = [];
+    allLoadedProducts.forEach((p, index) => {
+      // 确保有必要的字段
+      if (!p.asin) return;
+      
+      // 处理图片 URL
+      let imageUrl = p.imageUrl || '';
+      if (!imageUrl || !imageUrl.startsWith('http')) {
+        imageUrl = `https://via.placeholder.com/300x300?text=${encodeURIComponent(p.asin)}`;
+      }
+      
+      // 处理产品链接
+      let productUrl = p.link || p.productUrl || '';
+      if (!productUrl) {
+        productUrl = `${window.location.origin}/dp/${p.asin}`;
+      } else {
+        // 清理链接，移除多余参数
+        try {
+          const url = new URL(productUrl);
+          productUrl = `${url.origin}/dp/${p.asin}`;
+        } catch {
+          // 如果 URL 解析失败，使用原始链接
+        }
+      }
+      
+      // 处理价格（从字符串转换为数字）
+      let price = null;
+      if (p.price) {
+        // 移除货币符号和逗号，提取数字
+        const priceMatch = p.price.replace(/[$,]/g, '').match(/(\d+\.?\d*)/);
+        if (priceMatch) {
+          price = parseFloat(priceMatch[1]);
+        }
+      }
+      
+      products.push({
+        asin: p.asin,
+        title: p.title || null,
+        image_url: imageUrl,
+        product_url: productUrl,
+        price: price,
+        rating: p.rating || null,
+        review_count: p.reviewCount || null,
+        sales_volume: p.salesVolume || null,
+        // 截断过长的销量文本（数据库限制 200 字符）
+        sales_volume_text: p.salesVolumeText ? p.salesVolumeText.substring(0, 100) : null,
+        is_sponsored: p.isSponsored || false,
+        position: p.index || (index + 1)
+      });
+    });
+    
+    console.log(`[getAllLoadedProducts] 成功转换 ${products.length} 个产品`);
+    return products;
+  }
+  
+  // 如果数组为空，从 DOM 提取（兼容旧逻辑）
+  console.log('[getAllLoadedProducts] allLoadedProducts 为空，从 DOM 提取产品');
+  const products = [];
+  const productCards = document.querySelectorAll('[data-component-type="s-search-result"]');
+  const stats = {
+    total: productCards.length,
+    skipped_no_asin: 0,
+    skipped_no_link: 0,
+    with_placeholder_image: 0,
+    success: 0
+  };
+  
+  productCards.forEach((card, index) => {
+    const asin = card.dataset.asin;
+    if (!asin) {
+      stats.skipped_no_asin++;
+      return;
+    }
+    
+    // 跳过广告产品（可选，根据需求决定是否保留）
+    const isSponsored = !!card.querySelector('.s-label-popover-default, [data-component-type="sp-sponsored-result"]');
+    
+    // 获取产品标题
+    const titleElem = card.querySelector('h2 a span, h2 span.a-text-normal, .a-size-medium.a-color-base.a-text-normal');
+    const title = titleElem?.textContent?.trim() || '';
+    
+    // 获取产品图片（使用与产品选择器相同的逻辑）
+    const imageEl = card.querySelector('.s-image');
+    let imageUrl = '';
+    if (imageEl) {
+      // 优先使用 src 属性（已加载的图片）
+      imageUrl = imageEl.src || '';
+      
+      // 如果没有 src，尝试 data-image-source-density-1（高分辨率图片）
+      if (!imageUrl || imageUrl.includes('data:image') || imageUrl.includes('placeholder')) {
+        imageUrl = imageEl.getAttribute('data-image-source-density-1') || 
+                   imageEl.getAttribute('data-src') || 
+                   imageEl.getAttribute('src') || '';
+      }
+      
+      // 如果还是没有，尝试其他可能的属性
+      if (!imageUrl || !imageUrl.startsWith('http')) {
+        // 尝试 data-image-source-density-2, data-image-source-density-3 等
+        for (let i = 1; i <= 3; i++) {
+          const attr = `data-image-source-density-${i}`;
+          const attrValue = imageEl.getAttribute(attr);
+          if (attrValue && attrValue.startsWith('http')) {
+            imageUrl = attrValue;
+            break;
+          }
+        }
+      }
+    }
+    
+    // 如果还是没有图片，尝试查找其他图片元素
+    if (!imageUrl || !imageUrl.startsWith('http')) {
+      const fallbackImg = card.querySelector('img[src*="amazon"], img[data-src*="amazon"]');
+      if (fallbackImg) {
+        imageUrl = fallbackImg.src || fallbackImg.getAttribute('data-src') || fallbackImg.getAttribute('src') || '';
+      }
+    }
+    
+    // 如果还是没有图片，根据 ASIN 生成 Amazon 图片 URL（作为最后手段）
+    if (!imageUrl || !imageUrl.startsWith('http')) {
+      // Amazon 图片 URL 格式通常是：https://m.media-amazon.com/images/I/[IMAGE_ID]._AC_SL1500_.jpg
+      // 但我们没有 IMAGE_ID，所以使用占位图
+      imageUrl = `https://via.placeholder.com/300x300?text=${encodeURIComponent(asin)}`;
+      console.warn(`[getAllLoadedProducts] 产品 ${asin} 无法提取图片，使用占位图`);
+    }
+    
+    // 获取产品链接（尝试多种选择器）
+    let productUrl = '';
+    const linkSelectors = [
+      'h2 a',
+      'a.a-link-normal.s-no-outline',
+      'a[href*="/dp/"]',
+      'a[href*="/gp/product/"]',
+      'a'
+    ];
+    for (const selector of linkSelectors) {
+      const linkElem = card.querySelector(selector);
+      if (linkElem?.href) {
+        try {
+          const url = new URL(linkElem.href);
+          // 如果链接包含 /dp/ 或 /gp/product/，使用它
+          if (url.pathname.includes('/dp/') || url.pathname.includes('/gp/product/')) {
+            productUrl = `${url.origin}${url.pathname.split('?')[0]}`;
+          } else {
+            // 否则根据 ASIN 生成标准链接
+            productUrl = `${url.origin}/dp/${asin}`;
+          }
+          break;
+        } catch {
+          productUrl = linkElem.href.split('?')[0];
+          break;
+        }
+      }
+    }
+    
+    // 如果还是没有链接，根据 ASIN 生成标准 Amazon 链接
+    if (!productUrl && asin) {
+      const origin = window.location.origin;
+      productUrl = `${origin}/dp/${asin}`;
+    }
+    
+    // 获取价格
+    const priceWholeElem = card.querySelector('.a-price-whole');
+    const priceFractionElem = card.querySelector('.a-price-fraction');
+    const priceSymbolElem = card.querySelector('.a-price-symbol');
+    let price = null;
+    if (priceWholeElem) {
+      const whole = priceWholeElem.textContent.replace(/[,\.]/g, '');
+      const fraction = priceFractionElem?.textContent || '00';
+      price = parseFloat(`${whole}.${fraction}`);
+    }
+    
+    // 获取评分
+    const ratingElem = card.querySelector('.a-icon-star-small .a-icon-alt, .a-icon-star .a-icon-alt, span[aria-label*="out of"]');
+    let rating = null;
+    if (ratingElem) {
+      const ratingMatch = ratingElem.textContent.match(/(\d+\.?\d*)/);
+      if (ratingMatch) {
+        rating = parseFloat(ratingMatch[1]);
+      }
+    }
+    
+    // 获取评论数量
+    const reviewCountElem = card.querySelector('span[aria-label*="ratings"], a[href*="#customerReviews"] span');
+    let reviewCount = null;
+    if (reviewCountElem) {
+      const countText = reviewCountElem.textContent.replace(/[,\s]/g, '');
+      const countMatch = countText.match(/(\d+)/);
+      if (countMatch) {
+        reviewCount = parseInt(countMatch[1]);
+      }
+    }
+    
+    // 获取销量（如果有）
+    let salesVolume = null;
+    let salesVolumeText = null;
+    const salesElem = card.querySelector('.a-row.a-size-base span.a-size-base.a-color-secondary');
+    if (salesElem) {
+      const salesText = salesElem.textContent.trim();
+      if (salesText.includes('bought') || salesText.includes('sold') || salesText.includes('K+') || salesText.includes('M+')) {
+        salesVolumeText = salesText;
+        // 解析数字
+        const volumeMatch = salesText.match(/(\d+\.?\d*)\s*([KkMm])?/);
+        if (volumeMatch) {
+          let volume = parseFloat(volumeMatch[1]);
+          const suffix = volumeMatch[2]?.toUpperCase();
+          if (suffix === 'K') volume *= 1000;
+          else if (suffix === 'M') volume *= 1000000;
+          salesVolume = Math.round(volume);
+        }
+      }
+    }
+    
+    // 必须有产品链接（必需）
+    if (!productUrl) {
+      stats.skipped_no_link++;
+      console.warn(`[getAllLoadedProducts] 跳过产品 ${asin}: 缺少产品链接`);
+      return;
+    }
+    
+    // 确保图片 URL 是完整的 HTTP/HTTPS URL
+    if (imageUrl && !imageUrl.startsWith('http')) {
+      // 如果是相对路径，转换为绝对路径
+      if (imageUrl.startsWith('//')) {
+        imageUrl = 'https:' + imageUrl;
+      } else if (imageUrl.startsWith('/')) {
+        imageUrl = window.location.origin + imageUrl;
+      } else {
+        // 如果都不匹配，使用占位图
+        imageUrl = `https://via.placeholder.com/300x300?text=${encodeURIComponent(asin)}`;
+        console.warn(`[getAllLoadedProducts] 产品 ${asin} 图片URL格式异常，使用占位图: ${imageUrl}`);
+      }
+    }
+    
+    // 如果没有图片URL，使用占位图
+    if (!imageUrl || !imageUrl.startsWith('http')) {
+      imageUrl = `https://via.placeholder.com/300x300?text=${encodeURIComponent(asin)}`;
+      stats.with_placeholder_image++;
+      console.warn(`[getAllLoadedProducts] 产品 ${asin} 缺少图片URL，使用占位图`);
+    }
+    
+    stats.success++;
+    products.push({
+      asin,
+      title,
+      image_url: imageUrl,
+      product_url: productUrl,
+      price,
+      rating,
+      review_count: reviewCount,
+      sales_volume: salesVolume,
+      sales_volume_text: salesVolumeText,
+      is_sponsored: isSponsored,
+      position: index + 1
+    });
+  });
+  
+  // 输出统计信息
+  console.log('[getAllLoadedProducts] 提取统计:', {
+    总计: stats.total,
+    成功: stats.success,
+    跳过_无ASIN: stats.skipped_no_asin,
+    跳过_无链接: stats.skipped_no_link,
+    使用占位图: stats.with_placeholder_image
+  });
+  
+  return products;
 }
 
 /**
@@ -2513,5 +3020,291 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     // 注意：不立即重置 g_displayCount，保留显示直到用户关闭面板或开始新的采集
   }
 });
+
+// ============================================================================
+// [NEW] 浮动图标按钮 - 自动显示在搜索结果页和产品详情页
+// ============================================================================
+
+let floatingButton = null;
+
+/**
+ * [NEW] 创建浮动图标按钮
+ */
+function createFloatingButton() {
+  if (floatingButton) return; // 已存在则不重复创建
+  
+  // 检查页面类型
+  const isSearch = isSearchResultsPage();
+  const isProduct = !!detectASIN();
+  
+  if (!isSearch && !isProduct) return; // 不是目标页面，不显示
+  
+  floatingButton = document.createElement('div');
+  floatingButton.id = 'voc-floating-button';
+  floatingButton.className = 'voc-floating-btn';
+  floatingButton.setAttribute('data-page-type', isSearch ? 'search' : 'product');
+  
+  // 图标 SVG（与插件 logo 一致）
+  floatingButton.innerHTML = `
+    <div class="voc-floating-icon">
+      <svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+        <circle cx="50" cy="50" r="35" fill="#FEF3C7"/>
+        <circle cx="50" cy="50" r="25" fill="#93C5FD"/>
+        <circle cx="50" cy="50" r="15" fill="#1E40AF"/>
+        <circle cx="47" cy="45" r="5" fill="#FFFFFF"/>
+      </svg>
+    </div>
+    <div class="voc-floating-tooltip">
+      ${isSearch ? '选择产品分析' : '打开采集面板'}
+    </div>
+  `;
+  
+  // 绑定点击事件
+  floatingButton.addEventListener('click', (e) => {
+    e.stopPropagation();
+    handleFloatingButtonClick();
+  });
+  
+  // 添加到页面
+  document.body.appendChild(floatingButton);
+  
+  // 添加样式（如果还没有）
+  injectFloatingButtonStyles();
+  
+  console.log('[VOC-Master] Floating button created for', isSearch ? 'search page' : 'product page');
+}
+
+/**
+ * [NEW] 处理浮动按钮点击
+ */
+function handleFloatingButtonClick() {
+  const pageType = floatingButton?.getAttribute('data-page-type');
+  
+  if (pageType === 'search') {
+    // 搜索结果页：打开产品选择器
+    showProductSelector();
+  } else if (pageType === 'product') {
+    // 产品详情页：打开采集面板
+    const asin = detectASIN();
+    const info = getProductInfo();
+    showOverlay({ 
+      status: 'ready', 
+      asin: asin, 
+      title: info.title 
+    });
+  }
+}
+
+/**
+ * [NEW] 注入浮动按钮样式
+ */
+function injectFloatingButtonStyles() {
+  const styleId = 'voc-floating-button-styles';
+  if (document.getElementById(styleId)) return; // 已存在
+  
+  const style = document.createElement('style');
+  style.id = styleId;
+  style.textContent = `
+    #voc-floating-button {
+      position: fixed;
+      bottom: 80px;
+      right: 20px;
+      width: 56px;
+      height: 56px;
+      background: linear-gradient(135deg, #f43f5e, #ec4899);
+      border-radius: 50%;
+      box-shadow: 0 4px 16px rgba(244, 63, 94, 0.4);
+      cursor: pointer;
+      z-index: 2147483646;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+      animation: voc-float-in 0.5s ease-out;
+    }
+    
+    #voc-floating-button:hover {
+      transform: scale(1.1) translateY(-4px);
+      box-shadow: 0 8px 24px rgba(244, 63, 94, 0.5);
+    }
+    
+    #voc-floating-button:active {
+      transform: scale(0.95);
+    }
+    
+    @keyframes voc-float-in {
+      from {
+        opacity: 0;
+        transform: scale(0.5) translateY(20px);
+      }
+      to {
+        opacity: 1;
+        transform: scale(1) translateY(0);
+      }
+    }
+    
+    .voc-floating-icon {
+      width: 32px;
+      height: 32px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    
+    .voc-floating-icon svg {
+      width: 100%;
+      height: 100%;
+      filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.2));
+    }
+    
+    .voc-floating-tooltip {
+      position: absolute;
+      right: 70px;
+      top: 50%;
+      transform: translateY(-50%);
+      background: rgba(15, 23, 42, 0.95);
+      color: white;
+      padding: 8px 12px;
+      border-radius: 8px;
+      font-size: 13px;
+      font-weight: 500;
+      white-space: nowrap;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.3s;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+    }
+    
+    .voc-floating-tooltip::after {
+      content: '';
+      position: absolute;
+      right: -6px;
+      top: 50%;
+      transform: translateY(-50%);
+      border: 6px solid transparent;
+      border-left-color: rgba(15, 23, 42, 0.95);
+    }
+    
+    #voc-floating-button:hover .voc-floating-tooltip {
+      opacity: 1;
+    }
+    
+    /* 响应式：小屏幕时调整位置 */
+    @media (max-width: 768px) {
+      #voc-floating-button {
+        bottom: 20px;
+        right: 20px;
+        width: 48px;
+        height: 48px;
+      }
+      
+      .voc-floating-icon {
+        width: 28px;
+        height: 28px;
+      }
+      
+      .voc-floating-tooltip {
+        right: 60px;
+        font-size: 12px;
+        padding: 6px 10px;
+      }
+    }
+  `;
+  
+  document.head.appendChild(style);
+}
+
+/**
+ * [NEW] 移除浮动按钮
+ */
+function removeFloatingButton() {
+  if (floatingButton) {
+    floatingButton.remove();
+    floatingButton = null;
+  }
+}
+
+/**
+ * [NEW] 初始化浮动按钮（页面加载完成后）
+ */
+function initFloatingButton() {
+  // 创建按钮的函数
+  const tryCreateButton = () => {
+    // 检查是否在目标页面
+    const isSearch = isSearchResultsPage();
+    const isProduct = !!detectASIN();
+    
+    if (isSearch || isProduct) {
+      if (!floatingButton) {
+        createFloatingButton();
+      }
+    } else {
+      // 不在目标页面，移除按钮
+      removeFloatingButton();
+    }
+  };
+  
+  // 等待页面完全加载
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', () => {
+      setTimeout(tryCreateButton, 800); // 延迟确保页面渲染完成
+    });
+  } else {
+    setTimeout(tryCreateButton, 800);
+  }
+  
+  // 监听页面变化（SPA 路由变化和动态内容加载）
+  let lastUrl = location.href;
+  let checkTimer = null;
+  
+  const checkAndUpdate = () => {
+    const url = location.href;
+    if (url !== lastUrl) {
+      lastUrl = url;
+      // URL 变化，重新检查并创建/移除按钮
+      removeFloatingButton();
+      setTimeout(tryCreateButton, 1000);
+    } else {
+      // URL 没变，但内容可能动态加载了，检查是否需要创建按钮
+      if (!floatingButton) {
+        tryCreateButton();
+      }
+    }
+  };
+  
+  // 使用防抖，避免频繁检查
+  const debouncedCheck = () => {
+    clearTimeout(checkTimer);
+    checkTimer = setTimeout(checkAndUpdate, 300);
+  };
+  
+  // 监听 DOM 变化
+  new MutationObserver(debouncedCheck).observe(document.body, { 
+    subtree: true, 
+    childList: true,
+    attributes: false
+  });
+  
+  // 监听 URL 变化（pushState/replaceState）
+  const originalPushState = history.pushState;
+  const originalReplaceState = history.replaceState;
+  
+  history.pushState = function(...args) {
+    originalPushState.apply(history, args);
+    setTimeout(checkAndUpdate, 300);
+  };
+  
+  history.replaceState = function(...args) {
+    originalReplaceState.apply(history, args);
+    setTimeout(checkAndUpdate, 300);
+  };
+  
+  window.addEventListener('popstate', () => {
+    setTimeout(checkAndUpdate, 300);
+  });
+}
+
+// 初始化浮动按钮
+initFloatingButton();
 
 })(); // IIFE 结束

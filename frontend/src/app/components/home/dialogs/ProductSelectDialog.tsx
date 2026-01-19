@@ -132,7 +132,7 @@ export function ProductSelectDialog({ onConfirm, showAnalysisStatus = true }: Pr
             选择对比产品
           </DialogTitle>
           <DialogDescription>
-            从我的洞察中选择2-5个产品进行竞品对比分析
+            从我的产品洞察中选择2-5个产品进行竞品对比分析
           </DialogDescription>
         </DialogHeader>
 
@@ -147,7 +147,7 @@ export function ProductSelectDialog({ onConfirm, showAnalysisStatus = true }: Pr
                   : "text-slate-600 hover:text-slate-900"
               }`}
             >
-              我的洞察
+              我的产品洞察
               {productSelectDialogTab === "all" && (
                 <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-rose-600"></div>
               )}

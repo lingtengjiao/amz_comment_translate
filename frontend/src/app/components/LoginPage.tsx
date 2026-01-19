@@ -116,9 +116,19 @@ export function LoginPage() {
           </div>
 
           {/* Footer */}
-          <div className="text-center mt-6">
+          <div className="text-center mt-6 space-y-2">
             <p className="text-sm text-slate-400">
               © 2026 洞察大王 · 让数据洞察触手可及
+            </p>
+            <p className="text-xs text-slate-400">
+              <a 
+                href="https://beian.miit.gov.cn" 
+                target="_blank" 
+                rel="noopener noreferrer"
+                className="hover:text-rose-500 transition-colors"
+              >
+                浙ICP备2020037731号-3
+              </a>
             </p>
           </div>
         </div>
