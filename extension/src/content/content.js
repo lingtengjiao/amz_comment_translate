@@ -858,6 +858,7 @@ function detectMarketplace() {
   if (hostname.includes('.fr')) return 'FR';
   if (hostname.includes('.co.jp')) return 'JP';
   if (hostname.includes('.com.au')) return 'AU';
+  if (hostname.includes('.ca')) return 'CA';
   return 'US';
 }
 

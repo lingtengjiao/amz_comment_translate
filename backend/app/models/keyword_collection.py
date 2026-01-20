@@ -60,7 +60,7 @@ class KeywordCollection(Base):
     marketplace: Mapped[str] = mapped_column(
         String(20),
         default="US",
-        comment="亚马逊站点（US, UK, DE, FR, JP, AU）"
+        comment="亚马逊站点（US, UK, DE, FR, JP, AU, CA, IT, ES, AE, SA）"
     )
     
     # 产品数量

@@ -20,6 +20,7 @@
     "https://*.amazon.fr/*",
     "https://*.amazon.co.jp/*",
     "https://*.amazon.com.au/*",
+    "https://*.amazon.ca/*",
     "https://98kamz.com/*",
     "https://*.98kamz.com/*",
     "http://115.191.30.209/*",
@@ -62,7 +63,8 @@
         "https://*.amazon.de/*",
         "https://*.amazon.fr/*",
         "https://*.amazon.co.jp/*",
-        "https://*.amazon.com.au/*"
+        "https://*.amazon.com.au/*",
+        "https://*.amazon.ca/*"
       ],
       "js": ["src/content/content.js"],
       "css": ["src/content/overlay.css"],
@@ -85,7 +87,8 @@
         "https://*.amazon.de/*",
         "https://*.amazon.fr/*",
         "https://*.amazon.co.jp/*",
-        "https://*.amazon.com.au/*"
+        "https://*.amazon.com.au/*",
+        "https://*.amazon.ca/*"
       ]
     }
   ]

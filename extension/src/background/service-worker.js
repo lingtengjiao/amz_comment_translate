@@ -465,7 +465,8 @@ function getAmazonDomain(marketplace) {
     'DE': 'amazon.de',
     'FR': 'amazon.fr',
     'JP': 'amazon.co.jp',
-    'AU': 'amazon.com.au'
+    'AU': 'amazon.com.au',
+    'CA': 'amazon.ca'
   };
   return domainMap[marketplace] || 'amazon.com';
 }
@@ -480,6 +481,7 @@ function extractMarketplaceFromUrl(url) {
   if (url.includes('.fr')) return 'FR';
   if (url.includes('.co.jp')) return 'JP';
   if (url.includes('.com.au')) return 'AU';
+  if (url.includes('.ca')) return 'CA';
   return 'US';
 }
 
@@ -1215,6 +1217,7 @@ async function collectReviewsWithTab(asin, stars, pagesPerStar, mediaType, speed
             else if (url.includes('.fr')) detectedMarketplace = 'FR';
             else if (url.includes('.co.jp')) detectedMarketplace = 'JP';
             else if (url.includes('.com.au')) detectedMarketplace = 'AU';
+            else if (url.includes('.ca')) detectedMarketplace = 'CA';
             return { title, imageUrl, averageRating, price, bulletPoints, categories, marketplace: detectedMarketplace };
           }
         });
@@ -2260,6 +2263,7 @@ async function collectReviewsWithTabAuto(asin, stars, pagesPerStar, mediaType, s
           else if (url.includes('.fr')) detectedMarketplace = 'FR';
           else if (url.includes('.co.jp')) detectedMarketplace = 'JP';
           else if (url.includes('.com.au')) detectedMarketplace = 'AU';
+          else if (url.includes('.ca')) detectedMarketplace = 'CA';
 
           return { title, imageUrl, averageRating, price, bulletPoints, categories, marketplace: detectedMarketplace };
         }
