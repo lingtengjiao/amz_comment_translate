@@ -10,9 +10,9 @@
  */
 
 // Backend API configuration
-// 生产环境配置 - 使用 HTTPS 域名
-const API_BASE_URL = 'https://98kamz.com/api/v1';
-const DASHBOARD_URL = 'https://98kamz.com';  // 前端 Dashboard URL
+// 生产环境配置 - 使用 IP 地址（域名审核中）
+const API_BASE_URL = 'http://115.191.30.209/api/v1';
+const DASHBOARD_URL = 'http://115.191.30.209';  // 前端 Dashboard URL
 
 // ==========================================
 // 用户认证状态管理

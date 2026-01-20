@@ -135,7 +135,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   // 配置（与 content.js 保持一致）
   // ==========================================
   const CONFIG = {
-    DASHBOARD_URL: 'https://98kamz.com'  // 生产前端地址
+    DASHBOARD_URL: 'http://115.191.30.209'  // 生产前端地址（域名审核中）
   };
 
   // 设置"进入我的洞察"链接

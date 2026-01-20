@@ -848,20 +848,67 @@ export function ProductBoardSection() {
   const handleDataUpload = async (data: DataUploadResult[]) => {
     if (!collectionId) {
       // 本地模式
-      setProducts((prevProducts) => {
-        return prevProducts.map((product) => {
-          const uploadData = data.find((d) => d.asin === product.asin);
-          if (uploadData) {
-            return {
-              ...product,
-              brand: uploadData.brand || product.brand,
-              year: uploadData.year || product.year,
-              salesCount: uploadData.salesCount || product.salesCount,
-            };
-          }
-          return product;
-        });
+      const updatedLocalProducts = products.map((product) => {
+        const uploadData = data.find((d) => d.asin === product.asin);
+        if (uploadData) {
+          return {
+            ...product,
+            brand: uploadData.brand || product.brand,
+            year: uploadData.year || product.year,
+            salesCount: uploadData.salesCount || product.salesCount,
+            majorCategoryRank: uploadData.majorCategoryRank || product.majorCategoryRank,
+            minorCategoryRank: uploadData.minorCategoryRank || product.minorCategoryRank,
+            majorCategoryName: uploadData.majorCategoryName || product.majorCategoryName,
+            minorCategoryName: uploadData.minorCategoryName || product.minorCategoryName,
+          };
+        }
+        return product;
       });
+      
+      setProducts(updatedLocalProducts);
+      
+      // 自动更新品牌分组
+      const newLocalBrands = new Set<string>();
+      updatedLocalProducts.forEach(p => {
+        if (p.brand && p.brand.trim() !== '') {
+          newLocalBrands.add(p.brand);
+        }
+      });
+      
+      if (newLocalBrands.size > 0) {
+        setBrandRanges(prevRanges => {
+          const existingBrands = new Set<string>();
+          prevRanges.forEach(range => {
+            range.brands.forEach(brand => existingBrands.add(brand));
+          });
+          
+          const brandsToAdd: string[] = [];
+          newLocalBrands.forEach(brand => {
+            if (!existingBrands.has(brand)) {
+              brandsToAdd.push(brand);
+            }
+          });
+          
+          if (brandsToAdd.length === 0) return prevRanges;
+          
+          const newRanges = brandsToAdd.map(brand => ({
+            id: `brand-${brand.toLowerCase().replace(/\s+/g, '-')}-${Date.now()}`,
+            name: brand,
+            brands: [brand],
+          }));
+          
+          const otherIndex = prevRanges.findIndex(r => r.id === 'brand-other' || r.name === '其他品牌');
+          if (otherIndex >= 0) {
+            return [
+              ...prevRanges.slice(0, otherIndex),
+              ...newRanges,
+              ...prevRanges.slice(otherIndex),
+            ];
+          }
+          return [...prevRanges, ...newRanges];
+        });
+      }
+      
       setIsDataUploadOpen(false);
       toast.success('数据上传成功');
       return;
@@ -884,20 +931,76 @@ export function ProductBoardSection() {
       const result = await apiService.batchUpdateCollectionProducts(collectionId, batchData);
       
       // 更新本地状态
-      setProducts((prevProducts) => {
-        return prevProducts.map((product) => {
-          const uploadData = data.find((d) => d.asin === product.asin);
-          if (uploadData) {
-            return {
-              ...product,
-              brand: uploadData.brand || product.brand,
-              year: uploadData.year || product.year,
-              salesCount: uploadData.salesCount || product.salesCount,
-            };
-          }
-          return product;
-        });
+      const updatedProducts = products.map((product) => {
+        const uploadData = data.find((d) => d.asin === product.asin);
+        if (uploadData) {
+          return {
+            ...product,
+            brand: uploadData.brand || product.brand,
+            year: uploadData.year || product.year,
+            salesCount: uploadData.salesCount || product.salesCount,
+            majorCategoryRank: uploadData.majorCategoryRank || product.majorCategoryRank,
+            minorCategoryRank: uploadData.minorCategoryRank || product.minorCategoryRank,
+            majorCategoryName: uploadData.majorCategoryName || product.majorCategoryName,
+            minorCategoryName: uploadData.minorCategoryName || product.minorCategoryName,
+          };
+        }
+        return product;
       });
+      
+      setProducts(updatedProducts);
+      
+      // 自动更新品牌分组：检测新上传的品牌并添加到分组中
+      const newBrands = new Set<string>();
+      updatedProducts.forEach(p => {
+        if (p.brand && p.brand.trim() !== '') {
+          newBrands.add(p.brand);
+        }
+      });
+      
+      if (newBrands.size > 0) {
+        setBrandRanges(prevRanges => {
+          // 获取已存在的品牌列表
+          const existingBrands = new Set<string>();
+          prevRanges.forEach(range => {
+            range.brands.forEach(brand => existingBrands.add(brand));
+          });
+          
+          // 找出新增的品牌（不在任何分组中的品牌）
+          const brandsToAdd: string[] = [];
+          newBrands.forEach(brand => {
+            if (!existingBrands.has(brand)) {
+              brandsToAdd.push(brand);
+            }
+          });
+          
+          if (brandsToAdd.length === 0) {
+            return prevRanges; // 没有新品牌，不更新
+          }
+          
+          // 为新品牌创建分组
+          const newRanges = brandsToAdd.map(brand => ({
+            id: `brand-${brand.toLowerCase().replace(/\s+/g, '-')}-${Date.now()}`,
+            name: brand,
+            brands: [brand],
+          }));
+          
+          // 找到"其他品牌"分组的位置，在其前面插入新分组
+          const otherIndex = prevRanges.findIndex(r => r.id === 'brand-other' || r.name === '其他品牌');
+          if (otherIndex >= 0) {
+            return [
+              ...prevRanges.slice(0, otherIndex),
+              ...newRanges,
+              ...prevRanges.slice(otherIndex),
+            ];
+          }
+          
+          // 如果没有"其他品牌"分组，直接追加
+          return [...prevRanges, ...newRanges];
+        });
+        
+        console.log('[ProductBoard] 品牌分组已自动更新，新增品牌:', Array.from(newBrands));
+      }
 
       setIsDataUploadOpen(false);
       
