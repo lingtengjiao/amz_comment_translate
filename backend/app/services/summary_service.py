@@ -1177,26 +1177,34 @@ class SummaryService:
                 
                 # 构建模块专用 Prompt（加强格式约束）
                 fields_format_hint = self._get_fields_format_hint(module['fields'])
+                
+                # 只列出当前模块需要的数组字段，避免混淆
+                array_fields_in_module = [f for f in module['fields'] if f in [
+                    'user_profile', 'user_research', 'selling_points', 'critical_bugs',
+                    'market_fit_analysis', 'department_directives', 'priority_actions',
+                    'marketing_risks', 'unmet_needs', 'usability_issues', 'design_recommendations'
+                ]]
+                array_hint = f"这些字段必须是数组格式: {', '.join(array_fields_in_module)}" if array_fields_in_module else ""
+                
                 module_prompt = f"""基于以下数据，只生成 {module['desc']} 部分的 JSON。
 
 # 输入数据
 {stats_text}
 
 # 输出格式要求（必须严格遵守）
-1. 只输出 JSON 格式，不要任何解释文字
-2. 只生成这些字段: {', '.join(module['fields'])}
-3. **重要**: 以下字段必须是数组格式 [{{...}}, {{...}}]，即使只有一条数据：
-   - usage_context_analysis, material_defects, packaging_issues, missing_parts
-   - supplier_issues, return_rate_factors, qc_checklist, assembly_defects
-   - user_profile, user_research, selling_points, critical_bugs
-4. 每个对象必须包含:
-   - "insight" 或 "issue": 主要内容描述
+1. 只输出纯 JSON 格式，不要任何解释文字或 markdown 标记
+2. **只生成这些字段**: {', '.join(module['fields'])}，不要生成任何其他字段
+3. {array_hint}
+4. 每个数组中的对象必须包含:
+   - "insight": 主要内容描述（中文）
    - "confidence": "high" | "medium" | "low"
-   - "evidence": [{{ "review_id": null, "quote": "引用原文" }}]
-5. 使用中文
+   - "evidence": [{{"review_id": null, "quote": "引用用户原文"}}]
+5. 必须使用中文输出
+6. 必须基于输入数据中的实际内容生成洞察，不要凭空捏造
+
 {fields_format_hint}
 
-请直接输出 JSON:"""
+请直接输出 JSON（只包含 {', '.join(module['fields'])} 字段）:"""
 
                 response = translation_service.client.chat.completions.create(
                     model="qwen-plus",  # 使用 qwen-plus，速度更快
@@ -1290,11 +1298,15 @@ class SummaryService:
 ]''',
             # ========== 综合报告字段 ==========
             "user_profile": '''
-# user_profile 格式示例（必须是数组）:
+# user_profile 格式示例（必须是数组，从 Buyer 和 User 数据中提取用户画像）:
+# 重要：必须基于输入数据中的 Buyer（购买者）和 User（使用者）标签生成洞察
 "user_profile": [
-  {"insight": "购买者画像描述...", "confidence": "high", "evidence": [...]},
-  {"insight": "使用者特征...", "confidence": "medium", "evidence": [...]}
-]''',
+  {"insight": "核心购买者是XXX，购买动机是XXX...", "type": "buyer", "confidence": "high", "evidence": [{"review_id": null, "quote": "用户原文引用..."}]},
+  {"insight": "主要使用者是XXX，使用场景是XXX...", "type": "user", "confidence": "high", "evidence": [{"review_id": null, "quote": "用户原文引用..."}]},
+  {"insight": "典型使用场景是XXX时在XXX使用...", "type": "scenario", "confidence": "medium", "evidence": [{"review_id": null, "quote": "用户原文引用..."}]},
+  {"insight": "购买动机主要是XXX...", "type": "motivation", "confidence": "medium", "evidence": [{"review_id": null, "quote": "用户原文引用..."}]}
+]
+# 注意：至少生成 3-5 条用户画像洞察，涵盖 buyer（购买者）、user（使用者）、scenario（场景）、motivation（动机）''',
             "strategic_verdict": '''
 # strategic_verdict 格式示例（字符串）:
 "strategic_verdict": "战略定调描述文本..."''',

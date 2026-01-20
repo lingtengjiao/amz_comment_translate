@@ -718,7 +718,7 @@ async def get_product_stats(
         # [FIXED] 翻译进度：已翻译 + 已跳过 = 已处理（避免 skipped 评论导致无限循环）
         translated = product_data.get("translated_reviews", 0)
         
-        # 查询 skipped 评论数量
+        # 查询 skipped 和 failed 评论数量（都算作已处理，避免前端无限轮询）
         skipped_result = await db.execute(
             select(func.count(Review.id)).where(
                 and_(
@@ -730,8 +730,20 @@ async def get_product_stats(
         )
         skipped_count = skipped_result.scalar() or 0
         
-        # 已处理 = 已翻译 + 已跳过
-        processed = translated + skipped_count
+        # 查询 failed 评论数量
+        failed_result = await db.execute(
+            select(func.count(Review.id)).where(
+                and_(
+                    Review.product_id == product.id,
+                    Review.translation_status == TranslationStatus.FAILED.value,
+                    Review.is_deleted == False
+                )
+            )
+        )
+        failed_count = failed_result.scalar() or 0
+        
+        # 已处理 = 已翻译 + 已跳过 + 已失败（避免 failed 评论导致前端无限轮询）
+        processed = translated + skipped_count + failed_count
         trans_progress = int((processed / total) * 100)
         active_tasks.translation_progress = min(100, trans_progress)
         active_tasks.translation = ActiveTaskStatus.COMPLETED if trans_progress >= 100 else (
