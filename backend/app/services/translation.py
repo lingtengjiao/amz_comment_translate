@@ -1847,22 +1847,22 @@ class TranslationService:
                     # 将旧格式转换为新格式（全部作为产品维度，使用默认场景和情绪维度）
                     if isinstance(dimension_schema, list) and len(dimension_schema) > 0:
                         product_schema_str = "\n".join([
-                    f"- {d['name']}: {d.get('description', '无具体定义')}" 
-                    for d in dimension_schema
-                ])
+                            f"- {d['name']}: {d.get('description', '无具体定义')}" 
+                            for d in dimension_schema
+                        ])
                         scenario_schema_str = "- 日常使用: 通用场景维度\n- 工作办公: 办公场景\n- 户外出行: 户外场景"
                         emotion_schema_str = "- 惊喜好评: 超出预期的正面情绪\n- 失望不满: 期望落空的负面情绪\n- 感激推荐: 感谢并推荐"
                         
-                prompt = INSIGHT_EXTRACTION_PROMPT_DYNAMIC.format(
-                    original_text=original_text,
+                        prompt = INSIGHT_EXTRACTION_PROMPT_DYNAMIC.format(
+                            original_text=original_text,
                             product_schema_str=product_schema_str,
                             scenario_schema_str=scenario_schema_str,
                             emotion_schema_str=emotion_schema_str
-                )
+                        )
                         logger.debug(f"[跨语言洞察] 旧格式维度已转换，共 {len(dimension_schema)} 个产品维度")
-            else:
+                    else:
                         # 维度列表为空，使用无维度 Prompt
-                prompt = INSIGHT_EXTRACTION_PROMPT.format(
+                        prompt = INSIGHT_EXTRACTION_PROMPT.format(
                             original_text=original_text
                         )
             else:

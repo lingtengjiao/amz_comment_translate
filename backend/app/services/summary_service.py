@@ -918,7 +918,7 @@ class SummaryService:
                         "report_type_config": type_config.to_dict(),
                         "error": None,
                         "is_cached": True  # 标记为缓存结果
-                }
+                    }
             
             # 1. 获取产品信息
             product = await self._get_product(product_id)
@@ -1004,7 +1004,7 @@ class SummaryService:
                         },
                         "report_type_config": type_config.to_dict(),
                         "error": f"主题提取未完成（{theme_count}/{total_reviews}，{theme_completion:.1%}）。请等待主题提取完成后再生成报告。"
-                }
+                    }
             
             # 3. 聚合原始数据 (Raw Data) - ECharts 格式
             context_stats = await self._aggregate_5w_stats(product_id)

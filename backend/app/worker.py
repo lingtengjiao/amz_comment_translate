@@ -1258,6 +1258,7 @@ def task_extract_insights(self, product_id: str):
                 db.commit()
                 logger.info(f"[并行入库] 已提交 {len(pending_insights)} 条洞察（进度: {processed}/{reviews_to_process}）")
                 pending_insights = []
+                # 注：缓存通过 API 层 2 秒 TTL 自动过期，无需在此处手动清除
             
             # 更新 Task 进度
             if task_record:
@@ -1700,6 +1701,7 @@ def task_extract_themes(self, product_id: str):
                 db.commit()
                 logger.info(f"[并行入库] 已提交 {len(pending_themes)} 条主题（进度: {processed}/{total_reviews}）")
                 pending_themes = []
+                # 注：缓存通过 API 层 2 秒 TTL 自动过期，无需在此处手动清除
             
             # 更新 Task 进度
             if task_record:

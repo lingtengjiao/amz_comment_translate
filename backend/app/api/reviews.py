@@ -770,8 +770,8 @@ async def get_product_stats(
         active_tasks.insights == ActiveTaskStatus.COMPLETED and 
         active_tasks.themes == ActiveTaskStatus.COMPLETED
     )
-    # 任务全完成: 缓存 5 分钟，否则缓存 30 秒（减少重复查询但及时更新进度）
-    cache_ttl = 300 if all_completed else 30
+    # 任务全完成: 缓存 5 分钟，否则缓存 2 秒（与前端轮询频率匹配，确保实时进度更新）
+    cache_ttl = 300 if all_completed else 2
     await cache.set(f"cache:stats:{asin}:overview", stats_dict, ttl=cache_ttl)
     logger.debug(f"[Cache SET] Stats for {asin} (ttl={cache_ttl}s)")
     
