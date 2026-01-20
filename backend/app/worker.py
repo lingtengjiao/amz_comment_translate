@@ -1857,6 +1857,7 @@ def task_ingest_translation_only(self, product_id: str):
     logger.info(f"[流式翻译] 开始处理产品 {product_id}")
     
     db = get_sync_db()
+    product_asin = None  # 用于 finally 中释放锁
     
     try:
         # 1. 获取产品信息
@@ -1868,6 +1869,8 @@ def task_ingest_translation_only(self, product_id: str):
         if not product:
             logger.error(f"[流式翻译] 产品 {product_id} 不存在")
             return {"success": False, "error": "Product not found"}
+        
+        product_asin = product.asin  # 保存 asin 用于释放锁
         
         # 2. 翻译产品标题（如果未翻译）
         if product.title and not product.title_translated:
@@ -2094,6 +2097,16 @@ def task_ingest_translation_only(self, product_id: str):
     finally:
         db.close()
         # 🔒 PostgreSQL 行级锁会在事务结束时自动释放
+        
+        # 🔓 释放 Redis 翻译任务锁，允许后续新评论触发翻译
+        if product_asin:
+            try:
+                from app.core.redis import get_sync_redis
+                redis_client = get_sync_redis()
+                redis_client.delete(f"lock:translation:{product_asin}")
+                logger.debug(f"[流式翻译] 已释放产品 {product_asin} 的翻译锁")
+            except Exception as e:
+                logger.warning(f"[流式翻译] 释放翻译锁失败: {e}")
 
 
 # ============== [NEW] 任务6: 科学学习与全量回填 ==============
@@ -3122,9 +3135,21 @@ def task_process_ingestion_queue(self):
             f"新增 {total_inserted} 条, 跳过 {total_skipped} 条"
         )
         
-        # Step 4: 为有新数据的产品触发翻译
+        # Step 4: 为有新数据的产品触发翻译（使用 Redis 锁防止重复触发）
+        from app.core.redis import get_sync_redis
+        redis_client = get_sync_redis()
+        
         for asin, result in results.items():
             if result.get("inserted", 0) > 0:
+                # 使用 Redis SETNX 实现分布式锁，防止同一产品重复触发翻译任务
+                # 锁有效期 5 分钟（翻译任务通常在几分钟内完成）
+                lock_key = f"lock:translation:{asin}"
+                lock_acquired = redis_client.set(lock_key, "1", nx=True, ex=300)
+                
+                if not lock_acquired:
+                    logger.debug(f"[Ingestion] 产品 {asin} 翻译任务已在运行中，跳过触发")
+                    continue
+                
                 # 获取 product_id
                 from app.models.product import Product
                 product_result = db.execute(
