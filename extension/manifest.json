@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "VOC-Master: Amazon Review Collector",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "Collect Amazon product reviews for translation and analysis. 采集亚马逊商品评论，智能翻译分析。",
   "author": "VOC-Master Team",
   
@@ -61,6 +61,14 @@
       "js": ["src/content/content.js"],
       "css": ["src/content/overlay.css"],
       "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://98kamz.com/*",
+        "https://*.98kamz.com/*"
+      ],
+      "js": ["src/content/auth-sync.js"],
+      "run_at": "document_start"
     }
   ],
   

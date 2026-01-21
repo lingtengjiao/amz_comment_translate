@@ -59,6 +59,41 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setIsLoading(false);
   }, []);
 
+  // [NEW] 监听插件同步事件
+  useEffect(() => {
+    // 监听插件登录同步
+    const handleAuthSynced = (event: CustomEvent) => {
+      console.log('[AuthContext] Received auth sync from extension:', event.detail);
+      const savedToken = localStorage.getItem(TOKEN_KEY);
+      const savedUser = localStorage.getItem(USER_KEY);
+      
+      if (savedToken && savedUser) {
+        try {
+          setToken(savedToken);
+          setUser(JSON.parse(savedUser));
+          console.log('[AuthContext] State updated from extension sync');
+        } catch (e) {
+          console.error('[AuthContext] Failed to parse synced user data');
+        }
+      }
+    };
+    
+    // 监听插件登出同步
+    const handleAuthLogout = () => {
+      console.log('[AuthContext] Received logout sync from extension');
+      setToken(null);
+      setUser(null);
+    };
+    
+    window.addEventListener('voc-auth-synced', handleAuthSynced as EventListener);
+    window.addEventListener('voc-auth-logout', handleAuthLogout);
+    
+    return () => {
+      window.removeEventListener('voc-auth-synced', handleAuthSynced as EventListener);
+      window.removeEventListener('voc-auth-logout', handleAuthLogout);
+    };
+  }, []);
+
   // 获取带认证头的 headers
   function getAuthHeaders(): HeadersInit {
     const headers: HeadersInit = {
@@ -97,6 +132,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         // 追踪登录事件
         trackFeature('user_login', { email: data.user.email });
         
+        // [NEW] 触发自定义事件通知 content script（如果有）
+        window.dispatchEvent(new CustomEvent('voc-web-login', {
+          detail: { user: data.user }
+        }));
+        
         // 尝试通知 Chrome 插件（如果已安装）
         notifyExtension(data.access_token, data.user);
         
@@ -121,6 +161,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(null);
     localStorage.removeItem(TOKEN_KEY);
     localStorage.removeItem(USER_KEY);
+    
+    // [NEW] 触发自定义事件通知 content script
+    window.dispatchEvent(new CustomEvent('voc-web-logout'));
     
     // 通知插件登出
     notifyExtensionLogout();

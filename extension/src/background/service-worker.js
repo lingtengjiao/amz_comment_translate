@@ -244,6 +244,10 @@ async function login(email, password) {
     startTokenExpiryCheck();
     
     console.log('[Auth] Login success:', authState.user.email);
+    
+    // [NEW] 同步登录状态到所有打开的网页
+    syncAuthToWebPages();
+    
     return { success: true, user: data.user };
   } catch (error) {
     console.error('[Auth] Login failed:', error.message);
@@ -255,7 +259,61 @@ async function login(email, password) {
 async function logout() {
   await clearAuthState();
   console.log('[Auth] Logged out');
+  
+  // [NEW] 同步登出状态到所有打开的网页
+  syncLogoutToWebPages();
+  
   return { success: true };
+}
+
+// [NEW] 同步登录状态到所有打开的网页（98kamz.com）
+async function syncAuthToWebPages() {
+  try {
+    const tabs = await chrome.tabs.query({
+      url: ['https://98kamz.com/*', 'https://*.98kamz.com/*']
+    });
+    
+    console.log('[Auth] Syncing to', tabs.length, 'web tabs');
+    
+    for (const tab of tabs) {
+      try {
+        await chrome.tabs.sendMessage(tab.id, {
+          type: 'EXTENSION_AUTH_LOGIN',
+          token: authState.token,
+          user: authState.user
+        });
+        console.log('[Auth] Synced to tab:', tab.id);
+      } catch (e) {
+        // 标签页可能没有加载 content script
+        console.log('[Auth] Could not sync to tab:', tab.id, e.message);
+      }
+    }
+  } catch (e) {
+    console.error('[Auth] Failed to sync to web pages:', e);
+  }
+}
+
+// [NEW] 同步登出状态到所有打开的网页
+async function syncLogoutToWebPages() {
+  try {
+    const tabs = await chrome.tabs.query({
+      url: ['https://98kamz.com/*', 'https://*.98kamz.com/*']
+    });
+    
+    console.log('[Auth] Syncing logout to', tabs.length, 'web tabs');
+    
+    for (const tab of tabs) {
+      try {
+        await chrome.tabs.sendMessage(tab.id, {
+          type: 'EXTENSION_AUTH_LOGOUT'
+        });
+      } catch (e) {
+        // Ignore errors
+      }
+    }
+  } catch (e) {
+    console.error('[Auth] Failed to sync logout to web pages:', e);
+  }
 }
 
 // 验证 Token
@@ -1759,6 +1817,21 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         isLoggedIn: authState.isLoggedIn,
         user: authState.user
       });
+      break;
+    
+    case 'AUTH_GET_TOKEN':
+      // [NEW] 获取当前 token（用于同步到网页）
+      if (authState.isLoggedIn && authState.token) {
+        sendResponse({
+          success: true,
+          token: authState.token
+        });
+      } else {
+        sendResponse({
+          success: false,
+          error: 'Not logged in'
+        });
+      }
       break;
     
     case 'AUTH_VERIFY':

@@ -17,6 +17,7 @@ const AnalysisResultPage = lazy(() => import('./components/AnalysisResultPage').
 const AnalyticsDashboard = lazy(() => import('./components/analytics/AnalyticsDashboard').then(m => ({ default: m.default })));
 const ProductBoardPage = lazy(() => import('./components/product-board/ProductBoardPage').then(m => ({ default: m.default })));
 const RufusDetailPage = lazy(() => import('./components/rufus/RufusDetailPage').then(m => ({ default: m.default })));
+const PrivacyPolicyPage = lazy(() => import('./components/PrivacyPolicyPage').then(m => ({ default: m.default })));
 
 // Loading fallback component
 function LoadingFallback() {
@@ -37,8 +38,9 @@ export default function App() {
         <BrowserRouter>
           <Suspense fallback={<LoadingFallback />}>
             <Routes>
-              {/* 登录页 - 无需认证 */}
+              {/* 公开页面 - 无需认证 */}
               <Route path="/login" element={<LoginPage />} />
+              <Route path="/docs/PRIVACY" element={<PrivacyPolicyPage />} />
               
               {/* 受保护的路由 - 需要登录 */}
               <Route path="/" element={<Navigate to="/home/home" replace />} />
