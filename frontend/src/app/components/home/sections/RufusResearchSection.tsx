@@ -26,6 +26,7 @@ import {
 import { toast } from 'sonner';
 import { getRufusSessions, deleteRufusSession, updateRufusSession, type RufusSessionGroup, type RufusSessionSummary } from '../../../../api/service';
 import { RufusEditDialog } from '../dialogs/RufusEditDialog';
+import { useSectionCache } from '../../../hooks/useSectionCache';
 
 // Tab 配置 - 顺序：产品调研 → 关键词调研 → 首页调研
 const TABS = [
@@ -37,32 +38,18 @@ const TABS = [
 export function RufusResearchSection() {
   const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState<string>('product_detail');
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [sessionGroups, setSessionGroups] = useState<RufusSessionGroup[]>([]);
   const [editingSession, setEditingSession] = useState<RufusSessionSummary | null>(null);
 
-  // 获取会话列表
-  const fetchSessions = async () => {
-    setLoading(true);
-    setError(null);
-    try {
+  // 使用缓存获取会话列表
+  const { data, loading, error, refetch } = useSectionCache<{ groups: RufusSessionGroup[] }>(
+    'rufus_sessions',
+    async () => {
       const response = await getRufusSessions();
-      setSessionGroups(response.groups || []);
-    } catch (err) {
-      console.error('Failed to fetch Rufus sessions:', err);
-      const errorMsg = err instanceof Error ? err.message : '加载会话列表失败';
-      setError(`加载失败：${errorMsg}。请检查后端服务是否正常运行。`);
-      // 设置空数组，确保组件能正常渲染
-      setSessionGroups([]);
-    } finally {
-      setLoading(false);
+      return { groups: response.groups || [] };
     }
-  };
-
-  useEffect(() => {
-    fetchSessions();
-  }, []);
+  );
+  
+  const sessionGroups = data?.groups || [];
 
   // 获取当前 Tab 的会话列表
   const currentSessions = sessionGroups.find(g => g.page_type === activeTab)?.sessions || [];
@@ -102,7 +89,7 @@ export function RufusResearchSection() {
     try {
       await deleteRufusSession(session.session_id);
       toast.success('删除成功');
-      fetchSessions(); // 重新加载
+      refetch(); // 重新加载
     } catch (err: any) {
       toast.error('删除失败: ' + (err?.message || '未知错误'));
     }
@@ -117,7 +104,7 @@ export function RufusResearchSection() {
   // 保存编辑
   const handleSaveEdit = async (sessionId: string, data: { product_title?: string; keyword?: string; product_image?: string }) => {
     await updateRufusSession(sessionId, data);
-    fetchSessions(); // 重新加载
+    refetch(); // 重新加载
   };
 
   return (
@@ -162,7 +149,7 @@ export function RufusResearchSection() {
           
           {/* 刷新按钮 */}
           <button
-            onClick={fetchSessions}
+            onClick={() => refetch()}
             disabled={loading}
             className="ml-auto p-2 rounded-lg text-slate-500 hover:text-slate-700 hover:bg-white transition-all"
             title="刷新"
@@ -181,7 +168,7 @@ export function RufusResearchSection() {
         <div className="text-center py-20">
           <p className="text-red-500 mb-4">{error}</p>
           <button
-            onClick={fetchSessions}
+            onClick={() => refetch()}
             className="px-4 py-2 bg-rose-500 text-white rounded-lg hover:bg-rose-600 transition-colors"
           >
             重试

@@ -9,12 +9,10 @@ import { Card, CardContent } from '../../ui/card';
 import { ImageWithFallback } from '../../figma/ImageWithFallback';
 import apiService, { type GroupedCollection, type KeywordCollection } from '../../../../api/service';
 import { CollectionDetailDialog } from '../dialogs/CollectionDetailDialog';
+import { useSectionCache } from '../../../hooks/useSectionCache';
 
 export function KeywordCollectionsSection() {
   const navigate = useNavigate();
-  const [groups, setGroups] = useState<GroupedCollection[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [expandedKeywords, setExpandedKeywords] = useState<Set<string>>(new Set());
   
@@ -22,24 +20,16 @@ export function KeywordCollectionsSection() {
   const [selectedCollection, setSelectedCollection] = useState<KeywordCollection | null>(null);
   const [detailDialogOpen, setDetailDialogOpen] = useState(false);
 
-  // 加载数据
-  useEffect(() => {
-    loadCollections();
-  }, []);
-
-  const loadCollections = async () => {
-    setLoading(true);
-    setError(null);
-    try {
+  // 使用缓存加载数据
+  const { data, loading, error, refetch } = useSectionCache<{ groups: GroupedCollection[] }>(
+    'keyword_collections',
+    async () => {
       const response = await apiService.getKeywordCollectionsGrouped();
-      setGroups(response.groups || []);
-    } catch (err: any) {
-      console.error('[KeywordCollections] 加载失败:', err);
-      setError(err?.message || '加载失败');
-    } finally {
-      setLoading(false);
+      return { groups: response.groups || [] };
     }
-  };
+  );
+  
+  const groups = data?.groups || [];
 
   // 删除快照
   const handleDeleteSnapshot = async (collectionId: string, keyword: string, e: React.MouseEvent) => {
@@ -49,7 +39,7 @@ export function KeywordCollectionsSection() {
     try {
       await apiService.deleteKeywordCollection(collectionId);
       toast.success('快照已删除');
-      loadCollections(); // 重新加载
+      refetch(); // 重新加载
     } catch (err: any) {
       toast.error('删除失败: ' + (err?.message || '未知错误'));
     }

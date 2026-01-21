@@ -13,6 +13,7 @@ import { AnalysisModal, AnalysisType } from '../../AnalysisModal';
 import { ProductSelectDialog } from '../dialogs/ProductSelectDialog';
 import { useHome } from '../HomeContext';
 import apiService from '../../../../api/service';
+import { useSectionCache } from '../../../hooks/useSectionCache';
 
 interface AnalysisProjectItem {
   id: string;
@@ -38,17 +39,24 @@ interface AnalysisProject {
 export function MarketInsightSection() {
   const navigate = useNavigate();
   const { setShowProductSelectDialog, setCompareProducts } = useHome();
-  const [projects, setProjects] = useState<AnalysisProject[]>([]);
-  const [loading, setLoading] = useState(true);
+  
+  // 使用缓存加载项目列表
+  const { data: projectsData, loading, refetch } = useSectionCache<{ projects: AnalysisProject[] }>(
+    'market_insight_projects',
+    async () => {
+      const response = await apiService.getAnalysisProjects({ my_only: true });
+      const marketInsightProjects = (response.projects || []).filter(
+        (p: AnalysisProject) => p.analysis_type === 'market_insight'
+      );
+      return { projects: marketInsightProjects };
+    }
+  );
+  
+  const projects = projectsData?.projects || [];
 
   // 分析弹窗状态
   const [showAnalysisModal, setShowAnalysisModal] = useState(false);
   const [selectedProductIds, setSelectedProductIds] = useState<string[]>([]);
-
-  // 加载市场洞察项目列表（只显示 market_insight 类型的项目）
-  useEffect(() => {
-    loadProjects();
-  }, []);
 
   // 打开产品选择弹窗
   const handleOpenProductSelect = () => {
@@ -136,8 +144,8 @@ export function MarketInsightSection() {
         setSelectedProductIds([]);
         setCompareProducts([]);
         
-        // 刷新项目列表
-        loadProjects();
+        // 刷新项目列表（清除缓存并重新加载）
+        refetch();
       } else {
         throw new Error(result.error || '创建失败');
       }
@@ -147,22 +155,6 @@ export function MarketInsightSection() {
     }
   };
 
-  const loadProjects = async () => {
-    setLoading(true);
-    try {
-      // 只获取当前用户创建的市场洞察项目
-      const response = await apiService.getAnalysisProjects({ my_only: true });
-      // 只显示市场洞察类型的项目
-      const marketInsightProjects = (response.projects || []).filter(
-        (p: AnalysisProject) => p.analysis_type === 'market_insight'
-      );
-      setProjects(marketInsightProjects);
-    } catch (err: any) {
-      toast.error('加载失败');
-    } finally {
-      setLoading(false);
-    }
-  };
 
   // 删除项目
   const handleDelete = async (projectId: string, e: React.MouseEvent) => {
@@ -171,7 +163,7 @@ export function MarketInsightSection() {
     
     try {
       await apiService.deleteAnalysisProject(projectId);
-      setProjects(prev => prev.filter(p => p.id !== projectId));
+      refetch(); // 刷新列表
       toast.success('已删除');
     } catch (err: any) {
       toast.error('删除失败');

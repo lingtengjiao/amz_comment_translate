@@ -13,6 +13,7 @@ import { AnalysisModal, AnalysisType } from '../../AnalysisModal';
 import { ProductSelectDialog } from '../dialogs/ProductSelectDialog';
 import { useHome } from '../HomeContext';
 import apiService from '../../../../api/service';
+import { useSectionCache } from '../../../hooks/useSectionCache';
 
 interface AnalysisProjectItem {
   id: string;
@@ -37,17 +38,24 @@ interface AnalysisProject {
 export function AICompareSection() {
   const navigate = useNavigate();
   const { setShowProductSelectDialog, setCompareProducts } = useHome();
-  const [projects, setProjects] = useState<AnalysisProject[]>([]);
-  const [loading, setLoading] = useState(true);
+  
+  // 使用缓存加载项目列表
+  const { data: projectsData, loading, refetch } = useSectionCache<{ projects: AnalysisProject[] }>(
+    'ai_compare_projects',
+    async () => {
+      const response = await apiService.getAnalysisProjects({ my_only: true });
+      const comparisonProjects = (response.projects || []).filter(
+        (p: AnalysisProject) => p.analysis_type === 'comparison'
+      );
+      return { projects: comparisonProjects };
+    }
+  );
+  
+  const projects = projectsData?.projects || [];
 
   // 分析弹窗状态
   const [showAnalysisModal, setShowAnalysisModal] = useState(false);
   const [selectedProductIds, setSelectedProductIds] = useState<string[]>([]);
-
-  // 加载对比项目列表
-  useEffect(() => {
-    loadProjects();
-  }, []);
 
   // 打开产品选择弹窗
   const handleOpenProductSelect = () => {
@@ -99,8 +107,8 @@ export function AICompareSection() {
         setSelectedProductIds([]);
         setCompareProducts([]);
         
-        // 刷新项目列表
-        loadProjects();
+        // 刷新项目列表（清除缓存并重新加载）
+        refetch();
       } else {
         throw new Error(result.error || '创建失败');
       }
@@ -110,22 +118,6 @@ export function AICompareSection() {
     }
   };
 
-  const loadProjects = async () => {
-    setLoading(true);
-    try {
-      // 只获取当前用户创建的对比分析项目
-      const response = await apiService.getAnalysisProjects({ my_only: true });
-      // 过滤出对比分析类型的项目（排除市场洞察类型）
-      const comparisonProjects = (response.projects || []).filter(
-        (p: AnalysisProject) => p.analysis_type !== 'market_insight'
-      );
-      setProjects(comparisonProjects);
-    } catch (err: any) {
-      toast.error('加载失败');
-    } finally {
-      setLoading(false);
-    }
-  };
 
   // 删除项目
   const handleDelete = async (projectId: string, e: React.MouseEvent) => {
@@ -134,7 +126,8 @@ export function AICompareSection() {
     
     try {
       await apiService.deleteAnalysisProject(projectId);
-      setProjects(prev => prev.filter(p => p.id !== projectId));
+      // 刷新项目列表
+      refetch();
       toast.success('已删除');
     } catch (err: any) {
       toast.error('删除失败');
