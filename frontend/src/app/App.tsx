@@ -16,6 +16,7 @@ const WorkbenchPage = lazy(() => import('./components/WorkbenchPage').then(m => 
 const AnalysisResultPage = lazy(() => import('./components/AnalysisResultPage').then(m => ({ default: m.default })));
 const AnalyticsDashboard = lazy(() => import('./components/analytics/AnalyticsDashboard').then(m => ({ default: m.default })));
 const ProductBoardPage = lazy(() => import('./components/product-board/ProductBoardPage').then(m => ({ default: m.default })));
+const RufusDetailPage = lazy(() => import('./components/rufus/RufusDetailPage').then(m => ({ default: m.default })));
 
 // Loading fallback component
 function LoadingFallback() {
@@ -49,6 +50,7 @@ export default function App() {
               <Route path="/report/:asin" element={<ProtectedRoute><ReportPage /></ProtectedRoute>} />
               <Route path="/report/:asin/:reportId" element={<ProtectedRoute><ReportPage /></ProtectedRoute>} />
               <Route path="/product-board/:collectionId" element={<ProtectedRoute><ProductBoardPage /></ProtectedRoute>} />
+              <Route path="/rufus/session/:sessionId" element={<ProtectedRoute><RufusDetailPage /></ProtectedRoute>} />
               
               {/* 管理员专属路由 */}
               <Route path="/analytics" element={<AdminRoute><AnalyticsDashboard /></AdminRoute>} />

@@ -11,7 +11,9 @@ import {
   Database,
   LogOut,
   PanelLeftClose,
-  PanelLeftOpen
+  PanelLeftOpen,
+  Calculator,
+  Bot
 } from 'lucide-react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { EyeIcon } from '../EyeIcon';
@@ -31,7 +33,7 @@ export function HomeSidebar() {
   } = useHome();
 
   // 从 URL 获取当前激活的 section
-  const validSections: AppSection[] = ['home', 'my-projects', 'product-center', 'ai-compare', 'market-insight', 'reports', 'keyword-collections'];
+  const validSections: AppSection[] = ['home', 'my-projects', 'product-center', 'ai-compare', 'market-insight', 'reports', 'keyword-collections', 'profit-calculator', 'rufus-research'];
   const activeSection: AppSection = section && validSections.includes(section as AppSection) 
     ? (section as AppSection) 
     : 'home';
@@ -43,6 +45,8 @@ export function HomeSidebar() {
     { id: 'keyword-collections', label: '市场格局分析', icon: Database },
     { id: 'ai-compare', label: '竞品对比分析', icon: Brain },
     { id: 'market-insight', label: '市场品类分析', icon: TrendingUp },
+    { id: 'rufus-research', label: 'Rufus 调研', icon: Bot },
+    // { id: 'profit-calculator', label: '毛利计算', icon: Calculator },  // 暂时隐藏
     { id: 'reports', label: '报告库', icon: FileText },
   ];
 

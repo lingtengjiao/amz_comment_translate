@@ -1346,6 +1346,13 @@ const apiService = {
   batchUpdateCollectionProducts,
   saveBoardConfig,
   saveViewConfig,
+  
+  // [NEW] Rufus 调研
+  getRufusSessions,
+  getRufusSessionDetail,
+  generateRufusSummary,
+  deleteRufusSession,
+  updateRufusSession,
 };
 
 // ============== 用户项目 API ==============
@@ -1683,6 +1690,198 @@ async function saveViewConfig(
     }
   );
   return result.data;
+}
+
+// ============== Rufus 调研 API ==============
+
+export interface RufusSessionSummary {
+  session_id: string;
+  page_type: string;
+  asin: string | null;
+  keyword: string | null;
+  product_title: string | null;
+  product_image: string | null;
+  marketplace: string;
+  conversation_count: number;
+  has_summary: boolean;
+  first_message_at: string;
+  last_message_at: string;
+}
+
+export interface RufusSessionGroup {
+  page_type: string;
+  sessions: RufusSessionSummary[];
+  total: number;
+}
+
+export interface RufusSessionListResponse {
+  success: boolean;
+  groups: RufusSessionGroup[];
+  total_sessions: number;
+}
+
+export interface RufusConversationDetail {
+  id: string;
+  asin: string | null;
+  marketplace: string;
+  question: string;
+  answer: string;
+  question_type: string;
+  question_index: number;
+  conversation_id: string | null;
+  created_at: string;
+  user_id: string | null;
+  page_type: string;
+  keyword: string | null;
+  product_title: string | null;
+  bullet_points: string[] | null;
+  product_image: string | null;
+  session_id: string | null;
+  ai_summary: string | null;
+}
+
+export interface RufusSessionDetailResponse {
+  success: boolean;
+  session_id: string;
+  page_type: string;
+  asin: string | null;
+  keyword: string | null;
+  product_title: string | null;
+  product_image: string | null;
+  marketplace: string;
+  conversations: RufusConversationDetail[];
+  ai_summary: string | null;
+}
+
+export interface RufusSummaryResponse {
+  success: boolean;
+  session_id: string;
+  summary: string | null;
+  message: string;
+}
+
+/**
+ * 获取 Rufus 会话列表（按页面类型分组）
+ */
+export async function getRufusSessions(pageType?: string): Promise<RufusSessionListResponse> {
+  const params = new URLSearchParams();
+  if (pageType) {
+    params.set('page_type', pageType);
+  }
+  const query = params.toString();
+  const url = `${API_BASE}/rufus/sessions${query ? `?${query}` : ''}`;
+  const response = await fetch(url, { headers: getAuthHeaders() });
+  if (!response.ok) {
+    throw new ApiError(response.status, response.statusText);
+  }
+  return response.json();
+}
+
+/**
+ * 获取 Rufus 会话详情
+ */
+export async function getRufusSessionDetail(sessionId: string): Promise<RufusSessionDetailResponse> {
+  const url = `${API_BASE}/rufus/session/${sessionId}`;
+  const response = await fetch(url, { headers: getAuthHeaders() });
+  if (!response.ok) {
+    throw new ApiError(response.status, response.statusText);
+  }
+  return response.json();
+}
+
+/**
+ * 生成 Rufus 会话 AI 总结
+ */
+export async function generateRufusSummary(
+  sessionId: string, 
+  forceRegenerate = false
+): Promise<RufusSummaryResponse> {
+  const url = `${API_BASE}/rufus/session/${sessionId}/summary`;
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: getAuthHeaders(),
+    body: JSON.stringify({ force_regenerate: forceRegenerate }),
+  });
+  if (!response.ok) {
+    throw new ApiError(response.status, response.statusText);
+  }
+  return response.json();
+}
+
+/**
+ * 删除 Rufus 会话
+ */
+export async function deleteRufusSession(sessionId: string): Promise<{ success: boolean; message: string; deleted_count: number }> {
+  const url = `${API_BASE}/rufus/session/${sessionId}`;
+  const response = await fetch(url, {
+    method: 'DELETE',
+    headers: getAuthHeaders(),
+  });
+  if (!response.ok) {
+    throw new ApiError(response.status, response.statusText);
+  }
+  return response.json();
+}
+
+/**
+ * 更新 Rufus 会话元信息
+ */
+export async function updateRufusSession(
+  sessionId: string,
+  data: {
+    product_title?: string;
+    keyword?: string;
+    product_image?: string;
+  }
+): Promise<RufusSessionDetailResponse> {
+  const url = `${API_BASE}/rufus/session/${sessionId}`;
+  const response = await fetch(url, {
+    method: 'PATCH',
+    headers: getAuthHeaders(),
+    body: JSON.stringify(data),
+  });
+  if (!response.ok) {
+    throw new ApiError(response.status, response.statusText);
+  }
+  return response.json();
+}
+
+/**
+ * 更新单个 Rufus 对话
+ */
+export async function updateRufusConversation(
+  conversationId: string,
+  data: {
+    question?: string;
+    answer?: string;
+    question_type?: string;
+  }
+): Promise<RufusConversationDetail> {
+  const url = `${API_BASE}/rufus/conversation/${conversationId}`;
+  const response = await fetch(url, {
+    method: 'PATCH',
+    headers: getAuthHeaders(),
+    body: JSON.stringify(data),
+  });
+  if (!response.ok) {
+    throw new ApiError(response.status, response.statusText);
+  }
+  return response.json();
+}
+
+/**
+ * 删除单个 Rufus 对话
+ */
+export async function deleteRufusConversation(conversationId: string): Promise<{ success: boolean; message: string }> {
+  const url = `${API_BASE}/rufus/conversation/${conversationId}`;
+  const response = await fetch(url, {
+    method: 'DELETE',
+    headers: getAuthHeaders(),
+  });
+  if (!response.ok) {
+    throw new ApiError(response.status, response.statusText);
+  }
+  return response.json();
 }
 
 export default apiService;

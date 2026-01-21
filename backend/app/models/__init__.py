@@ -26,9 +26,19 @@ from app.models.product_time_series import ProductTimeSeries
 from app.models.analytics import UserEvent, UserSession, DailyStat
 # Rufus Conversation Model
 from app.models.rufus_conversation import RufusConversation
+from app.models.rufus_summary import RufusSummary, SummaryType
 # Keyword Collection Models (产品分析库)
 from app.models.keyword_collection import KeywordCollection
 from app.models.collection_product import CollectionProduct
+# Profit Calculator Models (毛利计算)
+from app.models.profit_calculator import (
+    ProfitProduct,
+    FBAFeeRule,
+    ReferralFeeRule,
+    ShippingFeeRule,
+    ExchangeRate,
+    OtherCostRule
+)
 
 __all__ = [
     "Product", 
@@ -67,8 +77,17 @@ __all__ = [
     "DailyStat",
     # Rufus Conversation Model
     "RufusConversation",
+    "RufusSummary",
+    "SummaryType",
     # Keyword Collection Models
     "KeywordCollection",
     "CollectionProduct",
+    # Profit Calculator Models
+    "ProfitProduct",
+    "FBAFeeRule",
+    "ReferralFeeRule",
+    "ShippingFeeRule",
+    "ExchangeRate",
+    "OtherCostRule",
 ]
 

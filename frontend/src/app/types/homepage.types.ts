@@ -80,7 +80,7 @@ export interface DeleteConfirmDialog {
 }
 
 // 应用页面类型
-export type AppSection = "home" | "my-projects" | "product-center" | "ai-compare" | "market-insight" | "reports" | "keyword-collections";
+export type AppSection = "home" | "my-projects" | "product-center" | "ai-compare" | "market-insight" | "reports" | "keyword-collections" | "profit-calculator" | "rufus-research";
 
 // 标签类型
 export type TabType = "all" | "favorites";

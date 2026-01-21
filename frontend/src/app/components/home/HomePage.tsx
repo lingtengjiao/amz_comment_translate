@@ -14,7 +14,9 @@ import { AICompareSection } from './sections/AICompareSection';
 import { MarketInsightSection } from './sections/MarketInsightSection';
 import { ReportsSection } from './sections/ReportsSection';
 import { KeywordCollectionsSection } from './sections/KeywordCollectionsSection';
-import type { AppSection } from './types/homepage.types';
+import { ProfitCalculatorSection } from './sections/ProfitCalculatorSection';
+import { RufusResearchSection } from './sections/RufusResearchSection';
+import type { AppSection } from '../../types/homepage.types';
 
 function HomeContent() {
   const { section } = useParams<{ section?: string }>();
@@ -23,7 +25,7 @@ function HomeContent() {
   const scrollContainerRef = useRef<HTMLDivElement>(null);
 
   // 计算当前有效的 section（直接从 URL 获取，不依赖 state）
-  const validSections: AppSection[] = ['home', 'my-projects', 'product-center', 'ai-compare', 'market-insight', 'reports', 'keyword-collections'];
+  const validSections: AppSection[] = ['home', 'my-projects', 'product-center', 'ai-compare', 'market-insight', 'reports', 'keyword-collections', 'profit-calculator', 'rufus-research'];
   const currentSection: AppSection = section && validSections.includes(section as AppSection) 
     ? (section as AppSection) 
     : 'home';
@@ -69,6 +71,10 @@ function HomeContent() {
         return <ReportsSection />;
       case 'keyword-collections':
         return <KeywordCollectionsSection />;
+      case 'profit-calculator':
+        return <ProfitCalculatorSection />;
+      case 'rufus-research':
+        return <RufusResearchSection />;
       default:
         return <HomeSection />;
     }

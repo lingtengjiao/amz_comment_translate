@@ -47,6 +47,20 @@ class WorkflowMode(str, Enum):
     TRANSLATE_ONLY = "translate_only"       # 只翻译：等待用户手动触发分析
 
 
+class RufusPageType(str, Enum):
+    """
+    Rufus 页面类型枚举
+    
+    用于区分 Rufus 对话发生的页面类型：
+    - HOMEPAGE: 亚马逊首页
+    - KEYWORD_SEARCH: 关键词搜索结果页
+    - PRODUCT_DETAIL: 产品详情页
+    """
+    HOMEPAGE = "homepage"              # 亚马逊首页
+    KEYWORD_SEARCH = "keyword_search"  # 关键词搜索页
+    PRODUCT_DETAIL = "product_detail"  # 产品详情页
+
+
 # ============== Review Schemas ==============
 
 class ReviewRawData(BaseModel):
@@ -888,15 +902,29 @@ class RufusConversationRequest(BaseModel):
     """
     Request body for POST /api/v1/rufus/conversation
     Contains Rufus AI conversation data from Chrome extension.
+    
+    [UPDATED] Now supports three page types:
+    - homepage: No ASIN required
+    - keyword_search: Keyword required
+    - product_detail: ASIN required (default)
     """
-    asin: str = Field(..., min_length=5, max_length=20, description="Amazon ASIN")
+    # ASIN is now optional (homepage has no ASIN)
+    asin: Optional[str] = Field(None, min_length=5, max_length=20, description="Amazon ASIN (optional for homepage)")
     marketplace: str = Field("US", description="Amazon marketplace")
     question: str = Field(..., min_length=1, description="Question asked to Rufus")
     answer: str = Field(..., min_length=1, description="Rufus's response")
-    question_type: str = Field("wish_it_had", description="Type of question (wish_it_had, comparison, etc.)")
+    question_type: str = Field("wish_it_had", description="Type of question (wish_it_had, comparison, diy, etc.)")
     question_index: int = Field(0, ge=0, description="Index of question within the topic (0-based)")
     conversation_id: Optional[str] = Field(None, description="Optional conversation ID from Rufus")
     raw_html: Optional[str] = Field(None, description="Optional raw HTML of the response for debugging")
+    
+    # [NEW] Enhanced fields for page types and sessions
+    page_type: str = Field("product_detail", description="Page type: homepage, keyword_search, product_detail")
+    keyword: Optional[str] = Field(None, description="Search keyword (for keyword_search page)")
+    product_title: Optional[str] = Field(None, description="Product title from the page")
+    bullet_points: Optional[List[str]] = Field(None, description="Product bullet points list")
+    product_image: Optional[str] = Field(None, description="Product image URL")
+    session_id: Optional[str] = Field(None, description="Session ID to group related conversations")
 
     model_config = ConfigDict(
         json_schema_extra={
@@ -907,7 +935,9 @@ class RufusConversationRequest(BaseModel):
                 "answer": "Based on customer reviews, buyers commonly wish this product had...",
                 "question_type": "wish_it_had",
                 "question_index": 0,
-                "conversation_id": "rufus-12345"
+                "conversation_id": "rufus-12345",
+                "page_type": "product_detail",
+                "session_id": "session-abc123"
             }
         }
     )
@@ -935,7 +965,7 @@ class RufusConversationResponse(BaseModel):
 class RufusConversationDetail(BaseModel):
     """Detailed Rufus conversation data for retrieval"""
     id: UUID
-    asin: str
+    asin: Optional[str] = None  # Now optional for homepage
     marketplace: str
     question: str
     answer: str
@@ -944,8 +974,30 @@ class RufusConversationDetail(BaseModel):
     conversation_id: Optional[str] = None
     created_at: datetime
     user_id: Optional[UUID] = None
+    # [NEW] Enhanced fields
+    page_type: str = "product_detail"
+    keyword: Optional[str] = None
+    product_title: Optional[str] = None
+    bullet_points: Optional[List[str]] = None
+    product_image: Optional[str] = None
+    session_id: Optional[str] = None
+    ai_summary: Optional[str] = None
 
     model_config = ConfigDict(from_attributes=True)
+    
+    @field_validator('bullet_points', mode='before')
+    @classmethod
+    def parse_bullet_points(cls, v):
+        """Convert JSON string to list if needed"""
+        if v is None:
+            return None
+        if isinstance(v, str):
+            try:
+                import json
+                return json.loads(v)
+            except json.JSONDecodeError:
+                return None
+        return v
 
 
 class RufusConversationListResponse(BaseModel):
@@ -953,4 +1005,96 @@ class RufusConversationListResponse(BaseModel):
     success: bool
     conversations: List[RufusConversationDetail] = Field(default_factory=list)
     total: int = Field(0, description="Total conversations count")
+
+
+# ============== Rufus Session Schemas ==============
+
+class RufusSessionSummary(BaseModel):
+    """Summary info for a Rufus session"""
+    session_id: str
+    page_type: str
+    asin: Optional[str] = None
+    keyword: Optional[str] = None
+    product_title: Optional[str] = None
+    product_image: Optional[str] = None
+    marketplace: str = "US"
+    conversation_count: int = 0
+    has_summary: bool = False
+    first_message_at: datetime
+    last_message_at: datetime
+    
+    model_config = ConfigDict(from_attributes=True)
+
+
+class RufusSessionGroup(BaseModel):
+    """Group of sessions by page type"""
+    page_type: str
+    sessions: List[RufusSessionSummary] = Field(default_factory=list)
+    total: int = 0
+
+
+class RufusSessionListResponse(BaseModel):
+    """Response for listing Rufus sessions grouped by page type"""
+    success: bool
+    groups: List[RufusSessionGroup] = Field(default_factory=list)
+    total_sessions: int = 0
+
+
+class RufusSessionDetailResponse(BaseModel):
+    """Response for a single session with all conversations"""
+    success: bool
+    session_id: str
+    page_type: str
+    asin: Optional[str] = None
+    keyword: Optional[str] = None
+    product_title: Optional[str] = None
+    product_image: Optional[str] = None
+    marketplace: str = "US"
+    conversations: List[RufusConversationDetail] = Field(default_factory=list)
+    ai_summary: Optional[str] = None
+
+
+class RufusSummaryRequest(BaseModel):
+    """Request to generate AI summary for a session"""
+    force_regenerate: bool = Field(False, description="Force regenerate even if summary exists")
+
+
+class RufusSummaryResponse(BaseModel):
+    """Response for AI summary generation"""
+    success: bool
+    session_id: str
+    summary: Optional[str] = None
+    message: str = ""
+    
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "success": True,
+                "session_id": "session-abc123",
+                "summary": "用户主要关注产品的电池续航和充电速度问题...",
+                "message": "Summary generated successfully"
+            }
+        }
+    )
+
+
+class RufusSessionUpdateRequest(BaseModel):
+    """Request to update session metadata"""
+    product_title: Optional[str] = Field(None, description="Update product title")
+    keyword: Optional[str] = Field(None, description="Update keyword")
+    product_image: Optional[str] = Field(None, description="Update product image URL")
+
+
+class RufusDeleteResponse(BaseModel):
+    """Response for session deletion"""
+    success: bool
+    message: str
+    deleted_count: int = 0
+
+
+class RufusConversationUpdateRequest(BaseModel):
+    """Request to update a single conversation"""
+    question: Optional[str] = Field(None, min_length=1, description="Updated question")
+    answer: Optional[str] = Field(None, min_length=1, description="Updated answer")
+    question_type: Optional[str] = Field(None, description="Updated question type")
 

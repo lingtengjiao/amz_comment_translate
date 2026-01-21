@@ -21,14 +21,21 @@ class RufusConversation(Base):
     
     Attributes:
         id: Unique identifier (UUID)
-        asin: Amazon product ASIN
+        asin: Amazon product ASIN (optional for homepage)
         marketplace: Amazon marketplace (US, UK, AU, etc.)
         question: The question asked to Rufus
         answer: Rufus's response
-        question_type: Type of question (wish_it_had, comparison, etc.)
+        question_type: Type of question (wish_it_had, comparison, diy, etc.)
+        question_index: Index of question within the topic
         conversation_id: Optional original conversation ID from Rufus
         raw_html: Optional raw HTML for debugging
         user_id: User who initiated the conversation (optional)
+        page_type: Type of page (homepage, keyword_search, product_detail)
+        keyword: Search keyword (for keyword search pages)
+        product_title: Product title from the page
+        bullet_points: Product bullet points as JSON string
+        session_id: Session ID to group related conversations
+        ai_summary: AI-generated summary of the conversation session
         created_at: Record creation timestamp
     """
     __tablename__ = "rufus_conversations"
@@ -39,9 +46,10 @@ class RufusConversation(Base):
         default=uuid.uuid4
     )
     
-    asin: Mapped[str] = mapped_column(
+    # Changed to Optional - homepage has no ASIN
+    asin: Mapped[Optional[str]] = mapped_column(
         String(20),
-        nullable=False,
+        nullable=True,
         index=True
     )
     
@@ -90,6 +98,52 @@ class RufusConversation(Base):
         index=True
     )
     
+    # ============== NEW FIELDS ==============
+    
+    # Page type enumeration: homepage, keyword_search, product_detail
+    page_type: Mapped[str] = mapped_column(
+        String(30),
+        nullable=False,
+        default="product_detail"
+    )
+    
+    # Keyword for search pages
+    keyword: Mapped[Optional[str]] = mapped_column(
+        String(255),
+        nullable=True
+    )
+    
+    # Product title from the page
+    product_title: Mapped[Optional[str]] = mapped_column(
+        Text,
+        nullable=True
+    )
+    
+    # Bullet points stored as JSON array string
+    bullet_points: Mapped[Optional[str]] = mapped_column(
+        Text,
+        nullable=True
+    )
+    
+    # Product image URL
+    product_image: Mapped[Optional[str]] = mapped_column(
+        Text,
+        nullable=True
+    )
+    
+    # Session ID to group related conversations
+    session_id: Mapped[Optional[str]] = mapped_column(
+        String(100),
+        nullable=True,
+        index=True
+    )
+    
+    # AI-generated summary for the session
+    ai_summary: Mapped[Optional[str]] = mapped_column(
+        Text,
+        nullable=True
+    )
+    
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now()
@@ -103,4 +157,4 @@ class RufusConversation(Base):
     )
     
     def __repr__(self) -> str:
-        return f"<RufusConversation(id={self.id}, asin={self.asin}, type={self.question_type})>"
+        return f"<RufusConversation(id={self.id}, asin={self.asin}, page_type={self.page_type}, type={self.question_type})>"

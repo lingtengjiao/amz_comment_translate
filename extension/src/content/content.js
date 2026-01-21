@@ -23,8 +23,8 @@
   // Configuration
   // 生产环境配置 - 使用 IP 地址（域名审核中）
   const CONFIG = {
-  API_BASE_URL: 'http://115.191.30.209/api/v1',
-  DASHBOARD_URL: 'http://115.191.30.209',  // 生产前端地址
+  API_BASE_URL: 'http://localhost:8000/api/v1',
+  DASHBOARD_URL: 'http://localhost:3000',  // 本地前端地址
   DELAY_BETWEEN_PAGES: { min: 2000, max: 5000 }, // Increased for safety
   DELAY_BETWEEN_STARS: { min: 3000, max: 6000 },
   BATCH_SIZE: 20
@@ -90,6 +90,88 @@ const RUFUS_QUESTION_TOPICS = {
     ]
   }
 };
+
+/**
+ * [NEW] 根据关键词动态调整问题（针对搜索页）
+ * @param {string} originalQuestion - 原始问题
+ * @param {string} keyword - 搜索关键词
+ * @param {string} topicKey - 主题类型
+ * @returns {string} - 调整后的问题
+ */
+function adaptQuestionForKeyword(originalQuestion, keyword, topicKey) {
+  // 如果问题已经包含关键词，不需要调整
+  if (originalQuestion.toLowerCase().includes(keyword.toLowerCase())) {
+    return originalQuestion;
+  }
+  
+  // 根据主题类型调整问题，将关键词融入问题中
+  switch (topicKey) {
+    case 'wish_it_had':
+      // 功能改进：针对特定产品类
+      return originalQuestion.replace(
+        /this product/gi,
+        `these ${keyword} products`
+      ).replace(
+        /the product/gi,
+        `${keyword} products`
+      );
+      
+    case 'quality_issues':
+      // 质量问题：针对特定产品类
+      return originalQuestion.replace(
+        /this product/gi,
+        `${keyword} products`
+      );
+      
+    case 'price_value':
+      // 性价比：针对特定产品类
+      return originalQuestion.replace(
+        /this product/gi,
+        `${keyword} products`
+      ).replace(
+        /similar products/gi,
+        `other ${keyword} options`
+      );
+      
+    case 'comparison':
+      // 竞品对比：针对特定产品类
+      return originalQuestion.replace(
+        /this product/gi,
+        `${keyword} products`
+      ).replace(
+        /competitors or alternatives/gi,
+        `other ${keyword} brands or alternatives`
+      );
+      
+    case 'use_scenarios':
+      // 使用场景：针对特定产品类
+      return originalQuestion.replace(
+        /reviews/gi,
+        `reviews for ${keyword}`
+      ).replace(
+        /this product/gi,
+        `${keyword}`
+      );
+      
+    case 'positive_highlights':
+      // 好评亮点：针对特定产品类
+      return originalQuestion.replace(
+        /this product/gi,
+        `${keyword} products`
+      );
+      
+    default:
+      // 默认：简单添加关键词到问题开头或替换通用词
+      if (originalQuestion.toLowerCase().includes('reviews')) {
+        return originalQuestion.replace(
+          /reviews/gi,
+          `reviews for ${keyword}`
+        );
+      } else {
+        return `For ${keyword}, ${originalQuestion.toLowerCase()}`;
+      }
+  }
+}
 
 // Global state
 let isCollecting = false;
@@ -930,7 +1012,10 @@ function showProductSelector() {
   
   productSelector.classList.add('voc-visible');
   
-  // [NEW] 隐藏浮动按钮
+  // [NEW] 隐藏 overlay（如果存在）和浮动按钮
+  if (overlay) {
+    overlay.classList.remove('voc-visible');
+  }
   if (floatingButton) {
     floatingButton.style.display = 'none';
   }
@@ -938,13 +1023,14 @@ function showProductSelector() {
 
 /**
  * [NEW] 隐藏产品选择器
+ * @param {boolean} showFloatingButton - 是否显示浮动按钮（默认 true）
  */
-function hideProductSelector() {
+function hideProductSelector(showFloatingButton = true) {
   if (productSelector) {
     productSelector.classList.remove('voc-visible');
   }
-  // [NEW] 重新显示浮动按钮
-  if (floatingButton) {
+  // [NEW] 只有在需要时才重新显示浮动按钮（如果返回到 Rufus，overlay 已经显示了）
+  if (showFloatingButton && floatingButton) {
     floatingButton.style.display = 'flex';
   }
 }
@@ -978,14 +1064,16 @@ function createProductSelector() {
           </svg>
           <span class="voc-title">选择产品分析</span>
         </div>
-        <button class="voc-close" id="voc-selector-close-btn" title="关闭">×</button>
+        <div style="display: flex; gap: 8px; align-items: center;">
+          <button class="voc-close" id="voc-selector-back-btn" title="返回 Rufus AI 洞察" style="font-size: 14px; padding: 0 12px; min-width: auto;">🤖 Rufus</button>
+          <button class="voc-close" id="voc-selector-close-btn" title="关闭">×</button>
+        </div>
       </div>
       
       <div class="voc-selector-content">
         <div class="voc-selector-header">
           <div class="voc-selector-info">
             <span id="voc-selector-count">已选择 0 个产品</span>
-            <span class="voc-selector-hint">（对比分析最多5个，市场细分最多10个）</span>
           </div>
           <div class="voc-selector-actions-top">
             <button class="voc-btn-sm" id="voc-select-all-btn">全选</button>
@@ -1012,25 +1100,6 @@ function createProductSelector() {
             </button>
             <span class="voc-action-hint">保存当前搜索结果快照</span>
           </div>
-          <div class="voc-action-divider"></div>
-          <div class="voc-action-row">
-            <button class="voc-btn voc-btn-primary" id="voc-batch-insight-btn" disabled>
-              📊 批量洞察分析
-            </button>
-            <span class="voc-action-hint">对每个产品单独分析</span>
-          </div>
-          <div class="voc-action-row">
-            <button class="voc-btn voc-btn-secondary" id="voc-comparison-btn" disabled>
-              ⚖️ 对比分析 (2-5个)
-            </button>
-            <span class="voc-action-hint">对选中产品进行对比</span>
-          </div>
-          <div class="voc-action-row">
-            <button class="voc-btn voc-btn-secondary" id="voc-market-insight-btn" disabled>
-              🎯 市场细分 (2-10个)
-            </button>
-            <span class="voc-action-hint">多产品市场洞察分析</span>
-          </div>
         </div>
         
         <div class="voc-selector-status" id="voc-selector-status"></div>
@@ -1042,22 +1111,41 @@ function createProductSelector() {
 
   // 绑定事件
   document.getElementById('voc-selector-close-btn').addEventListener('click', hideProductSelector);
+  
+  // [NEW] 绑定返回 Rufus 功能按钮
+  const backBtn = document.getElementById('voc-selector-back-btn');
+  if (backBtn) {
+    backBtn.addEventListener('click', () => {
+      console.log('[VOC-Master] Returning to Rufus tab from product selector');
+      // 隐藏产品选择器（不显示浮动按钮，因为 overlay 会显示）
+      hideProductSelector(false);
+      // 显示 overlay 并切换到 Rufus Tab
+      setTimeout(() => {
+        const pageInfo = collectPageInfo();
+        showOverlay({ 
+          status: 'ready',
+          pageType: 'keyword_search',
+          pageInfo: pageInfo,
+          activeTab: 'rufus' // 切换到 Rufus Tab
+        });
+      }, 300); // 等待产品选择器隐藏动画完成
+    });
+  }
+  
   document.getElementById('voc-select-all-btn').addEventListener('click', handleSelectAll);
   document.getElementById('voc-deselect-all-btn').addEventListener('click', handleDeselectAll);
-  document.getElementById('voc-batch-insight-btn').addEventListener('click', handleBatchInsight);
-  document.getElementById('voc-comparison-btn').addEventListener('click', handleComparison);
-  document.getElementById('voc-market-insight-btn').addEventListener('click', handleMarketInsight);
   document.getElementById('voc-load-more-btn').addEventListener('click', handleLoadMore);
   document.getElementById('voc-save-library-btn').addEventListener('click', handleSaveToLibrary);
 }
 
 /**
- * [NEW] 更新产品选择器列表
+ * [NEW] 更新产品选择器列表（同时支持 overlay 和独立选择器）
  * @param {Array} products - 产品列表
  * @param {boolean} append - 是否追加模式（加载更多时使用）
  */
 function updateProductSelector(products, append = false) {
-  const listEl = document.getElementById('voc-product-list');
+  // 优先使用 overlay 中的列表，如果没有则使用独立选择器
+  const listEl = document.getElementById('voc-product-list-overlay') || document.getElementById('voc-product-list');
   if (!listEl) return;
   
   if (!append) {
@@ -1147,9 +1235,10 @@ function getNextPageUrl() {
  * [NEW] 更新加载更多按钮状态
  */
 function updateLoadMoreButton() {
-  const loadMoreBtn = document.getElementById('voc-load-more-btn');
-  const pageInfo = document.getElementById('voc-page-info');
-  const loadMoreSection = document.getElementById('voc-load-more-section');
+  // 同时支持 overlay 和独立选择器
+  const loadMoreBtn = document.getElementById('voc-load-more-overlay-btn') || document.getElementById('voc-load-more-btn');
+  const pageInfo = document.getElementById('voc-page-info-overlay') || document.getElementById('voc-page-info');
+  const loadMoreSection = document.getElementById('voc-load-more-section-overlay') || document.getElementById('voc-load-more-section');
   
   if (!loadMoreBtn || !pageInfo || !loadMoreSection) return;
   
@@ -1162,12 +1251,16 @@ function updateLoadMoreButton() {
   
   if (isLoadingMore) {
     loadMoreBtn.disabled = true;
-    loadMoreBtn.querySelector('.voc-load-more-text').textContent = '加载中...';
-    loadMoreBtn.querySelector('.voc-load-more-icon').textContent = '⏳';
+    const textEl = loadMoreBtn.querySelector('.voc-load-more-text');
+    const iconEl = loadMoreBtn.querySelector('.voc-load-more-icon');
+    if (textEl) textEl.textContent = '加载中...';
+    if (iconEl) iconEl.textContent = '⏳';
   } else {
-    loadMoreBtn.disabled = false;
-    loadMoreBtn.querySelector('.voc-load-more-text').textContent = '加载下一页';
-    loadMoreBtn.querySelector('.voc-load-more-icon').textContent = '📄';
+    loadMoreBtn.disabled = !hasMorePages;
+    const textEl = loadMoreBtn.querySelector('.voc-load-more-text');
+    const iconEl = loadMoreBtn.querySelector('.voc-load-more-icon');
+    if (textEl) textEl.textContent = hasMorePages ? '加载下一页' : '已加载全部';
+    if (iconEl) iconEl.textContent = hasMorePages ? '📄' : '✓';
   }
   
   pageInfo.textContent = `已加载 ${currentSearchPage} 页 · 共 ${allLoadedProducts.length} 个产品`;
@@ -1369,41 +1462,37 @@ function handleDeselectAll() {
 }
 
 /**
- * [NEW] 更新选择计数和按钮状态
+ * [NEW] 更新选择计数和按钮状态（同时支持 overlay 和独立选择器）
  */
 function updateSelectionCount() {
   const count = selectedProducts.size;
+  
+  // 更新计数显示（同时支持 overlay 和独立选择器）
   const countEl = document.getElementById('voc-selector-count');
+  const countElOverlay = document.getElementById('voc-selector-count-overlay');
   if (countEl) {
     countEl.textContent = `已选择 ${count} 个产品`;
   }
+  if (countElOverlay) {
+    countElOverlay.textContent = `已选择 ${count} 个产品`;
+  }
   
-  // 更新按钮状态
-  const batchBtn = document.getElementById('voc-batch-insight-btn');
-  const comparisonBtn = document.getElementById('voc-comparison-btn');
-  const marketBtn = document.getElementById('voc-market-insight-btn');
-  
-  if (batchBtn) {
-    batchBtn.disabled = count === 0;
-  }
-  if (comparisonBtn) {
-    comparisonBtn.disabled = count < 2 || count > 5;
-    comparisonBtn.textContent = `⚖️ 对比分析 (${count}/2-5)`;
-  }
-  if (marketBtn) {
-    marketBtn.disabled = count < 2 || count > 10;
-    marketBtn.textContent = `🎯 市场细分 (${count}/2-10)`;
-  }
+  // 移除分析功能按钮的状态更新（这些功能已不再显示）
 }
 
 /**
- * [NEW] 设置选择器状态消息
+ * [NEW] 设置选择器状态消息（同时支持 overlay 和独立选择器）
  */
 function setSelectorStatus(message, type = 'info') {
   const statusEl = document.getElementById('voc-selector-status');
+  const statusElOverlay = document.getElementById('voc-selector-status-overlay');
   if (statusEl) {
     statusEl.textContent = message;
     statusEl.className = `voc-selector-status voc-status-${type}`;
+  }
+  if (statusElOverlay) {
+    statusElOverlay.textContent = message;
+    statusElOverlay.className = `voc-selector-status voc-status-${type}`;
   }
 }
 
@@ -1981,6 +2070,60 @@ function createOverlay() {
           </a>
         </div>
         
+        <!-- [NEW] 搜索页 Tab 切换器 -->
+        <div class="voc-search-tabs" id="voc-search-tabs" style="display: none;">
+          <button class="voc-tab-btn voc-tab-active" data-tab="selector" id="voc-tab-selector">
+            <span>📊</span>
+            选择产品分析
+          </button>
+          <button class="voc-tab-btn" data-tab="rufus" id="voc-tab-rufus">
+            <span>🤖</span>
+            Rufus AI 洞察
+          </button>
+        </div>
+        
+        <!-- [NEW] 搜索页产品选择器 - 集成到 Tab 中 -->
+        <div class="voc-product-selector-entry" id="voc-product-selector-entry" style="display: none;">
+          <div class="voc-section-divider"></div>
+          
+          <!-- 产品选择器头部 -->
+          <div class="voc-selector-header" style="margin-bottom: 12px;">
+            <div class="voc-selector-info">
+              <span id="voc-selector-count-overlay">已选择 0 个产品</span>
+            </div>
+            <div class="voc-selector-actions-top">
+              <button class="voc-btn-sm" id="voc-select-all-overlay-btn">全选</button>
+              <button class="voc-btn-sm" id="voc-deselect-all-overlay-btn">清空</button>
+            </div>
+          </div>
+          
+          <!-- 产品列表 -->
+          <div class="voc-product-list" id="voc-product-list-overlay" style="min-height: 300px; max-height: 400px; margin-bottom: 12px;">
+            <div class="voc-loading">正在加载产品列表...</div>
+          </div>
+          
+          <!-- 加载更多 -->
+          <div class="voc-load-more-section" id="voc-load-more-section-overlay" style="margin-bottom: 12px;">
+            <button class="voc-btn voc-btn-load-more" id="voc-load-more-overlay-btn" style="width: 100%;">
+              <span class="voc-load-more-icon">📄</span>
+              <span class="voc-load-more-text">加载下一页</span>
+            </button>
+            <div class="voc-page-info" id="voc-page-info-overlay" style="text-align: center; font-size: 12px; color: var(--voc-text-muted); margin-top: 4px;">已加载第 1 页</div>
+          </div>
+          
+          <!-- 操作按钮 -->
+          <div class="voc-selector-actions" style="margin-top: 8px;">
+            <div class="voc-action-row voc-save-library-row">
+              <button class="voc-btn voc-btn-save-library" id="voc-save-library-overlay-btn" style="width: 100%;">
+                💾 保存到产品库
+              </button>
+            </div>
+          </div>
+          
+          <!-- 状态提示 -->
+          <div class="voc-selector-status" id="voc-selector-status-overlay" style="margin-top: 12px;"></div>
+        </div>
+        
         <div class="voc-rufus-section" id="voc-rufus-section">
           <div class="voc-section-divider"></div>
           <div class="voc-rufus-header">
@@ -2014,6 +2157,29 @@ function createOverlay() {
               <span class="voc-topic-name">好评亮点</span>
             </button>
           </div>
+          
+          <!-- [NEW] DIY 自定义问题输入 -->
+          <div class="voc-rufus-diy-section" id="voc-rufus-diy">
+            <div class="voc-rufus-diy-header">
+              <span class="voc-diy-icon">✏️</span>
+              <span class="voc-diy-title">自定义提问</span>
+            </div>
+            <div class="voc-rufus-diy-input-wrapper">
+              <textarea 
+                id="voc-rufus-diy-input" 
+                class="voc-rufus-diy-textarea"
+                placeholder="输入您想问 Rufus 的问题..."
+                rows="2"
+              ></textarea>
+              <button id="voc-rufus-diy-send" class="voc-rufus-diy-send-btn" title="发送问题">
+                <span>发送</span>
+              </button>
+            </div>
+            <div class="voc-rufus-diy-hint">
+              提示：请先手动打开 Rufus 对话框，然后输入问题点击发送
+            </div>
+          </div>
+          
           <div class="voc-rufus-progress-container" id="voc-rufus-progress" style="display: none;">
             <div class="voc-rufus-progress-bar">
               <div class="voc-rufus-progress-fill" id="voc-rufus-progress-fill"></div>
@@ -2080,6 +2246,188 @@ function createOverlay() {
       });
     });
   });
+  
+  // [NEW] Tab 切换函数（使用动态查询，确保总是获取最新元素）
+  function switchSearchTab(activeTab) {
+    // 每次都重新查询元素，避免引用问题
+    const tabSelector = document.getElementById('voc-tab-selector');
+    const tabRufus = document.getElementById('voc-tab-rufus');
+    const productSelectorEntry = document.getElementById('voc-product-selector-entry');
+    const rufusSection = document.getElementById('voc-rufus-section');
+    
+    console.log('[VOC-Master] Switching tab to:', activeTab);
+    console.log('[VOC-Master] Elements found:', { tabSelector: !!tabSelector, tabRufus: !!tabRufus, productSelectorEntry: !!productSelectorEntry, rufusSection: !!rufusSection });
+    
+    if (activeTab === 'selector') {
+      if (tabSelector) tabSelector.classList.add('voc-tab-active');
+      if (tabRufus) tabRufus.classList.remove('voc-tab-active');
+      if (productSelectorEntry) productSelectorEntry.style.display = 'block';
+      if (rufusSection) rufusSection.style.display = 'none';
+      console.log('[VOC-Master] Switched to selector tab');
+      
+      // [NEW] 切换到产品选择 Tab 时，加载产品列表
+      loadProductsForSelector();
+    } else if (activeTab === 'rufus') {
+      if (tabSelector) tabSelector.classList.remove('voc-tab-active');
+      if (tabRufus) tabRufus.classList.add('voc-tab-active');
+      if (productSelectorEntry) productSelectorEntry.style.display = 'none';
+      if (rufusSection) rufusSection.style.display = 'block';
+      console.log('[VOC-Master] Switched to rufus tab');
+    }
+  }
+  
+  // [NEW] 加载产品列表到选择器（overlay 或独立选择器）
+  function loadProductsForSelector() {
+    // 如果产品列表已经加载，不需要重新加载
+    const listEl = document.getElementById('voc-product-list-overlay') || document.getElementById('voc-product-list');
+    if (!listEl) return;
+    
+    // 如果列表不为空且不是加载状态，说明已经加载过了
+    if (listEl.innerHTML.trim() && !listEl.innerHTML.includes('正在加载')) {
+      console.log('[VOC-Master] Product list already loaded');
+      return;
+    }
+    
+    // 重置状态
+    allLoadedProducts = [];
+    currentSearchPage = 1;
+    isLoadingMore = false;
+    hasMorePages = true;
+    selectedProducts.clear();
+    
+    // 提取当前页产品列表
+    const products = extractSearchResults();
+    allLoadedProducts = [...products];
+    
+    // 检测是否有下一页
+    hasMorePages = detectNextPage();
+    
+    updateProductSelector(allLoadedProducts, false);
+    updateLoadMoreButton();
+    
+    console.log('[VOC-Master] Loaded products for selector:', allLoadedProducts.length);
+  }
+  
+  // [NEW] 绑定产品选择器事件处理函数（先定义，后调用）
+  function bindProductSelectorEvents() {
+    // 使用事件委托，监听整个 overlay，避免重复绑定
+    if (overlay && !overlay.dataset.selectorEventsBound) {
+      overlay.addEventListener('click', function handleSelectorClick(e) {
+        // 全选按钮
+        if (e.target.closest('#voc-select-all-overlay-btn') || e.target.closest('#voc-select-all-btn')) {
+          e.preventDefault();
+          e.stopPropagation();
+          handleSelectAll();
+          return;
+        }
+        
+        // 清空按钮
+        if (e.target.closest('#voc-deselect-all-overlay-btn') || e.target.closest('#voc-deselect-all-btn')) {
+          e.preventDefault();
+          e.stopPropagation();
+          handleDeselectAll();
+          return;
+        }
+        
+        // 加载更多按钮
+        if (e.target.closest('#voc-load-more-overlay-btn') || e.target.closest('#voc-load-more-btn')) {
+          e.preventDefault();
+          e.stopPropagation();
+          handleLoadMore();
+          return;
+        }
+        
+        // 保存到产品库按钮
+        if (e.target.closest('#voc-save-library-overlay-btn') || e.target.closest('#voc-save-library-btn')) {
+          e.preventDefault();
+          e.stopPropagation();
+          handleSaveToLibrary();
+          return;
+        }
+      });
+      
+      overlay.dataset.selectorEventsBound = 'true';
+      console.log('[VOC-Master] Product selector events bound using event delegation');
+    }
+  }
+  
+  // 将切换函数挂载到全局，供其他地方使用
+  window.switchSearchTab = switchSearchTab;
+  
+  // [NEW] 绑定搜索页 Tab 切换事件（使用事件委托，确保绑定成功）
+  const searchTabs = document.getElementById('voc-search-tabs');
+  if (searchTabs) {
+    // 先移除可能存在的旧监听器（通过设置唯一标识）
+    if (searchTabs.dataset.hasListener === 'true') {
+      // 已经绑定过，不需要重复绑定
+      console.log('[VOC-Master] Tab listeners already bound');
+    } else {
+      // 使用事件委托，监听整个 Tab 容器
+      searchTabs.addEventListener('click', function handleTabClick(e) {
+        e.preventDefault();
+        e.stopPropagation();
+        
+        const clickedTab = e.target.closest('.voc-tab-btn');
+        if (!clickedTab) return;
+        
+        // 如果点击的是已激活的 Tab，不处理
+        if (clickedTab.classList.contains('voc-tab-active')) {
+          return;
+        }
+        
+        const tabType = clickedTab.getAttribute('data-tab');
+        console.log('[VOC-Master] Tab clicked:', tabType);
+        
+        if (tabType === 'selector') {
+          switchSearchTab('selector');
+        } else if (tabType === 'rufus') {
+          switchSearchTab('rufus');
+        }
+      });
+      
+      // 标记已绑定
+      searchTabs.dataset.hasListener = 'true';
+      console.log('[VOC-Master] Tab event listeners bound successfully');
+    }
+  } else {
+    console.warn('[VOC-Master] Search tabs container not found during binding');
+  }
+  
+  // [NEW] 绑定产品选择器功能事件（集成在 overlay 中）
+  bindProductSelectorEvents();
+  
+  // [NEW] 绑定 DIY 发送按钮事件
+  const diySendBtn = document.getElementById('voc-rufus-diy-send');
+  const diyInput = document.getElementById('voc-rufus-diy-input');
+  
+  if (diySendBtn && diyInput) {
+    diySendBtn.addEventListener('click', () => {
+      const question = diyInput.value.trim();
+      if (!question) {
+        updateRufusStatus('❌ 请输入问题');
+        return;
+      }
+      
+      // 禁用输入和按钮
+      diyInput.disabled = true;
+      diySendBtn.disabled = true;
+      
+      runDIYQuestion(question).finally(() => {
+        // 恢复状态
+        diyInput.disabled = false;
+        diySendBtn.disabled = false;
+        diyInput.value = '';  // 清空输入
+      });
+    });
+    
+    // 支持 Enter 键发送（Shift+Enter 换行）
+    diyInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        diySendBtn.click();
+      }
+    });
+  }
 }
 
 function toggleFullscreen() {
@@ -2099,42 +2447,111 @@ function updateOverlay(state) {
     text: document.getElementById('voc-progress-text'),
     count: document.getElementById('voc-review-count'),
     config: document.getElementById('voc-config'),
+    actions: document.getElementById('voc-actions'),
     start: document.getElementById('voc-start-btn'),
     stop: document.getElementById('voc-stop-btn'),
     dash: document.getElementById('voc-dashboard-btn'),
     asin: document.getElementById('voc-asin'),
-    title: document.getElementById('voc-product-title')
+    title: document.getElementById('voc-product-title'),
+    productInfo: document.getElementById('voc-product-info'),
+    searchTabs: document.getElementById('voc-search-tabs'),
+    productSelectorEntry: document.getElementById('voc-product-selector-entry'),
+    rufusSection: document.getElementById('voc-rufus-section')
   };
 
-  if (state.asin) els.asin.textContent = `ASIN: ${state.asin}`;
-  if (state.title) els.title.textContent = state.title;
-  if (state.message) els.msg.textContent = state.message;
+  // [NEW] 根据页面类型决定显示哪些部分
+  const pageType = state.pageType || detectPageType();
+  const isProductPage = pageType === 'product_detail' && state.asin;
+  const isSearchPage = pageType === 'keyword_search';
+  const isHomepage = pageType === 'homepage';
+  
+  // 在首页和搜索页，隐藏产品采集相关部分
+  if (!isProductPage) {
+    if (els.productInfo) els.productInfo.style.display = 'none';
+    if (els.config) els.config.style.display = 'none';
+    if (els.actions) els.actions.style.display = 'none';
+    
+    // 搜索页：显示 Tab 切换器和默认 Tab
+    if (isSearchPage) {
+      if (els.searchTabs) els.searchTabs.style.display = 'flex';
+      // 默认显示"选择产品分析"Tab（如果用户之前选择了 Rufus，保持选择）
+      const defaultTab = state.activeTab || 'selector';
+      
+      // 使用 switchSearchTab 函数来设置 Tab 状态
+      if (typeof window.switchSearchTab === 'function') {
+        window.switchSearchTab(defaultTab);
+      } else {
+        // 如果函数还没定义，直接操作 DOM
+        const tabSelectorBtn = document.getElementById('voc-tab-selector');
+        const tabRufusBtn = document.getElementById('voc-tab-rufus');
+        
+        if (defaultTab === 'selector') {
+          if (tabSelectorBtn) tabSelectorBtn.classList.add('voc-tab-active');
+          if (tabRufusBtn) tabRufusBtn.classList.remove('voc-tab-active');
+          if (els.productSelectorEntry) els.productSelectorEntry.style.display = 'block';
+          if (els.rufusSection) els.rufusSection.style.display = 'none';
+        } else {
+          if (tabSelectorBtn) tabSelectorBtn.classList.remove('voc-tab-active');
+          if (tabRufusBtn) tabRufusBtn.classList.add('voc-tab-active');
+          if (els.productSelectorEntry) els.productSelectorEntry.style.display = 'none';
+          if (els.rufusSection) els.rufusSection.style.display = 'block';
+        }
+      }
+    } else {
+      // 首页：只显示 Rufus 面板，隐藏 Tab
+      if (els.searchTabs) els.searchTabs.style.display = 'none';
+      if (els.productSelectorEntry) els.productSelectorEntry.style.display = 'none';
+      if (els.rufusSection) els.rufusSection.style.display = 'block';
+    }
+    
+    // 更新页面类型信息显示
+    if (isHomepage) {
+      if (els.msg) els.msg.textContent = '首页：可以使用 Rufus AI 对话功能';
+    } else if (isSearchPage) {
+      const keyword = state.pageInfo?.keyword || extractSearchKeyword();
+      if (els.msg) els.msg.textContent = `搜索结果页${keyword ? `（关键词：${keyword}）` : ''}：可以使用 Rufus AI 对话功能`;
+    }
+  } else {
+    // 产品页：显示所有内容
+    if (els.productInfo) els.productInfo.style.display = 'block';
+    if (els.config) els.config.style.display = 'block';
+    if (els.actions) els.actions.style.display = 'block';
+    if (els.rufusSection) els.rufusSection.style.display = 'block';
+    
+    if (state.asin) els.asin.textContent = `ASIN: ${state.asin}`;
+    if (state.title) els.title.textContent = state.title;
+    if (state.message) els.msg.textContent = state.message;
+  }
+
   if (state.reviewCount) {
     els.count.textContent = `已采集: ${state.reviewCount}`;
     els.count.style.display = 'block';
   }
 
-  if (['collecting', 'uploading'].includes(state.status)) {
-    els.prog.style.display = 'block';
-    els.fill.style.width = `${state.progress || 0}%`;
-    els.text.textContent = `${state.progress || 0}%`;
-    els.config.style.display = 'none';
-    els.start.style.display = 'none';
-    els.stop.style.display = 'block';
-    els.dash.style.display = 'none';
-  } else if (state.status === 'complete') {
-    els.prog.style.display = 'none';
-    els.config.style.display = 'none';
-    els.start.style.display = 'none';
-    els.stop.style.display = 'none';
-    els.dash.style.display = 'block';
-    if(state.dashboardUrl) els.dash.href = state.dashboardUrl;
-  } else {
-    els.prog.style.display = 'none';
-    els.config.style.display = 'block';
-    els.start.style.display = 'block';
-    els.stop.style.display = 'none';
-    els.dash.style.display = 'none';
+  // 产品页的采集相关逻辑（只在产品页显示）
+  if (isProductPage) {
+    if (['collecting', 'uploading'].includes(state.status)) {
+      els.prog.style.display = 'block';
+      els.fill.style.width = `${state.progress || 0}%`;
+      els.text.textContent = `${state.progress || 0}%`;
+      els.config.style.display = 'none';
+      els.start.style.display = 'none';
+      els.stop.style.display = 'block';
+      els.dash.style.display = 'none';
+    } else if (state.status === 'complete') {
+      els.prog.style.display = 'none';
+      els.config.style.display = 'none';
+      els.start.style.display = 'none';
+      els.stop.style.display = 'none';
+      els.dash.style.display = 'block';
+      if(state.dashboardUrl) els.dash.href = state.dashboardUrl;
+    } else {
+      els.prog.style.display = 'none';
+      els.config.style.display = 'block';
+      els.start.style.display = 'block';
+      els.stop.style.display = 'none';
+      els.dash.style.display = 'none';
+    }
   }
 }
 
@@ -2170,6 +2587,263 @@ function handleStopClick() {
 
 // Rufus 状态
 let isRufusConversing = false;
+let currentRufusSessionId = null;  // [NEW] 当前会话 ID
+
+// ============== [NEW] 页面类型检测和信息收集 ==============
+
+/**
+ * [NEW] 检测当前页面类型
+ * @returns {string} 页面类型: homepage, keyword_search, product_detail
+ */
+function detectPageType() {
+  const url = window.location.href;
+  const pathname = window.location.pathname;
+  
+  // 1. 产品详情页检测（优先）
+  if (url.includes('/dp/') || url.includes('/gp/product/')) {
+    return 'product_detail';
+  }
+  
+  // 2. 搜索结果页检测（优先）
+  if (url.includes('/s?') || url.includes('/s/') || url.match(/\/s\?k=/i)) {
+    return 'keyword_search';
+  }
+  
+  // 3. 亚马逊首页检测
+  // 匹配: 只有域名，或者只有 / 或很少的路径
+  // amazon.com/, amazon.co.uk/, amazon.de/ 等
+  const isAmazonDomain = /amazon\.[a-z.]+/i.test(window.location.hostname);
+  
+  if (isAmazonDomain) {
+    // 如果路径名是空的或只有 /，或者是 /ref= 开头，且不包含 /dp/, /gp/product/, /s? 等
+    if (pathname === '/' || pathname === '' || pathname.match(/^\/ref=/)) {
+      return 'homepage';
+    }
+    
+    // 如果是 /gp/help 或其他通用页面，但不是产品/搜索页
+    if (pathname.startsWith('/gp/') && !pathname.includes('/product/')) {
+      return 'homepage';
+    }
+    
+    // 如果路径很简单（如 /b/ 等），且没有产品/搜索标识，可能是首页或分类页
+    // 这种情况下，我们通过检查DOM来判断
+    const hasProductResults = document.querySelectorAll('[data-component-type="s-search-result"]').length > 0;
+    const hasSearchContainer = !!document.querySelector('.s-main-slot') || !!document.querySelector('#search');
+    
+    if (!hasProductResults && !hasSearchContainer && !url.includes('/dp/') && !url.includes('/s?')) {
+      // 可能是首页
+      return 'homepage';
+    }
+  }
+  
+  // 默认为产品详情页（向后兼容）
+  return 'product_detail';
+}
+
+/**
+ * [NEW] 收集当前页面信息
+ * @returns {Object} 页面信息对象
+ */
+function collectPageInfo() {
+  const pageType = detectPageType();
+  const info = {
+    page_type: pageType,
+    marketplace: detectMarketplace(),
+  };
+  
+  switch (pageType) {
+    case 'homepage':
+      // 首页：无需额外信息
+      break;
+      
+    case 'keyword_search':
+      // 搜索页：提取关键词
+      info.keyword = extractSearchKeyword();
+      break;
+      
+    case 'product_detail':
+      // 产品页：提取 ASIN、标题、五点描述、产品图片
+      info.asin = detectASIN();
+      info.product_title = extractProductTitle();
+      info.bullet_points = extractBulletPoints();
+      info.product_image = extractProductImage();
+      break;
+  }
+  
+  return info;
+}
+
+/**
+ * [NEW] 提取产品标题
+ * @returns {string|null}
+ */
+function extractProductTitle() {
+  // 尝试多种选择器
+  const selectors = [
+    '#productTitle',
+    '#title span',
+    '[data-automation-id="title_feature_div"] span',
+    '.product-title-word-break',
+    'h1.a-size-large span',
+  ];
+  
+  for (const selector of selectors) {
+    const el = document.querySelector(selector);
+    if (el && el.textContent) {
+      return el.textContent.trim();
+    }
+  }
+  
+  return null;
+}
+
+/**
+ * [NEW] 提取五点描述
+ * @returns {string[]|null}
+ */
+function extractBulletPoints() {
+  // 尝试多种选择器
+  const selectors = [
+    '#feature-bullets ul li span.a-list-item',
+    '#feature-bullets li span',
+    '[data-automation-id="feature-bullets"] li span',
+    '.a-unordered-list.a-vertical.a-spacing-mini li span',
+  ];
+  
+  for (const selector of selectors) {
+    const elements = document.querySelectorAll(selector);
+    if (elements.length > 0) {
+      const bullets = [];
+      elements.forEach(el => {
+        const text = el.textContent?.trim();
+        if (text && text.length > 10) {  // 过滤太短的条目
+          bullets.push(text);
+        }
+      });
+      if (bullets.length > 0) {
+        return bullets;
+      }
+    }
+  }
+  
+  return null;
+}
+
+/**
+ * [NEW] 提取产品图片URL
+ * @returns {string|null}
+ */
+function extractProductImage() {
+  // 尝试多种选择器（按优先级）
+  const selectors = [
+    '#landingImage',                    // 主图
+    '#imgBlkFront',                     // 备用主图
+    '#main-image',                      // 主图容器
+    '.a-dynamic-image',                 // 动态图片
+    '#imageBlock_feature_div img',      // 图片块
+    '#product-image img',                // 产品图片
+    '[data-a-image-name="landingImage"]', // 数据属性
+  ];
+  
+  for (const selector of selectors) {
+    const img = document.querySelector(selector);
+    if (img) {
+      // 优先使用 src，其次 data-src，最后 data-old-src
+      let imageUrl = img.src || img.getAttribute('data-src') || img.getAttribute('data-old-src');
+      
+      if (imageUrl) {
+        // 清理URL：移除尺寸参数，获取高质量图片
+        // Amazon图片URL格式: https://m.media-amazon.com/images/I/..._AC_SL1500_.jpg
+        // 可以替换 _AC_SL1500_ 为 _AC_SL2000_ 获取更大尺寸
+        imageUrl = imageUrl.replace(/_AC_SL\d+_/, '_AC_SL2000_');
+        
+        // 确保是完整URL
+        if (imageUrl.startsWith('//')) {
+          imageUrl = 'https:' + imageUrl;
+        } else if (imageUrl.startsWith('/')) {
+          imageUrl = window.location.origin + imageUrl;
+        }
+        
+        // 验证URL格式
+        if (imageUrl.startsWith('http')) {
+          return imageUrl;
+        }
+      }
+    }
+  }
+  
+  return null;
+}
+
+/**
+ * [NEW] 检测 Amazon 市场
+ * @returns {string}
+ */
+function detectMarketplace() {
+  const hostname = window.location.hostname;
+  
+  const marketplaceMap = {
+    'amazon.com': 'US',
+    'amazon.co.uk': 'UK',
+    'amazon.de': 'DE',
+    'amazon.fr': 'FR',
+    'amazon.it': 'IT',
+    'amazon.es': 'ES',
+    'amazon.ca': 'CA',
+    'amazon.co.jp': 'JP',
+    'amazon.com.au': 'AU',
+    'amazon.in': 'IN',
+    'amazon.com.mx': 'MX',
+    'amazon.com.br': 'BR',
+    'amazon.nl': 'NL',
+    'amazon.sg': 'SG',
+    'amazon.ae': 'AE',
+    'amazon.sa': 'SA',
+    'amazon.pl': 'PL',
+    'amazon.se': 'SE',
+    'amazon.com.tr': 'TR',
+  };
+  
+  for (const [domain, code] of Object.entries(marketplaceMap)) {
+    if (hostname.includes(domain)) {
+      return code;
+    }
+  }
+  
+  return 'US';  // 默认
+}
+
+/**
+ * [NEW] 生成会话 ID
+ * @returns {string}
+ */
+function generateSessionId() {
+  const timestamp = Date.now().toString(36);
+  const random = Math.random().toString(36).substring(2, 8);
+  return `session-${timestamp}-${random}`;
+}
+
+/**
+ * [NEW] 获取或创建当前会话 ID
+ * @returns {string}
+ */
+function getOrCreateSessionId() {
+  if (!currentRufusSessionId) {
+    currentRufusSessionId = generateSessionId();
+    console.log('[Rufus] Created new session:', currentRufusSessionId);
+  }
+  return currentRufusSessionId;
+}
+
+/**
+ * [NEW] 重置会话（开始新会话）
+ */
+function resetRufusSession() {
+  currentRufusSessionId = null;
+  console.log('[Rufus] Session reset');
+}
+
+// ============== Rufus 对话功能 ==============
 
 /**
  * 检测页面上是否存在 Rufus 聊天界面
@@ -2209,12 +2883,31 @@ function detectRufusChat() {
     }
   }
   
-  // 备选：查找包含 "Rufus" 文本的元素
-  const allElements = document.querySelectorAll('div, section, aside');
+  // 备选：查找包含 "Rufus" 或 "Ask" 文本的元素，且包含输入框
+  const allElements = document.querySelectorAll('div, section, aside, form');
   for (const el of allElements) {
-    if (el.textContent && el.textContent.includes('Ask Rufus') && el.querySelector('input, textarea')) {
-      console.log('[Rufus] Found chat by text content');
+    const text = el.textContent || '';
+    const hasInput = el.querySelector('input[type="text"], textarea, input[placeholder*="Ask"], input[placeholder*="ask"]');
+    
+    if (hasInput && (
+      text.includes('Ask Rufus') || 
+      text.includes('Ask a question') ||
+      text.includes('Rufus') ||
+      el.querySelector('[aria-label*="Rufus"]') ||
+      el.querySelector('[aria-label*="Ask"]')
+    )) {
+      console.log('[Rufus] Found chat by text content and input field');
       return el;
+    }
+  }
+  
+  // 最后尝试：查找任何包含输入框的对话框或侧边栏
+  const dialogs = document.querySelectorAll('[role="dialog"], [class*="modal"], [class*="sidebar"], [class*="panel"]');
+  for (const dialog of dialogs) {
+    const input = dialog.querySelector('input[type="text"], textarea');
+    if (input && dialog.offsetParent !== null) { // 确保对话框可见
+      console.log('[Rufus] Found potential chat dialog with input');
+      return dialog;
     }
   }
   
@@ -2234,10 +2927,19 @@ async function openRufusChat() {
   
   // 尝试找到并点击 Rufus 图标
   const iconSelectors = [
+    // 首页特定的 Rufus 按钮
+    'a[href*="rufus"]',
+    'a[href*="/s?k="] + a[href*="rufus"]', // 搜索栏旁边的 Rufus 链接
+    '#nav-search-bar a[href*="rufus"]',
+    '.nav-search-bar a[href*="rufus"]',
+    'nav a[href*="rufus"]',
+    // 通用 Rufus 按钮
     '[data-testid*="rufus-button"]',
+    '[data-testid*="rufus"]',
     '[aria-label*="Rufus"]',
     '[aria-label*="AI assistant"]',
     '[aria-label*="Ask a question"]',
+    '[aria-label*="Ask Rufus"]',
     '.rufus-trigger',
     '#rufus-trigger',
     // 通用的聊天图标
@@ -2245,21 +2947,94 @@ async function openRufusChat() {
     '[data-testid="chat-trigger"]',
     // Amazon 搜索栏附近的 AI 图标
     '.nav-search-scope button[aria-label*="AI"]',
-    '#nav-search-bar button[aria-label*="assistant"]'
+    '#nav-search-bar button[aria-label*="assistant"]',
+    // 导航栏中的 Rufus 链接
+    '#nav-main a:has-text("Rufus")',
+    'nav a:contains("Rufus")',
+    // 尝试通过文本内容查找
+    'a:has-text("Rufus")',
+    'button:has-text("Rufus")'
   ];
   
   for (const selector of iconSelectors) {
-    const icon = document.querySelector(selector);
-    if (icon) {
-      console.log('[Rufus] Found and clicking trigger:', selector);
-      icon.click();
+    try {
+      // 对于包含文本的选择器，使用不同的查找方式
+      let icon = null;
+      if (selector.includes(':has-text') || selector.includes(':contains')) {
+        // 使用文本内容查找
+        const allLinks = document.querySelectorAll('a, button');
+        for (const el of allLinks) {
+          const text = el.textContent?.toLowerCase() || '';
+          const ariaLabel = el.getAttribute('aria-label')?.toLowerCase() || '';
+          if (text.includes('rufus') || ariaLabel.includes('rufus')) {
+            icon = el;
+            break;
+          }
+        }
+      } else {
+        icon = document.querySelector(selector);
+      }
       
-      // 等待聊天界面打开
-      await new Promise(r => setTimeout(r, 1500));
-      
-      chatInterface = detectRufusChat();
-      if (chatInterface) {
-        return chatInterface;
+      if (icon) {
+        console.log('[Rufus] Found and clicking trigger:', selector, icon);
+        
+        // 如果是链接，检查是否会导航
+        if (icon.tagName === 'A') {
+          const href = icon.getAttribute('href');
+          const isExternalNav = href && !href.startsWith('#') && !href.startsWith('javascript:');
+          
+          if (isExternalNav) {
+            // 如果是外部导航，可能需要等待页面加载
+            console.log('[Rufus] Link will navigate, clicking and waiting...');
+            icon.click();
+            // 等待页面可能的变化（可能是新页面或侧边栏打开）
+            await new Promise(r => setTimeout(r, 3000));
+          } else {
+            // 锚点或 JS 链接，直接点击
+            icon.click();
+            await new Promise(r => setTimeout(r, 2000));
+          }
+        } else {
+          // 按钮，直接点击
+          icon.click();
+          await new Promise(r => setTimeout(r, 2000));
+        }
+        
+        chatInterface = detectRufusChat();
+        if (chatInterface) {
+          console.log('[Rufus] Chat interface opened successfully');
+          return chatInterface;
+        }
+        
+        // 如果还没找到，再等待一下（可能还在加载）
+        await new Promise(r => setTimeout(r, 2000));
+        chatInterface = detectRufusChat();
+        if (chatInterface) {
+          return chatInterface;
+        }
+      }
+    } catch (e) {
+      console.warn('[Rufus] Error with selector:', selector, e);
+      // 继续尝试下一个选择器
+    }
+  }
+  
+  // 最后尝试：查找所有包含 "Rufus" 文本的链接和按钮
+  console.log('[Rufus] Trying fallback: searching all elements for "Rufus" text');
+  const allElements = document.querySelectorAll('a, button, [role="button"]');
+  for (const el of allElements) {
+    const text = (el.textContent || el.getAttribute('aria-label') || '').toLowerCase();
+    if (text.includes('rufus') && el.offsetParent !== null) { // 确保元素可见
+      console.log('[Rufus] Found Rufus element by text:', el);
+      try {
+        el.click();
+        await new Promise(r => setTimeout(r, 2000));
+        chatInterface = detectRufusChat();
+        if (chatInterface) {
+          return chatInterface;
+        }
+      } catch (e) {
+        console.warn('[Rufus] Error clicking element:', e);
       }
     }
   }
@@ -2344,39 +3119,76 @@ async function sendRufusQuestion(question) {
 }
 
 /**
- * 等待 Rufus 回答完成
+ * 等待 Rufus 回答完成（改进版：确保获取完整回答）
  */
-async function waitForRufusAnswer(timeout = 60000) {
+async function waitForRufusAnswer(timeout = 120000) { // 增加到 120 秒
   console.log('[Rufus] Waiting for answer, timeout:', timeout);
   const startTime = Date.now();
   let lastAnswerLength = 0;
+  let lastAnswerContent = '';
   let stableCount = 0;
   let attempts = 0;
+  let consecutiveNoChangeCount = 0;
   
   while (Date.now() - startTime < timeout) {
-    await new Promise(r => setTimeout(r, 1000)); // 每秒检查一次
+    await new Promise(r => setTimeout(r, 1500)); // 每 1.5 秒检查一次
     attempts++;
     
     const answer = extractRufusResponse();
-    console.log(`[Rufus] Attempt ${attempts}: answer length = ${answer?.length || 0}`);
+    const answerLength = answer?.length || 0;
+    const answerContent = answer?.substring(0, 500) || ''; // 取前 500 字符比较内容
     
-    if (answer && answer.length > 100) {
-      // 检查回答是否稳定（停止变化）
-      if (answer.length === lastAnswerLength) {
-        stableCount++;
-        console.log(`[Rufus] Stable count: ${stableCount}`);
-        if (stableCount >= 2) {
-          console.log('[Rufus] Answer stable, returning');
-          return answer;
+    console.log(`[Rufus] Attempt ${attempts}: answer length = ${answerLength}, stable count = ${stableCount}`);
+    
+    if (answer && answerLength > 100) {
+      // 检查回答长度是否变化
+      if (answerLength === lastAnswerLength) {
+        consecutiveNoChangeCount++;
+        
+        // 不仅检查长度，还要检查内容是否变化
+        if (answerContent === lastAnswerContent) {
+          stableCount++;
+          console.log(`[Rufus] Content stable, stable count: ${stableCount}`);
+          
+          // 增加到 5 秒稳定性（3-4 次检查）才返回
+          if (stableCount >= 4) {
+            // 最后再检查一次是否有加载指示器
+            const loading = document.querySelector(
+              '[data-testid*="loading"], ' +
+              '[class*="loading"], ' +
+              '[class*="typing"], ' +
+              '[aria-busy="true"], ' +
+              '.spinner, ' +
+              '[class*="Spinner"], ' +
+              '[class*="streaming"], ' +
+              '[aria-live="polite"][aria-busy="true"]'
+            );
+            
+            if (!loading) {
+              console.log('[Rufus] Answer stable and no loading indicator, returning complete answer');
+              return answer;
+            } else {
+              console.log('[Rufus] Still loading, resetting stable count');
+              stableCount = 0; // 重置稳定性计数
+            }
+          }
+        } else {
+          // 内容还在变化，重置稳定性计数
+          stableCount = 0;
+          lastAnswerContent = answerContent;
         }
       } else {
+        // 长度变化，重置所有计数
         stableCount = 0;
-        lastAnswerLength = answer.length;
+        consecutiveNoChangeCount = 0;
+        lastAnswerLength = answerLength;
+        lastAnswerContent = answerContent;
+        console.log(`[Rufus] Answer growing: ${lastAnswerLength} -> ${answerLength}`);
       }
     }
     
-    // 如果已经等了超过 10 秒且有内容，检查是否完成
-    if (Date.now() - startTime > 10000 && lastAnswerLength > 200) {
+    // 如果已经等了超过 15 秒且有内容，检查是否完成（作为备选方案）
+    if (Date.now() - startTime > 15000 && lastAnswerLength > 200 && consecutiveNoChangeCount >= 3) {
       // 检查是否有加载指示器
       const loading = document.querySelector(
         '[data-testid*="loading"], ' +
@@ -2384,14 +3196,21 @@ async function waitForRufusAnswer(timeout = 60000) {
         '[class*="typing"], ' +
         '[aria-busy="true"], ' +
         '.spinner, ' +
-        '[class*="Spinner"]'
+        '[class*="Spinner"], ' +
+        '[class*="streaming"]'
       );
       
       if (!loading) {
-        console.log('[Rufus] No loading indicator found, answer appears complete');
+        console.log('[Rufus] No loading indicator found after 15s, checking if answer is complete');
         const finalAnswer = extractRufusResponse();
-        if (finalAnswer && finalAnswer.length > 100) {
-          return finalAnswer;
+        if (finalAnswer && finalAnswer.length > 200) {
+          // 再等待 3 秒确保没有新内容
+          await new Promise(r => setTimeout(r, 3000));
+          const recheckAnswer = extractRufusResponse();
+          if (recheckAnswer && recheckAnswer.length === finalAnswer.length) {
+            console.log('[Rufus] Answer confirmed complete after recheck');
+            return recheckAnswer;
+          }
         }
       }
     }
@@ -2459,6 +3278,384 @@ function getRufusMessageCount() {
 }
 
 /**
+ * ========================================
+ * Rufus 对话采集核心功能（基于真实 DOM 结构）
+ * 
+ * DOM 结构：
+ * - 用户问题: generic > (generic:"Customer question" + generic:问题文本)
+ * - Rufus回答: region[role="region"] > generic > (paragraph, list>listitem, strong...)
+ * - 状态指示: 包含 "Rufus is currently generating" 或 "Rufus has completed"
+ * ========================================
+ */
+
+/**
+ * 捕获当前对话的快照
+ */
+function captureConversationSnapshot() {
+  const container = findRufusChatContainer();
+  if (!container) {
+    return {
+      regionCount: 0,
+      timestamp: Date.now()
+    };
+  }
+  
+  // 记录当前 region 元素的数量（每个 region 是一个 Rufus 回答）
+  const regions = container.querySelectorAll('[role="region"]');
+  
+  console.log(`[Rufus Snapshot] 当前有 ${regions.length} 个回答区域`);
+  
+  return {
+    regionCount: regions.length,
+    timestamp: Date.now()
+  };
+}
+
+/**
+ * 等待 Rufus 回答完成并提取（基于状态指示器）
+ */
+async function waitAndExtractNewAnswer(sentQuestion, beforeSnapshot, timeout = 60000) {
+  console.log(`[Rufus] === 开始等待回答 ===`);
+  console.log(`[Rufus] 问题: "${sentQuestion.substring(0, 60)}..."`);
+  console.log(`[Rufus] 快照: ${beforeSnapshot.regionCount} 个回答区域`);
+  
+  const startTime = Date.now();
+  
+  // === 阶段1: 等待新的 region 出现（Rufus 开始回答）===
+  console.log('[Rufus] 阶段1: 等待新回答区域出现...');
+  let newRegion = null;
+  
+  for (let i = 0; i < 30; i++) { // 最多等待 30 秒
+    await new Promise(r => setTimeout(r, 1000));
+    
+    const container = findRufusChatContainer();
+    if (!container) continue;
+    
+    const regions = container.querySelectorAll('[role="region"]');
+    
+    if (regions.length > beforeSnapshot.regionCount) {
+      newRegion = regions[regions.length - 1]; // 获取最新的 region
+      console.log(`[Rufus] ✓ 新回答区域出现 (第 ${regions.length} 个)`);
+      break;
+    }
+    
+    if (i === 29) {
+      throw new Error('Rufus 没有开始回答，请确保对话框已打开');
+    }
+  }
+  
+  // === 阶段2: 等待 "Rufus has completed" 状态 ===
+  console.log('[Rufus] 阶段2: 等待回答完成...');
+  
+  while (Date.now() - startTime < timeout) {
+    await new Promise(r => setTimeout(r, 1500));
+    
+    const elapsedSeconds = Math.floor((Date.now() - startTime) / 1000);
+    
+    // 检查状态指示器
+    if (isRufusCompleted()) {
+      console.log(`[Rufus] ✓ 回答完成 (${elapsedSeconds}s)`);
+      break;
+    }
+    
+    console.log(`[Rufus] ${elapsedSeconds}s: 等待完成...`);
+  }
+  
+  // === 阶段3: 从最新的 region 提取格式化内容 ===
+  console.log('[Rufus] 阶段3: 提取格式化内容...');
+  
+  const container = findRufusChatContainer();
+  if (!container) {
+    throw new Error('找不到 Rufus 对话容器');
+  }
+  
+  // 重新获取最新的 region
+  const regions = container.querySelectorAll('[role="region"]');
+  if (regions.length === 0) {
+    throw new Error('没有找到回答区域');
+  }
+  
+  const latestRegion = regions[regions.length - 1];
+  const answer = extractFormattedAnswerFromRegion(latestRegion);
+  
+  if (!answer || answer.length < 50) {
+    throw new Error('提取回答失败');
+  }
+  
+  console.log(`[Rufus] ✓ 提取完成: ${answer.length} chars`);
+  return answer;
+}
+
+/**
+ * 检查 Rufus 是否已完成回答
+ */
+function isRufusCompleted() {
+  // 查找状态指示器
+  const statusTexts = [
+    'Rufus has completed generating a response',
+    'Rufus has completed'
+  ];
+  
+  const allElements = document.querySelectorAll('*');
+  for (const el of allElements) {
+    const text = el.textContent || '';
+    for (const status of statusTexts) {
+      if (text.includes(status)) {
+        return true;
+      }
+    }
+  }
+  
+  return false;
+}
+
+/**
+ * 从 region 元素中提取格式化的回答
+ */
+function extractFormattedAnswerFromRegion(region) {
+  if (!region) return null;
+  
+  const result = [];
+  let currentListItems = [];
+  let inList = false;
+  
+  // 遍历 region 内的所有格式化元素
+  const elements = region.querySelectorAll('p, li, h1, h2, h3, h4, h5, h6');
+  
+  for (const el of elements) {
+    const text = el.innerText?.trim() || '';
+    if (text.length < 5) continue;
+    
+    // 跳过 UI 元素
+    if (isUIElement(text)) continue;
+    
+    const tagName = el.tagName?.toLowerCase() || '';
+    
+    // 处理列表项
+    if (tagName === 'li') {
+      if (!inList) {
+        inList = true;
+        currentListItems = [];
+      }
+      const listContent = formatListItemContent(el);
+      if (listContent) {
+        currentListItems.push(listContent);
+      }
+    } else {
+      // 非列表项：先保存之前的列表
+      if (inList && currentListItems.length > 0) {
+        result.push(currentListItems.join('\n'));
+        currentListItems = [];
+        inList = false;
+      }
+      
+      // 格式化当前元素
+      const formatted = formatElementContent(el);
+      if (formatted) {
+        result.push(formatted);
+      }
+    }
+  }
+  
+  // 保存最后的列表
+  if (inList && currentListItems.length > 0) {
+    result.push(currentListItems.join('\n'));
+  }
+  
+  // 去重（处理嵌套元素导致的重复）
+  const deduplicated = deduplicateContent(result);
+  
+  return deduplicated.join('\n\n');
+}
+
+/**
+ * 格式化单个元素的内容
+ */
+function formatElementContent(element) {
+  const tagName = element.tagName?.toLowerCase() || '';
+  let content = '';
+  
+  // 处理段落
+  if (tagName === 'p') {
+    content = formatParagraphContent(element);
+  }
+  // 处理列表项
+  else if (tagName === 'li') {
+    content = formatListItemContent(element);
+  }
+  // 处理标题
+  else if (['h1', 'h2', 'h3', 'h4', 'h5', 'h6'].includes(tagName)) {
+    const text = element.innerText?.trim() || '';
+    content = `━━━ ${text} ━━━`;
+  }
+  else {
+    content = element.innerText?.trim() || '';
+  }
+  
+  return content;
+}
+
+/**
+ * 格式化段落内容（保留结构）
+ */
+function formatParagraphContent(paragraph) {
+  let result = '';
+  let hasStrong = false;
+  
+  for (const node of paragraph.childNodes) {
+    if (node.nodeType === Node.TEXT_NODE) {
+      result += node.textContent;
+    } else if (node.nodeType === Node.ELEMENT_NODE) {
+      const tagName = node.tagName?.toLowerCase();
+      const text = node.innerText?.trim() || '';
+      
+      if (tagName === 'strong' || tagName === 'b') {
+        hasStrong = true;
+        // 如果是段落开头的 strong，作为小标题处理
+        if (result.trim() === '' || result.trim().endsWith(':')) {
+          result += `【${text}】`;
+        } else {
+          result += text;
+        }
+      } else if (tagName === 'emphasis' || tagName === 'em' || tagName === 'i') {
+        result += text;
+      } else if (tagName === 'a') {
+        // 链接：保留文本
+        result += text;
+      } else {
+        result += text;
+      }
+    }
+  }
+  
+  return result.trim();
+}
+
+/**
+ * 格式化列表项内容
+ */
+function formatListItemContent(listItem) {
+  // 检查是否有 strong 开头（标题）
+  const strong = listItem.querySelector('strong, b');
+  
+  if (strong) {
+    const strongText = strong.innerText?.trim() || '';
+    // 获取 strong 之后的文本
+    let restText = '';
+    let foundStrong = false;
+    for (const node of listItem.childNodes) {
+      if (node.nodeType === Node.ELEMENT_NODE && (node.tagName?.toLowerCase() === 'strong' || node.tagName?.toLowerCase() === 'b')) {
+        foundStrong = true;
+        continue;
+      }
+      if (foundStrong) {
+        restText += node.textContent || '';
+      }
+    }
+    restText = restText.trim();
+    
+    // 格式：【标题】内容
+    if (restText) {
+      return `  • 【${strongText}】${restText}`;
+    } else {
+      return `  • 【${strongText}】`;
+    }
+  } else {
+    return `  • ${listItem.innerText?.trim() || ''}`;
+  }
+}
+
+/**
+ * 去重内容（处理嵌套导致的重复）
+ */
+function deduplicateContent(items) {
+  const result = [];
+  const seen = new Set();
+  
+  for (const item of items) {
+    // 标准化用于比较
+    const normalized = item.toLowerCase().replace(/[\*\_\•]/g, '').replace(/\s+/g, ' ').trim();
+    
+    // 检查是否是之前项的子集
+    let isDuplicate = false;
+    for (const existing of seen) {
+      if (existing.includes(normalized) || normalized.includes(existing)) {
+        // 保留较长的
+        if (normalized.length > existing.length) {
+          seen.delete(existing);
+          seen.add(normalized);
+          // 替换 result 中对应的项
+          const idx = result.findIndex(r => 
+            r.toLowerCase().replace(/[\*\_\•]/g, '').replace(/\s+/g, ' ').trim() === existing
+          );
+          if (idx >= 0) {
+            result[idx] = item;
+          }
+        }
+        isDuplicate = true;
+        break;
+      }
+    }
+    
+    if (!isDuplicate && normalized.length > 0) {
+      seen.add(normalized);
+      result.push(item);
+    }
+  }
+  
+  return result;
+}
+
+/**
+ * 检查是否是 UI 元素文本
+ */
+function isUIElement(text) {
+  const uiPatterns = [
+    /^ask rufus/i,
+    /^type a question/i,
+    /^ask something else/i,
+    /^show more/i,
+    /^show less/i,
+    /^rufus$/i,
+    /^beta$/i,
+    /^compare with/i,
+    /^show similar/i,
+    /^best for/i,
+    /^alternatives for/i,
+    /^thumbs (up|down)/i,
+    /^scroll to/i
+  ];
+  
+  for (const pattern of uiPatterns) {
+    if (pattern.test(text.trim())) {
+      return true;
+    }
+  }
+  
+  return false;
+}
+
+/**
+ * 备用：基于快照提取新回答
+ */
+function extractNewAnswerAfterSnapshot(sentQuestion, beforeSnapshot) {
+  const container = findRufusChatContainer();
+  if (!container) return null;
+  
+  const regions = container.querySelectorAll('[role="region"]');
+  if (regions.length > beforeSnapshot.regionCount) {
+    return extractFormattedAnswerFromRegion(regions[regions.length - 1]);
+  }
+  
+  // 回退：提取最后一个 region
+  if (regions.length > 0) {
+    return extractFormattedAnswerFromRegion(regions[regions.length - 1]);
+  }
+  
+  return null;
+}
+
+/**
  * 提取最后一条消息的内容
  */
 function extractLastMessage() {
@@ -2473,53 +3670,245 @@ function extractLastMessage() {
 }
 
 /**
- * 等待新消息出现并提取
+ * 简化版：提取 Rufus 的回答（使用快照方法）
  */
-async function waitAndExtractNewMessage(previousCount, timeout = 60000) {
-  console.log(`[Rufus] Waiting for new message, previous count: ${previousCount}`);
+function extractRufusAnswerOnly(sentQuestion) {
+  const container = findRufusChatContainer();
+  if (!container) return null;
+  
+  // 获取最后一个 region（最新的回答）
+  const regions = container.querySelectorAll('[role="region"]');
+  if (regions.length > 0) {
+    return extractFormattedAnswerFromRegion(regions[regions.length - 1]);
+  }
+  
+  return null;
+}
+
+/**
+ * [NEW] 检查内容是否与发送的问题相同
+ */
+function isContentSameAsQuestion(content, question) {
+  if (!content || !question) return false;
+  
+  // 标准化文本（去除空白、转小写）
+  const normalizeText = (text) => {
+    return text.toLowerCase()
+      .replace(/\s+/g, ' ')
+      .replace(/[^\w\s]/g, '')
+      .trim();
+  };
+  
+  const normalizedContent = normalizeText(content);
+  const normalizedQuestion = normalizeText(question);
+  
+  // 完全匹配
+  if (normalizedContent === normalizedQuestion) return true;
+  
+  // 内容包含问题的大部分（80%以上）
+  if (normalizedQuestion.length > 20) {
+    const questionWords = normalizedQuestion.split(' ');
+    const contentWords = normalizedContent.split(' ');
+    let matchCount = 0;
+    for (const word of questionWords) {
+      if (contentWords.includes(word)) matchCount++;
+    }
+    const matchRatio = matchCount / questionWords.length;
+    if (matchRatio > 0.8) {
+      console.log(`[Rufus] Content matches question by ${(matchRatio * 100).toFixed(0)}%`);
+      return true;
+    }
+  }
+  
+  return false;
+}
+
+/**
+ * [NEW] 检测 Rufus 输入框是否可用（对话完成的信号）
+ */
+function isRufusInputReady() {
+  // 查找 Rufus 输入框
+  const inputSelectors = [
+    'input[placeholder*="Ask Rufus"]',
+    'textarea[placeholder*="Ask Rufus"]',
+    'input[placeholder*="question"]',
+    'textarea[placeholder*="question"]',
+    '[data-testid*="rufus-input"]',
+    '[aria-label*="Ask Rufus"]'
+  ];
+  
+  for (const selector of inputSelectors) {
+    try {
+      const input = document.querySelector(selector);
+      if (input && !input.disabled && input.offsetParent !== null) {
+        // 检查输入框是否为空或者只有占位符
+        const value = input.value || input.textContent || '';
+        if (value.trim() === '' || value.includes('Ask Rufus')) {
+          console.log('[Rufus] Input is ready (empty and enabled)');
+          return true;
+        }
+      }
+    } catch (e) {
+      // 选择器无效
+    }
+  }
+  
+  return false;
+}
+
+/**
+ * [NEW] 检测 Rufus 是否正在生成回答（流式输出中）
+ */
+function isRufusGenerating() {
+  // 检测各种加载/流式输出指示器
+  const loadingSelectors = [
+    '[class*="loading"]',
+    '[class*="typing"]',
+    '[class*="streaming"]',
+    '[class*="generating"]',
+    '[aria-busy="true"]',
+    '.spinner',
+    '[class*="Spinner"]',
+    '[class*="pulse"]',
+    '[class*="animate"]',
+    // Amazon 特定的加载样式
+    '.a-spinner',
+    '[class*="thinking"]'
+  ];
+  
+  for (const selector of loadingSelectors) {
+    try {
+      const loading = document.querySelector(selector);
+      if (loading && loading.offsetParent !== null) {
+        // 确保这个元素在 Rufus 容器内
+        const container = findRufusChatContainer();
+        if (container && container.contains(loading)) {
+          console.log('[Rufus] Found loading indicator:', selector);
+          return true;
+        }
+      }
+    } catch (e) {
+      // 选择器无效
+    }
+  }
+  
+  return false;
+}
+
+/**
+ * 等待新消息出现并提取（改进版：确保获取的是 Rufus 回答而不是问题）
+ * @param {number} previousCount - 发送问题前的消息数量
+ * @param {number} timeout - 超时时间（毫秒）
+ * @param {string} sentQuestion - 发送的问题（用于排除）
+ */
+async function waitAndExtractNewMessage(previousCount, timeout = 120000, sentQuestion = '') {
+  console.log(`[Rufus] Waiting for new message, previous count: ${previousCount}, question: "${sentQuestion.substring(0, 50)}..."`);
   const startTime = Date.now();
   let lastContent = '';
+  let lastContentLength = 0;
   let stableCount = 0;
+  let rufusStartedAnswering = false;
+  
+  // 最少等待 3 秒，让 Rufus 开始回答
+  const MIN_WAIT_TIME = 3000;
   
   while (Date.now() - startTime < timeout) {
-    await new Promise(r => setTimeout(r, 1000));
+    await new Promise(r => setTimeout(r, 1500)); // 每 1.5 秒检查一次
     
-    const currentCount = getRufusMessageCount();
-    console.log(`[Rufus] Current message count: ${currentCount}`);
+    const elapsedMs = Date.now() - startTime;
+    const elapsedSeconds = Math.floor(elapsedMs / 1000);
     
-    // 检查是否有新消息
-    if (currentCount > previousCount) {
-      const currentContent = extractLastMessage();
-      
-      if (currentContent && currentContent.length > 50) {
+    // 提取 Rufus 的回答（不是用户问题）
+    const currentContent = extractRufusAnswerOnly(sentQuestion);
+    const currentContentLength = currentContent?.length || 0;
+    
+    console.log(`[Rufus] Check at ${elapsedSeconds}s: answer length = ${currentContentLength}, stable = ${stableCount}, rufusStarted = ${rufusStartedAnswering}`);
+    
+    // 检测 Rufus 是否开始回答（回答内容与问题不同，且有实质内容）
+    if (currentContent && currentContentLength > 100) {
+      // 确保这不是发送的问题本身
+      if (!isContentSameAsQuestion(currentContent, sentQuestion)) {
+        rufusStartedAnswering = true;
+        console.log('[Rufus] Rufus started answering, content differs from question');
+        
         // 检查内容是否稳定
-        if (currentContent === lastContent) {
+        if (currentContent === lastContent && currentContentLength === lastContentLength) {
           stableCount++;
-          if (stableCount >= 2) {
-            console.log('[Rufus] Content stable, returning');
+          console.log(`[Rufus] Answer stable, stable count: ${stableCount}`);
+          
+          // 必须满足最小等待时间
+          if (elapsedMs < MIN_WAIT_TIME) {
+            console.log(`[Rufus] Still within min wait time (${elapsedMs}ms < ${MIN_WAIT_TIME}ms)`);
+            continue;
+          }
+          
+          // 方法1：内容稳定 3 次（4.5秒），且 Rufus 输入框可用 → 认为完成
+          if (stableCount >= 3 && isRufusInputReady()) {
+            console.log('[Rufus] Answer stable and input is ready, returning');
+            return currentContent;
+          }
+          
+          // 方法2：内容稳定 4 次（6秒），且没有加载指示器 → 认为完成
+          if (stableCount >= 4 && !isRufusGenerating()) {
+            console.log('[Rufus] Answer stable and no generating indicator, returning');
+            return currentContent;
+          }
+          
+          // 方法3：内容稳定 6 次（9秒）→ 强制认为完成
+          if (stableCount >= 6) {
+            console.log('[Rufus] Answer stable for 6 checks, forcing return');
             return currentContent;
           }
         } else {
+          // 内容还在变化（Rufus 还在回答），重置稳定性计数
           stableCount = 0;
           lastContent = currentContent;
+          lastContentLength = currentContentLength;
+          console.log(`[Rufus] Answer still growing: ${lastContentLength} chars`);
         }
+      } else {
+        console.log('[Rufus] Content is same as question, waiting for actual answer...');
       }
     }
     
-    // 备选：检查加载状态
-    const loading = document.querySelector('[class*="loading"], [class*="typing"], [aria-busy="true"]');
-    if (!loading && lastContent.length > 100 && stableCount >= 1) {
-      return lastContent;
+    // 如果已经等了超过 30 秒，且有有效回答 → 降低检测阈值
+    if (elapsedSeconds > 30 && rufusStartedAnswering && lastContent && lastContent.length > 200 && stableCount >= 2) {
+      if (!isRufusGenerating()) {
+        // 再等待 3 秒确认内容不变
+        await new Promise(r => setTimeout(r, 3000));
+        const recheckContent = extractRufusAnswerOnly(sentQuestion);
+        if (recheckContent && recheckContent.length === lastContentLength) {
+          console.log('[Rufus] Answer confirmed stable after 30s, returning');
+          return recheckContent;
+        }
+      }
     }
   }
   
-  // 超时但有内容则返回
-  if (lastContent.length > 50) {
-    console.log('[Rufus] Timeout but returning partial content');
+  // 超时处理：优先使用已收集到的正确回答
+  console.log('[Rufus] Timeout reached, attempting final extraction...');
+  
+  // 1. 如果之前已经检测到有效回答，返回它
+  if (lastContent && lastContent.length > 100 && rufusStartedAnswering) {
+    console.log('[Rufus] Timeout but returning last known answer, length:', lastContent.length);
     return lastContent;
   }
   
-  throw new Error('等待 Rufus 回答超时');
+  // 2. 最后一次尝试正确提取（排除问题）
+  const finalAnswer = extractRufusAnswerOnly(sentQuestion);
+  if (finalAnswer && finalAnswer.length > 100) {
+    console.log('[Rufus] Timeout but got final answer, length:', finalAnswer.length);
+    return finalAnswer;
+  }
+  
+  // 3. 备选方法
+  const anyContent = extractRufusResponse();
+  if (anyContent && anyContent.length > 50) {
+    console.log('[Rufus] Timeout, using fallback extraction, length:', anyContent.length);
+    return anyContent;
+  }
+  
+  throw new Error('等待 Rufus 回答超时，且未检测到有效内容');
 }
 
 /**
@@ -2735,10 +4124,23 @@ function cleanRufusText(text) {
  */
 function uploadRufusConversation(data) {
   return new Promise((resolve, reject) => {
+    // 设置超时时间为 30 秒
+    const timeout = setTimeout(() => {
+      reject(new Error('上传超时：30秒内未收到响应'));
+    }, 30000);
+    
     chrome.runtime.sendMessage({
       type: 'UPLOAD_RUFUS_CONVERSATION',
       data: data
     }, (response) => {
+      clearTimeout(timeout);
+      
+      // 检查 chrome.runtime.lastError（扩展上下文可能已失效）
+      if (chrome.runtime.lastError) {
+        reject(new Error(`上传失败: ${chrome.runtime.lastError.message || '扩展上下文已失效'}`));
+        return;
+      }
+      
       if (response?.success) {
         resolve(response);
       } else {
@@ -2765,8 +4167,16 @@ async function runTopicQuestions(topicKey) {
   }
   
   isRufusConversing = true;
-  const asin = detectASIN();
-  const marketplace = detectMarketplace();
+  
+  // [NEW] 收集页面信息
+  const pageInfo = collectPageInfo();
+  const asin = pageInfo.asin || detectASIN();
+  const marketplace = pageInfo.marketplace || detectMarketplace();
+  const sessionId = getOrCreateSessionId();
+  
+  // [NEW] 获取关键词（用于搜索页动态生成问题）
+  const keyword = pageInfo.keyword || extractSearchKeyword();
+  
   const results = [];
   
   try {
@@ -2774,32 +4184,56 @@ async function runTopicQuestions(topicKey) {
     updateRufusProgress(0, topic.questions.length);
     
     // 确保 Rufus 已打开
+    updateRufusStatus('🔍 正在查找并打开 Rufus...');
     const chatInterface = await openRufusChat();
     if (!chatInterface) {
-      throw new Error('请先手动打开 Rufus 对话框，然后再点击按钮');
+      // 在首页上，提供更友好的提示
+      const pageInfo = collectPageInfo();
+      if (pageInfo.page_type === 'homepage') {
+        throw new Error('无法自动打开 Rufus。请手动点击页面顶部导航栏中的 "Rufus" 链接，然后再点击此按钮。');
+      } else {
+        throw new Error('请先手动打开 Rufus 对话框，然后再点击按钮');
+      }
     }
+    updateRufusStatus('✅ Rufus 已打开');
     
     await new Promise(r => setTimeout(r, 1000));
     
     // 逐个问题执行
     for (let i = 0; i < topic.questions.length; i++) {
-      const question = topic.questions[i];
+      let question = topic.questions[i];
+      
+      // [NEW] 在搜索页，根据关键词动态调整问题
+      if (pageInfo.page_type === 'keyword_search' && keyword) {
+        question = adaptQuestionForKeyword(question, keyword, topicKey);
+        console.log(`[Rufus] Adapted question for keyword "${keyword}":`, question);
+      }
       const questionNum = i + 1;
       
       updateRufusStatus(`正在提问 ${questionNum}/${topic.questions.length}...`);
       updateRufusProgress(i, topic.questions.length);
       
       try {
-        // 1. 记录当前消息数量
-        const beforeCount = getRufusMessageCount();
-        console.log(`[Rufus] Question ${questionNum}: beforeCount = ${beforeCount}`);
+        // 1. 记录发送前的对话快照
+        const beforeSnapshot = captureConversationSnapshot();
+        console.log(`[Rufus] Question ${questionNum}: snapshot length = ${beforeSnapshot.textLength}`);
         
         // 2. 发送问题
         await sendRufusQuestion(question);
         
-        // 3. 等待并提取新回答
+        // 3. 等待并提取新回答（传入问题和快照）
         updateRufusStatus(`等待回答 ${questionNum}/${topic.questions.length}...`);
-        const answer = await waitAndExtractNewMessage(beforeCount, 60000);
+        let answer;
+        try {
+          answer = await waitAndExtractNewAnswer(question, beforeSnapshot, 60000);
+        } catch (waitErr) {
+          console.warn(`[Rufus] Question ${questionNum} wait error:`, waitErr.message);
+          // 即使超时，也尝试提取新增内容
+          answer = extractNewAnswerAfterSnapshot(question, beforeSnapshot);
+          if (!answer || answer.length < 50) {
+            answer = null;
+          }
+        }
         
         if (!answer || answer.length < 50) {
           console.warn(`[Rufus] Question ${questionNum} got empty answer`);
@@ -2809,9 +4243,10 @@ async function runTopicQuestions(topicKey) {
         
         console.log(`[Rufus] Question ${questionNum} answer length: ${answer.length}`);
         
-        // 4. 立即上传
+        // 4. 立即上传（添加错误处理和重试机制）
         updateRufusStatus(`保存回答 ${questionNum}/${topic.questions.length}...`);
         
+        // [UPDATED] 包含新字段
         const conversationData = {
           asin: asin,
           marketplace: marketplace,
@@ -2819,11 +4254,42 @@ async function runTopicQuestions(topicKey) {
           answer: answer,
           question_type: topicKey,
           question_index: i,
-          conversation_id: `rufus-${topicKey}-${i}-${Date.now()}`
+          conversation_id: `rufus-${topicKey}-${i}-${Date.now()}`,
+          // [NEW] 新字段
+          page_type: pageInfo.page_type,
+          keyword: pageInfo.keyword || null,
+          product_title: pageInfo.product_title || null,
+          bullet_points: pageInfo.bullet_points || null,
+          product_image: pageInfo.product_image || null,
+          session_id: sessionId,
         };
         
-        await uploadRufusConversation(conversationData);
-        results.push({ question, answer, success: true });
+        // 尝试上传，最多重试 3 次
+        let uploadSuccess = false;
+        let uploadError = null;
+        for (let retry = 0; retry < 3; retry++) {
+          try {
+            await uploadRufusConversation(conversationData);
+            uploadSuccess = true;
+            console.log(`[Rufus] Question ${questionNum} uploaded successfully (attempt ${retry + 1})`);
+            break;
+          } catch (uploadErr) {
+            uploadError = uploadErr;
+            console.warn(`[Rufus] Question ${questionNum} upload failed (attempt ${retry + 1}):`, uploadErr.message);
+            if (retry < 2) {
+              // 等待 2 秒后重试
+              await new Promise(r => setTimeout(r, 2000));
+            }
+          }
+        }
+        
+        if (uploadSuccess) {
+          results.push({ question, answer, success: true });
+        } else {
+          console.error(`[Rufus] Question ${questionNum} upload failed after 3 attempts:`, uploadError);
+          results.push({ question, answer, success: false, error: `保存失败: ${uploadError?.message || '未知错误'}` });
+          updateRufusStatus(`⚠️ 问题 ${questionNum} 保存失败，但回答已获取`);
+        }
         
         // 5. 等待间隔
         if (i < topic.questions.length - 1) {
@@ -2871,6 +4337,129 @@ function updateRufusProgress(current, total) {
   }
   if (progressTextEl) {
     progressTextEl.textContent = `${current}/${total}`;
+  }
+}
+
+/**
+ * [NEW] 运行 DIY 自定义问题
+ * @param {string} question 用户输入的问题
+ */
+async function runDIYQuestion(question) {
+  if (isRufusConversing) {
+    console.log('[Rufus] Already conversing, skipping');
+    updateRufusStatus('⏳ 请等待当前对话完成');
+    return;
+  }
+  
+  isRufusConversing = true;
+  
+  // 收集页面信息
+  const pageInfo = collectPageInfo();
+  const asin = pageInfo.asin || detectASIN();
+  const marketplace = pageInfo.marketplace || detectMarketplace();
+  const sessionId = getOrCreateSessionId();
+  
+  try {
+    updateRufusStatus('🔄 发送问题中...');
+    
+    // 确保 Rufus 已打开
+    updateRufusStatus('🔍 正在查找并打开 Rufus...');
+    const chatInterface = await openRufusChat();
+    if (!chatInterface) {
+      // 在首页上，提供更友好的提示
+      const pageInfo = collectPageInfo();
+      if (pageInfo.page_type === 'homepage') {
+        throw new Error('无法自动打开 Rufus。请手动点击页面顶部导航栏中的 "Rufus" 链接，然后再发送问题。');
+      } else {
+        throw new Error('请先手动打开 Rufus 对话框，然后再发送问题');
+      }
+    }
+    updateRufusStatus('✅ Rufus 已打开');
+    
+    await new Promise(r => setTimeout(r, 500));
+    
+    // 记录发送前的对话快照
+    const beforeSnapshot = captureConversationSnapshot();
+    console.log(`[Rufus DIY] Snapshot length: ${beforeSnapshot.textLength}`);
+    
+    // 发送问题
+    await sendRufusQuestion(question);
+    
+    // 等待并提取新回答（基于快照比较）
+    updateRufusStatus('⏳ 等待 Rufus 回答...');
+    let answer;
+    try {
+      answer = await waitAndExtractNewAnswer(question, beforeSnapshot, 60000);
+    } catch (waitError) {
+      console.warn('[Rufus DIY] Wait error, trying to extract new answer:', waitError);
+      // 即使出错，也尝试提取快照之后的新内容
+      answer = extractNewAnswerAfterSnapshot(question, beforeSnapshot);
+      if (!answer || answer.length < 10) {
+        throw new Error(`等待失败: ${waitError.message || '未检测到回答'}`);
+      }
+      console.log(`[Rufus DIY] Extracted new answer after error, length: ${answer.length}`);
+    }
+    
+    // 验证回答有效性
+    if (!answer || answer.length < 10) {
+      throw new Error('未获取到 Rufus 的回答，请确保 Rufus 已回答问题');
+    }
+    
+    console.log(`[Rufus DIY] Answer extracted successfully, length: ${answer.length}`);
+    
+    // 上传对话（添加错误处理和重试机制）
+    updateRufusStatus('💾 保存回答...');
+    
+    const conversationData = {
+      asin: asin,
+      marketplace: marketplace,
+      question: question,
+      answer: answer,
+      question_type: 'diy',  // 标记为 DIY 问题
+      question_index: 0,
+      conversation_id: `rufus-diy-${Date.now()}`,
+      // 新字段
+      page_type: pageInfo.page_type,
+      keyword: pageInfo.keyword || null,
+      product_title: pageInfo.product_title || null,
+      bullet_points: pageInfo.bullet_points || null,
+      product_image: pageInfo.product_image || null,
+      session_id: sessionId,
+    };
+    
+    // 尝试上传，最多重试 3 次
+    let uploadSuccess = false;
+    let uploadError = null;
+    for (let retry = 0; retry < 3; retry++) {
+      try {
+        await uploadRufusConversation(conversationData);
+        uploadSuccess = true;
+        console.log(`[Rufus DIY] Uploaded successfully (attempt ${retry + 1})`);
+        break;
+      } catch (uploadErr) {
+        uploadError = uploadErr;
+        console.warn(`[Rufus DIY] Upload failed (attempt ${retry + 1}):`, uploadErr.message);
+        if (retry < 2) {
+          await new Promise(r => setTimeout(r, 2000));
+        }
+      }
+    }
+    
+    if (!uploadSuccess) {
+      throw new Error(`保存失败: ${uploadError?.message || '未知错误'}`);
+    }
+    
+    // 显示成功
+    updateRufusStatus('✅ 回答已保存');
+    showRufusResult(answer);
+    
+    console.log('[Rufus DIY] Question completed successfully');
+    
+  } catch (error) {
+    console.error('[Rufus DIY] Error:', error);
+    updateRufusStatus('❌ ' + error.message);
+  } finally {
+    isRufusConversing = false;
   }
 }
 
@@ -2941,14 +4530,19 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return true; // 保持消息通道开启 (虽然这里是同步的，但好习惯)
   }
 
-  // 2. 处理打开采集面板的请求
+  // 2. 处理打开采集面板的请求（支持所有页面类型）
   else if (msg.type === 'OPEN_OVERLAY') {
+    const pageType = detectPageType();
+    const pageInfo = collectPageInfo();
     const asin = detectASIN();
     const info = getProductInfo();
+    
     showOverlay({ 
       status: 'ready', 
       asin: asin, 
-      title: info.title 
+      title: info.title,
+      pageType: pageType,
+      pageInfo: pageInfo
     });
     sendResponse({ success: true });
     return true;
@@ -3035,17 +4629,35 @@ function createFloatingButton() {
   if (floatingButton) return; // 已存在则不重复创建
   
   // 检查页面类型
+  const pageType = detectPageType();
   const isSearch = isSearchResultsPage();
   const isProduct = !!detectASIN();
+  const isHomepage = pageType === 'homepage';
   
-  if (!isSearch && !isProduct) return; // 不是目标页面，不显示
+  // 在所有 Amazon 页面都显示（首页、搜索页、产品页）
+  if (!isSearch && !isProduct && !isHomepage) return;
   
   floatingButton = document.createElement('div');
   floatingButton.id = 'voc-floating-button';
   floatingButton.className = 'voc-floating-btn';
-  floatingButton.setAttribute('data-page-type', isSearch ? 'search' : 'product');
+  
+  // 设置页面类型
+  if (isHomepage) {
+    floatingButton.setAttribute('data-page-type', 'homepage');
+  } else if (isSearch) {
+    floatingButton.setAttribute('data-page-type', 'search');
+  } else {
+    floatingButton.setAttribute('data-page-type', 'product');
+  }
   
   // 图标 SVG（与插件 logo 一致）
+  let tooltipText = '打开采集面板';
+  if (isHomepage) {
+    tooltipText = '打开 Rufus 对话';
+  } else if (isSearch) {
+    tooltipText = '打开 Rufus 对话（左键）或选择产品（右键）';
+  }
+  
   floatingButton.innerHTML = `
     <div class="voc-floating-icon">
       <svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
@@ -3056,14 +4668,35 @@ function createFloatingButton() {
       </svg>
     </div>
     <div class="voc-floating-tooltip">
-      ${isSearch ? '选择产品分析' : '打开采集面板'}
+      ${tooltipText}
     </div>
   `;
   
   // 绑定点击事件
   floatingButton.addEventListener('click', (e) => {
     e.stopPropagation();
-    handleFloatingButtonClick();
+    handleFloatingButtonClick(e);
+  });
+  
+  // 绑定右键事件（搜索页：打开产品选择器；首页：打开 Rufus 面板）
+  floatingButton.addEventListener('contextmenu', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (isSearch) {
+      // 搜索页右键：打开产品选择器
+      console.log('[VOC-Master] Right-click on search page - opening product selector');
+      showProductSelector();
+    } else if (isHomepage) {
+      // 首页右键：打开 Rufus 面板
+      console.log('[VOC-Master] Right-click on homepage - opening Rufus panel');
+      const pageInfo = collectPageInfo();
+      showOverlay({ 
+        status: 'ready',
+        pageType: 'homepage',
+        pageInfo: pageInfo
+      });
+    }
+    return false;
   });
   
   // 添加到页面
@@ -3072,27 +4705,52 @@ function createFloatingButton() {
   // 添加样式（如果还没有）
   injectFloatingButtonStyles();
   
-  console.log('[VOC-Master] Floating button created for', isSearch ? 'search page' : 'product page');
+  console.log('[VOC-Master] Floating button created for', isHomepage ? 'homepage' : (isSearch ? 'search page' : 'product page'));
 }
 
 /**
  * [NEW] 处理浮动按钮点击
  */
-function handleFloatingButtonClick() {
+function handleFloatingButtonClick(e) {
   const pageType = floatingButton?.getAttribute('data-page-type');
   
-  if (pageType === 'search') {
-    // 搜索结果页：打开产品选择器
-    showProductSelector();
+  if (pageType === 'homepage') {
+    // 首页：打开 Rufus 面板
+    console.log('[VOC-Master] Opening Rufus panel from homepage');
+    const pageInfo = collectPageInfo();
+    showOverlay({ 
+      status: 'ready',
+      pageType: 'homepage',
+      pageInfo: pageInfo
+    });
+  } else if (pageType === 'search') {
+    // 搜索结果页：打开 overlay 并显示默认 Tab（选择产品分析）
+    console.log('[VOC-Master] Opening overlay from search page');
+    const pageInfo = collectPageInfo();
+    showOverlay({ 
+      status: 'ready',
+      pageType: 'keyword_search',
+      pageInfo: pageInfo,
+      activeTab: 'selector' // 默认显示"选择产品分析"Tab
+    });
   } else if (pageType === 'product') {
-    // 产品详情页：打开采集面板
+    // 产品详情页：打开采集面板（包含 Rufus）
+    console.log('[VOC-Master] Opening collection panel from product page');
     const asin = detectASIN();
     const info = getProductInfo();
+    const pageInfo = collectPageInfo();
     showOverlay({ 
       status: 'ready', 
       asin: asin, 
-      title: info.title 
+      title: info.title,
+      pageType: 'product_detail',
+      pageInfo: pageInfo
     });
+  }
+  
+  // 阻止默认右键菜单（仅在右键时）
+  if (e.button === 2) {
+    e.preventDefault();
   }
 }
 
@@ -3231,16 +4889,32 @@ function removeFloatingButton() {
 function initFloatingButton() {
   // 创建按钮的函数
   const tryCreateButton = () => {
-    // 检查是否在目标页面
+    // 检查是否在目标页面（包括首页）
+    const pageType = detectPageType();
     const isSearch = isSearchResultsPage();
     const isProduct = !!detectASIN();
+    const isHomepage = pageType === 'homepage';
     
-    if (isSearch || isProduct) {
+    console.log('[VOC-Master] Checking page type:', { pageType, isSearch, isProduct, isHomepage });
+    
+    // 在所有 Amazon 页面都显示按钮
+    if (isSearch || isProduct || isHomepage) {
       if (!floatingButton) {
+        console.log('[VOC-Master] Creating floating button...');
         createFloatingButton();
+      } else {
+        // 如果按钮已存在但页面类型变了，重新创建
+        const currentType = floatingButton.getAttribute('data-page-type');
+        const expectedType = isHomepage ? 'homepage' : (isSearch ? 'search' : 'product');
+        if (currentType !== expectedType) {
+          console.log('[VOC-Master] Page type changed, recreating button:', { currentType, expectedType });
+          removeFloatingButton();
+          createFloatingButton();
+        }
       }
     } else {
       // 不在目标页面，移除按钮
+      console.log('[VOC-Master] Not on target page, removing button');
       removeFloatingButton();
     }
   };

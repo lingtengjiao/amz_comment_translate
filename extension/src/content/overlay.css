@@ -25,8 +25,8 @@
 #voc-master-overlay {
   position: fixed;
   top: 0;
-  right: -400px;
-  width: 380px;
+  right: -500px;
+  width: 480px;
   height: 100vh;
   z-index: 2147483647;
   font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
@@ -582,6 +582,78 @@
   height: 1px;
   background: linear-gradient(to right, transparent, var(--voc-border), transparent);
   margin-bottom: 10px;
+}
+
+/* [NEW] 产品选择器入口样式 */
+.voc-product-selector-entry {
+  padding: 0 20px 20px;
+}
+
+.voc-product-selector-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.voc-selector-icon {
+  font-size: 20px;
+}
+
+.voc-selector-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--voc-text);
+}
+
+.voc-selector-desc {
+  font-size: 13px;
+  color: var(--voc-text-muted);
+  margin: 8px 0 0;
+  line-height: 1.5;
+}
+
+/* [NEW] 搜索页 Tab 切换器样式 */
+.voc-search-tabs {
+  display: flex;
+  gap: 8px;
+  padding: 16px 20px 0;
+  margin-bottom: 16px;
+  border-bottom: 1px solid var(--voc-border);
+}
+
+.voc-tab-btn {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 10px 16px;
+  border: none;
+  background: transparent;
+  color: var(--voc-text-muted);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  border-radius: 8px 8px 0 0;
+  transition: all 0.2s ease;
+  position: relative;
+  border-bottom: 2px solid transparent;
+}
+
+.voc-tab-btn:hover {
+  background: var(--voc-bg-light);
+  color: var(--voc-text);
+}
+
+.voc-tab-btn.voc-tab-active {
+  color: var(--voc-primary);
+  background: var(--voc-bg-light);
+  border-bottom-color: var(--voc-primary);
+}
+
+.voc-tab-btn span {
+  font-size: 16px;
 }
 
 .voc-rufus-header {
@@ -1190,10 +1262,97 @@
 }
 
 /* ============================================================================
- * 隐藏 Rufus AI 洞察板块
+ * [NEW] Rufus DIY Input Section Styles
  * ============================================================================ */
-.voc-rufus-section,
-#voc-rufus-section {
-  display: none !important;
+.voc-rufus-diy-section {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--voc-border);
+}
+
+.voc-rufus-diy-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.voc-diy-icon {
+  font-size: 14px;
+}
+
+.voc-diy-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--voc-text);
+}
+
+.voc-rufus-diy-input-wrapper {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+}
+
+.voc-rufus-diy-textarea {
+  flex: 1;
+  min-height: 50px;
+  max-height: 100px;
+  padding: 8px 10px;
+  border: 1.5px solid var(--voc-border);
+  border-radius: 8px;
+  font-size: 12px;
+  font-family: inherit;
+  resize: vertical;
+  background: white;
+  color: var(--voc-text);
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+.voc-rufus-diy-textarea:focus {
+  outline: none;
+  border-color: #6366f1;
+  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.15);
+}
+
+.voc-rufus-diy-textarea::placeholder {
+  color: #94a3b8;
+}
+
+.voc-rufus-diy-textarea:disabled {
+  background: #f1f5f9;
+  cursor: not-allowed;
+}
+
+.voc-rufus-diy-send-btn {
+  padding: 8px 14px;
+  background: linear-gradient(135deg, #6366f1, #8b5cf6);
+  color: white;
+  border: none;
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.voc-rufus-diy-send-btn:hover:not(:disabled) {
+  background: linear-gradient(135deg, #4f46e5, #7c3aed);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(99, 102, 241, 0.3);
+}
+
+.voc-rufus-diy-send-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.voc-rufus-diy-hint {
+  margin-top: 6px;
+  font-size: 10px;
+  color: #94a3b8;
+  line-height: 1.35;
 }
 

@@ -52,11 +52,15 @@
         <button class="btn btn-small btn-logout" id="logout-btn">退出</button>
       </div>
 
-      <!-- Not on Amazon Page -->
+      <!-- Not on Amazon Page (or Amazon Homepage) -->
       <div id="not-amazon" class="state-view" style="display: none;">
         <div class="icon-large">🌐</div>
-        <h2>请访问 Amazon 商品页</h2>
-        <p>请导航到 Amazon 商品详情页或评论页后再使用本插件。</p>
+        <h2>Amazon 页面</h2>
+        <p id="not-amazon-message">请导航到 Amazon 商品详情页或搜索结果页使用完整功能。</p>
+        <button class="btn btn-secondary" id="open-rufus-homepage-btn" style="margin-top: 12px; display: none;">
+          <span>🤖</span>
+          打开 Rufus 对话
+        </button>
       </div>
 
       <!-- On Amazon Product Page -->
@@ -74,6 +78,11 @@
         <button class="btn btn-primary" id="open-panel-btn">
           <span>🚀</span>
           打开采集面板
+        </button>
+        
+        <button class="btn btn-secondary" id="open-rufus-product-btn" style="margin-top: 8px;">
+          <span>🤖</span>
+          打开 Rufus 对话
         </button>
       </div>
 
@@ -93,6 +102,11 @@
         <button class="btn btn-primary" id="open-selector-btn">
           <span>📊</span>
           选择产品分析
+        </button>
+        
+        <button class="btn btn-secondary" id="open-rufus-btn" style="margin-top: 8px;">
+          <span>🤖</span>
+          打开 Rufus 对话
         </button>
         
         <p class="search-hint">选择多个产品进行批量洞察、对比分析或市场细分</p>
