@@ -104,8 +104,9 @@ export function useSectionCache<T>(
       setLoading(false);
     } else {
       // 无缓存或已过期，重新加载
-      fetchData();
+      fetchData(false);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cacheKey]);
 
   return {

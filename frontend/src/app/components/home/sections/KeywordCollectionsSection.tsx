@@ -135,7 +135,7 @@ export function KeywordCollectionsSection() {
         <div className="text-center py-20">
           <p className="text-red-500 mb-4 text-sm">{error}</p>
           <button 
-            onClick={loadCollections}
+            onClick={() => refetch()}
             className="px-4 py-2 bg-rose-500 text-white rounded-lg hover:bg-rose-600 transition-colors"
           >
             重试
@@ -253,7 +253,7 @@ export function KeywordCollectionsSection() {
         open={detailDialogOpen}
         onClose={() => setDetailDialogOpen(false)}
         collection={selectedCollection}
-        onRefresh={loadCollections}
+        onRefresh={() => refetch()}
       />
     </div>
   );
