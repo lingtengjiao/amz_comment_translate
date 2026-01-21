@@ -1,0 +1,43 @@
+<svg viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    {/* yœØ - +r0Ýr */}
+    <radialGradient id="irisGradient" cx="0.35" cy="0.35">
+      <stop offset="0%" stop-color="#818cf8" />
+      <stop offset="50%" stop-color="#6366f1" />
+      <stop offset="100%" stop-color="#4f46e5" />
+    </radialGradient>
+    
+    {/* ØIHœ */}
+    <radialGradient id="shineGradient" cx="0.3" cy="0.3">
+      <stop offset="0%" stop-color="white" stop-opacity="1" />
+      <stop offset="100%" stop-color="white" stop-opacity="0" />
+    </radialGradient>
+    
+    {/* ÌoØ */}
+    <linearGradient id="bgGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#f43f5e" />
+      <stop offset="100%" stop-color="#ec4899" />
+    </linearGradient>
+  </defs>
+  
+  {/* ÌoÒéb */}
+  <rect width="64" height="64" rx="12" fill="url(#bgGradient)" />
+  
+  {/* <} - EsÄr */}
+  <circle cx="32" cy="32" r="20" fill="#fef3c7" />
+  
+  {/* …<} */}
+  <circle cx="32" cy="32" r="16" fill="white" />
+  
+  {/* yœ - Ý+rØ */}
+  <circle cx="32" cy="32" r="10" fill="url(#irisGradient)" />
+  
+  {/* ³T */}
+  <circle cx="32" cy="32" r="5" fill="#312e81" />
+  
+  {/* ;ØI */}
+  <ellipse cx="28" cy="27" rx="3" ry="4" fill="url(#shineGradient)" />
+  
+  {/* !ØI */}
+  <circle cx="36" cy="36" r="1.5" fill="white" opacity="0.6" />
+</svg>
