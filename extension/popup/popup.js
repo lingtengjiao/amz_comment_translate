@@ -139,7 +139,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   // 配置（与 content.js 保持一致）
   // ==========================================
   const CONFIG = {
-    DASHBOARD_URL: 'http://localhost:3000'  // 本地前端地址
+    DASHBOARD_URL: 'https://98kamz.com'  // 生产前端地址
   };
 
   // 设置"进入我的洞察"链接

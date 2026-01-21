@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "name": "VOC-Master: Amazon Review Collector (Local Dev)",
+  "name": "VOC-Master: Amazon Review Collector",
   "version": "1.2.0",
   "description": "Collect Amazon product reviews for translation and analysis. 采集亚马逊商品评论，智能翻译分析。",
   "author": "VOC-Master Team",
@@ -22,23 +22,13 @@
     "https://*.amazon.com.au/*",
     "https://*.amazon.ca/*",
     "https://98kamz.com/*",
-    "https://*.98kamz.com/*",
-    "http://localhost:*/*",
-    "http://127.0.0.1:*/*",
-    "http://localhost:8000/*",
-    "http://127.0.0.1:8000/*",
-    "http://localhost:3000/*",
-    "http://127.0.0.1:3000/*"
+    "https://*.98kamz.com/*"
   ],
   
   "externally_connectable": {
     "matches": [
       "https://98kamz.com/*",
-      "https://*.98kamz.com/*",
-      "http://localhost:*/*",
-    "http://127.0.0.1:*/*",
-      "http://localhost:3000/*",
-      "http://127.0.0.1:3000/*"
+      "https://*.98kamz.com/*"
     ]
   },
   

@@ -870,7 +870,8 @@ class AnalysisService:
         title: str, 
         product_ids: List[UUID],
         description: Optional[str] = None,
-        role_labels: Optional[List[str]] = None
+        role_labels: Optional[List[str]] = None,
+        user_id: Optional[UUID] = None
     ) -> AnalysisProject:
         """创建分析项目"""
         if len(product_ids) < 2:
@@ -892,7 +893,8 @@ class AnalysisService:
             title=title,
             description=description,
             analysis_type=AnalysisType.COMPARISON.value,
-            status=AnalysisStatus.PENDING.value
+            status=AnalysisStatus.PENDING.value,
+            user_id=user_id
         )
         self.db.add(project)
         await self.db.flush()
@@ -920,7 +922,8 @@ class AnalysisService:
         title: str, 
         product_ids: List[UUID],
         description: Optional[str] = None,
-        role_labels: Optional[List[str]] = None
+        role_labels: Optional[List[str]] = None,
+        user_id: Optional[UUID] = None
     ) -> AnalysisProject:
         """创建细分市场洞察项目"""
         if len(product_ids) < 2:
@@ -942,7 +945,8 @@ class AnalysisService:
             title=title,
             description=description,
             analysis_type=AnalysisType.MARKET_INSIGHT.value,
-            status=AnalysisStatus.PENDING.value
+            status=AnalysisStatus.PENDING.value,
+            user_id=user_id
         )
         self.db.add(project)
         await self.db.flush()
