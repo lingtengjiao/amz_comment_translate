@@ -13,6 +13,7 @@
  */
 import { useState, useEffect, memo, useMemo, Component, ErrorInfo, ReactNode, lazy, Suspense, useCallback } from 'react';
 import { useParams, Link, useNavigate, useLocation } from 'react-router-dom';
+import { useSectionCache } from '../hooks/useSectionCache';
 import { 
   FileText, 
   ArrowLeft, 
@@ -319,51 +320,69 @@ function ReportPageInner() {
     return report?.content ? isJsonContent(report.content) : false;
   }, [report?.content]);
   
-  // 加载报告
-  useEffect(() => {
-    if (asin) {
-      loadReport();
-    }
-  }, [asin, reportId]);
-  
-  const loadReport = async () => {
-    if (!asin) return;
-    
-    setIsLoading(true);
-    setError(null);
-    
-    try {
+  // 使用缓存加载报告（3分钟 TTL）
+  const cacheKey = asin ? `report_${asin}_${reportId || 'latest'}` : '';
+  const { data: reportData, loading: cacheLoading, error: cacheError, refetch: refetchReport } = useSectionCache<{
+    report: ProductReport;
+    product: ApiProduct | null;
+    history: ProductReport[];
+  }>(
+    cacheKey,
+    async () => {
+      if (!asin) throw new Error('ASIN 不能为空');
+      
       // 并行加载报告和产品信息
       const [loadedReport, productStats] = await Promise.all([
         reportId ? getReportById(asin, reportId) : getLatestReport(asin),
         getProductStats(asin).catch(() => null) // 忽略产品信息加载错误
       ]);
       
-      setReport(loadedReport);
-      if (productStats) {
-        setProduct(productStats.product);
-      }
-      
       // 同时加载历史报告列表
+      let history: ProductReport[] = [];
       try {
         const historyResponse = await getReportHistory(asin, 10);
         if (historyResponse.success) {
-          setReportHistory(historyResponse.reports);
+          history = historyResponse.reports;
         }
       } catch {
         // 忽略历史加载错误
       }
       
-    } catch (err: unknown) {
-      const errorMessage = err instanceof Error ? err.message : '未知错误';
-      if (errorMessage.includes('404') || errorMessage.includes('暂无报告')) {
-        setError('该产品暂无分析报告，请先在产品详情页生成报告。');
-      } else {
-        setError(`加载报告失败: ${errorMessage}`);
-      }
-    } finally {
-      setIsLoading(false);
+      return {
+        report: loadedReport,
+        product: productStats?.product || null,
+        history
+      };
+    },
+    { ttl: 3 * 60 * 1000 } // 3分钟缓存
+  );
+
+  // 同步缓存数据到 state
+  useEffect(() => {
+    if (reportData) {
+      setReport(reportData.report);
+      setProduct(reportData.product);
+      setReportHistory(reportData.history);
     }
+  }, [reportData]);
+
+  useEffect(() => {
+    setIsLoading(cacheLoading);
+  }, [cacheLoading]);
+
+  useEffect(() => {
+    if (cacheError) {
+      const errorMessage = cacheError.includes('404') || cacheError.includes('暂无报告')
+        ? '该产品暂无分析报告，请先在产品详情页生成报告。'
+        : `加载报告失败: ${cacheError}`;
+      setError(errorMessage);
+    } else {
+      setError(null);
+    }
+  }, [cacheError]);
+
+  const loadReport = () => {
+    refetchReport();
   };
   
   // 🚀 异步生成报告（后台运行）

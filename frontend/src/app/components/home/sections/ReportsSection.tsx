@@ -1,7 +1,7 @@
 /**
  * 报告库页面 - 使用真实 API
  */
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 import { Search, FileText, Download, Trash2, Loader2, Clock, ArrowRight, Copy } from 'lucide-react';
@@ -11,6 +11,7 @@ import { ImageWithFallback } from '../../figma/ImageWithFallback';
 import { useHome } from '../HomeContext';
 import apiService from '../../../../api/service';
 import type { ProductReport } from '../../../../api/types';
+import { useSectionCache } from '../../../hooks/useSectionCache';
 
 // 报告类型配置
 const REPORT_TYPE_LABELS: Record<string, { label: string; color: string }> = {
@@ -32,39 +33,27 @@ export function ReportsSection() {
   const navigate = useNavigate();
   const { reportsSearchQuery, setReportsSearchQuery, reportsTypeFilter, setReportsTypeFilter } = useHome();
   
-  const [reports, setReports] = useState<ReportWithProduct[]>([]);
-  const [loading, setLoading] = useState(true);
-
-  // 加载报告列表
-  useEffect(() => {
-    loadReports();
-  }, []);
-
-  const loadReports = async () => {
-    setLoading(true);
-    try {
+  // 使用缓存加载报告列表
+  const { data, loading, refetch } = useSectionCache<{ reports: ReportWithProduct[] }>(
+    'reports_list',
+    async () => {
       // 只获取当前用户关注的产品的报告
       const reportsRes = await apiService.getAllReports(200, undefined, true);
       
-      if (reportsRes.reports) {
-        const allReports: ReportWithProduct[] = reportsRes.reports.map((report: any) => ({
-          ...report,
-          product: report.product ? {
-            asin: report.product.asin,
-            title: report.product.title || report.product.asin,
-            image_url: report.product.image_url || undefined,
-          } : undefined,
-        }));
-        
-        setReports(allReports);
-      }
-    } catch (err: any) {
-      console.error('加载报告失败:', err);
-      toast.error('加载失败');
-    } finally {
-      setLoading(false);
+      const allReports: ReportWithProduct[] = (reportsRes.reports || []).map((report: any) => ({
+        ...report,
+        product: report.product ? {
+          asin: report.product.asin,
+          title: report.product.title || report.product.asin,
+          image_url: report.product.image_url || undefined,
+        } : undefined,
+      }));
+      
+      return { reports: allReports };
     }
-  };
+  );
+
+  const reports = data?.reports || [];
 
   // 复制 ASIN
   const handleCopyAsin = (asin: string, e: React.MouseEvent) => {
@@ -80,7 +69,8 @@ export function ReportsSection() {
     
     try {
       await apiService.deleteReport(report.product.asin, report.id);
-      setReports(prev => prev.filter(r => r.id !== report.id));
+      // 刷新缓存
+      refetch();
       toast.success('已删除');
     } catch (err: any) {
       toast.error('删除失败');

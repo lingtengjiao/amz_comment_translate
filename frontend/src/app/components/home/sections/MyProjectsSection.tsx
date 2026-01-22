@@ -1,7 +1,6 @@
 /**
  * 我的洞察页面 - 使用真实 API
  */
-import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 import { Search, Star, MessageSquare, ArrowRight, Trash2, Heart, Loader2, Copy } from 'lucide-react';
@@ -18,49 +17,35 @@ interface UserProject {
   is_favorite: boolean;
   total_reviews: number;
   translated_reviews: number;
-  average_rating: number | null;
+  average_rating?: number | null;
   created_at: string | null;
 }
+import { useSectionCache } from '../../../hooks/useSectionCache';
+
 
 export function MyProjectsSection() {
   const navigate = useNavigate();
   const { projectsTab, setProjectsTab, projectsSearchQuery, setProjectsSearchQuery } = useHome();
   
-  const [projects, setProjects] = useState<UserProject[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  // 加载项目列表
-  useEffect(() => {
-    loadProjects();
-  }, [projectsTab]);
-
-  const loadProjects = async () => {
-    setLoading(true);
-    setError(null);
-    try {
+  // 使用缓存加载项目列表（区分全部/收藏）
+  const { data, loading, error, refetch } = useSectionCache<{ projects: UserProject[] }>(
+    `my_projects_${projectsTab}`,
+    async () => {
       const favoritesOnly = projectsTab === 'favorites';
       const response = await apiService.getMyProjects(favoritesOnly);
-      setProjects(response.projects || []);
-    } catch (err: any) {
-      console.error('[MyProjects] 加载失败:', err);
-      const errorMessage = err?.response?.data?.detail || err?.message || '加载项目列表失败，请稍后重试';
-      setError(errorMessage);
-      // 不显示 toast，避免重复提示
-    } finally {
-      setLoading(false);
+      return { projects: response.projects || [] };
     }
-  };
+  );
+
+  const projects = data?.projects || [];
 
   // 切换收藏
   const handleToggleFavorite = async (asin: string, e: React.MouseEvent) => {
     e.stopPropagation();
     try {
       const result = await apiService.toggleProjectFavorite(asin);
-      // 更新本地状态
-      setProjects(prev => prev.map(p => 
-        p.asin === asin ? { ...p, is_favorite: result.is_favorite } : p
-      ));
+      // 刷新缓存（收藏状态改变后需要重新加载）
+      refetch();
       toast.success(result.is_favorite ? '已添加收藏' : '已取消收藏');
     } catch (err: any) {
       toast.error('操作失败');
@@ -81,7 +66,8 @@ export function MyProjectsSection() {
     
     try {
       await apiService.removeFromMyProjects(asin);
-      setProjects(prev => prev.filter(p => p.asin !== asin));
+      // 刷新缓存
+      refetch();
       toast.success('已移除');
     } catch (err: any) {
       toast.error('操作失败');
@@ -162,7 +148,7 @@ export function MyProjectsSection() {
           <div className="max-w-md mx-auto">
             <p className="text-red-500 mb-4 text-sm">{error}</p>
             <button 
-              onClick={loadProjects}
+              onClick={() => refetch()}
               className="px-4 py-2 bg-rose-500 text-white rounded-lg hover:bg-rose-600 transition-colors"
             >
               重试

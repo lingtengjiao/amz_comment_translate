@@ -10,6 +10,7 @@ import { isStructuredResult, isComparisonResult } from '@/api/types';
 import { Button } from './ui/button';
 import { toast } from '@/app/utils/toast';
 import { ShareButton } from './share/ShareButton';
+import { useSectionCache } from '../hooks/useSectionCache';
 
 // 检查是否是市场洞察结果
 const isMarketInsightResult = (data: any): boolean => {
@@ -81,10 +82,27 @@ export default function AnalysisResultPage() {
     };
   }, []);
 
+  // 使用缓存加载分析项目（3分钟 TTL，但 processing 状态不缓存）
+  const { data: cachedProject, loading: cacheLoading, error: cacheError, refetch: refetchProject } = useSectionCache<AnalysisProject>(
+    projectId ? `analysis_project_${projectId}` : '',
+    async () => {
+      if (!projectId) throw new Error('项目 ID 无效');
+      return await getAnalysisProject(projectId);
+    },
+    { ttl: 3 * 60 * 1000 } // 3分钟缓存
+  );
+
   // 轮询逻辑：如果状态是 pending/processing，每 3 秒刷新一次
   useEffect(() => {
     if (!projectId) {
       setError('项目 ID 无效');
+      setLoading(false);
+      return;
+    }
+
+    // 如果有缓存且已完成，直接使用缓存
+    if (cachedProject && (cachedProject.status === 'completed' || cachedProject.status === 'failed')) {
+      setProject(cachedProject);
       setLoading(false);
       return;
     }
@@ -103,6 +121,8 @@ export default function AnalysisResultPage() {
         // 如果已完成或失败，停止加载，停止轮询
         if (data.status === 'completed' || data.status === 'failed') {
           setLoading(false);
+          // 更新缓存
+          refetchProject();
         } else {
           // 继续轮询
           timer = setTimeout(fetchProject, 3000);
@@ -114,13 +134,24 @@ export default function AnalysisResultPage() {
       }
     };
 
-    fetchProject();
+    // 如果有缓存数据，先使用缓存
+    if (cachedProject) {
+      setProject(cachedProject);
+      setLoading(false);
+    } else {
+      setLoading(true);
+    }
+
+    // 如果状态是 processing，开始轮询
+    if (cachedProject?.status === 'processing' || !cachedProject) {
+      fetchProject();
+    }
     
     return () => {
       isMounted = false;
       if (timer) clearTimeout(timer);
     };
-  }, [projectId]);
+  }, [projectId, cachedProject, refetchProject]);
 
   if (loading && !project) {
     return (

@@ -1,7 +1,7 @@
 /**
  * 洞察广场页面 - 使用真实 API
  */
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 import { Search, Star, Plus, Check, Loader2, Copy } from 'lucide-react';
@@ -10,38 +10,37 @@ import { ImageWithFallback } from '../../figma/ImageWithFallback';
 import { useHome } from '../HomeContext';
 import apiService from '../../../../api/service';
 import type { ApiProduct } from '../../../../api/types';
+import { useSectionCache } from '../../../hooks/useSectionCache';
 
 export function ProductCenterSection() {
   const navigate = useNavigate();
   const { searchQuery, setSearchQuery } = useHome();
   
-  const [products, setProducts] = useState<ApiProduct[]>([]);
-  const [myAsins, setMyAsins] = useState<Set<string>>(new Set());
-  const [loading, setLoading] = useState(true);
   const [addingAsin, setAddingAsin] = useState<string | null>(null);
 
-  // 加载产品列表
-  useEffect(() => {
-    loadProducts();
-  }, []);
-
-  const loadProducts = async () => {
-    setLoading(true);
-    try {
+  // 使用缓存加载产品列表
+  const { data, loading, refetch } = useSectionCache<{ 
+    products: ApiProduct[];
+    myAsins: Set<string>;
+  }>(
+    'product_center',
+    async () => {
       // 洞察广场只显示管理员关注的产品
       const productsRes = await apiService.getProducts(false, true);
-      setProducts(productsRes.products || []);
       
       // 获取我的项目，用于判断哪些已添加
       const myProjectsRes = await apiService.getMyProjects(false);
       const asins = new Set((myProjectsRes.projects || []).map(p => p.asin));
-      setMyAsins(asins);
-    } catch (err: any) {
-      toast.error('加载失败');
-    } finally {
-      setLoading(false);
+      
+      return {
+        products: productsRes.products || [],
+        myAsins: asins
+      };
     }
-  };
+  );
+
+  const products = data?.products || [];
+  const myAsins = data?.myAsins || new Set();
 
   // 复制 ASIN
   const handleCopyAsin = (asin: string, e: React.MouseEvent) => {
@@ -56,7 +55,8 @@ export function ProductCenterSection() {
     setAddingAsin(asin);
     try {
       await apiService.addToMyProjects(asin);
-      setMyAsins(prev => new Set([...prev, asin]));
+      // 刷新缓存（添加后需要更新 myAsins）
+      refetch();
       toast.success('已添加到我的产品洞察');
     } catch (err: any) {
       toast.error('添加失败');
