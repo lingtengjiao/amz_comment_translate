@@ -1004,7 +1004,7 @@ export async function createAnalysisProject(params: {
   const url = `${API_BASE}/analysis/projects${auto_run ? '?auto_run=true' : '?auto_run=false'}`;
   const response = await fetch(url, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: getAuthHeaders(),
     body: JSON.stringify(body),
   });
   if (!response.ok) {
@@ -1138,7 +1138,7 @@ export async function getComparisonPreview(productIds: string[]): Promise<{
 }> {
   const response = await fetch(`${API_BASE}/analysis/preview`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: getAuthHeaders(),
     body: JSON.stringify({ product_ids: productIds }),
   });
   if (!response.ok) {
@@ -1165,7 +1165,7 @@ export async function triggerAutoAnalysis(asin: string): Promise<{
 }> {
   const response = await fetch(`${API_BASE}/products/${asin}/collection-complete`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: getAuthHeaders(),
   });
   if (!response.ok) {
     const errorData = await response.json().catch(() => ({}));
