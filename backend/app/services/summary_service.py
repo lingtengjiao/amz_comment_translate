@@ -2433,7 +2433,7 @@ class SummaryService:
         
         # 同时检查是否有历史报告
         latest_report = await self.get_latest_report(product_id)
-
+        
     # ==========================================
     # [BATCH QUERY] 批量数据查询优化 (高性能)
     # ==========================================
@@ -2486,11 +2486,11 @@ class SummaryService:
         
         for h, product_id in rows:
             name = ""
-            quote = ""
+            quote_text = ""
             
             if h.label_name:
                 name = h.label_name
-                quote = h.original_text or ""
+                quote_text = h.quote or ""  # 使用 quote 字段而不是 original_text
             elif h.keywords:
                 name = h.keywords[0] if h.keywords else ""
             
@@ -2499,8 +2499,8 @@ class SummaryService:
             
             entry = product_stats[product_id][h.theme_type][name]
             entry["count"] += 1
-            if len(entry["samples"]) < 2 and quote:
-                entry["samples"].append(quote[:50])
+            if len(entry["samples"]) < 2 and quote_text:
+                entry["samples"].append(quote_text[:50])
         
         # 格式化为标准输出格式
         result_map = {}
