@@ -113,19 +113,60 @@ export function ReviewReader() {
     themes: string;
   } | null>(null);
 
+  // 使用缓存加载产品统计和第一页评论（2分钟 TTL）
+  const cacheKey = asin ? `review_reader_${asin}` : '';
+  const { data: cachedData, loading: cacheLoading, error: cacheError, refetch: refetchCache } = useSectionCache<{
+    statsResponse: any;
+    reviewsResponse: any;
+  }>(
+    cacheKey,
+    async () => {
+      if (!asin) throw new Error('ASIN 不能为空');
+      // 并行获取产品统计和第一页评论
+      const [statsResponse, reviewsResponse] = await Promise.all([
+        apiService.getProductStats(asin),
+        apiService.getReviews({ asin, page: 1, pageSize })
+      ]);
+      return { statsResponse, reviewsResponse };
+    },
+    { ttl: 2 * 60 * 1000 } // 2分钟缓存
+  );
+
   // 加载产品统计信息和评论（初始加载，只加载第一页）
-  const fetchData = useCallback(async () => {
+  const fetchData = useCallback(async (forceRefresh = false) => {
     if (!asin) return;
     
     setLoading(true);
     setError(null);
     
     try {
-      // 并行获取产品统计和第一页评论
-      const [statsResponse, reviewsResponse] = await Promise.all([
-        apiService.getProductStats(asin),
-        apiService.getReviews({ asin, page: 1, pageSize })
-      ]);
+      let statsResponse: any;
+      let reviewsResponse: any;
+
+      // 检查是否有活跃任务，如果有则强制刷新
+      const hasActiveTasks = activeTasks && (
+        activeTasks.translation === 'processing' ||
+        activeTasks.insights === 'processing' ||
+        activeTasks.themes === 'processing'
+      );
+
+      if (forceRefresh || hasActiveTasks || !cachedData) {
+        // 强制刷新或没有缓存，直接调用 API
+        [statsResponse, reviewsResponse] = await Promise.all([
+          apiService.getProductStats(asin),
+          apiService.getReviews({ asin, page: 1, pageSize })
+        ]);
+        // 更新缓存（异步，不阻塞）
+        if (!hasActiveTasks) {
+          refetchCache().catch(() => {
+            // 忽略缓存更新错误
+          });
+        }
+      } else {
+        // 使用缓存数据
+        statsResponse = cachedData.statsResponse;
+        reviewsResponse = cachedData.reviewsResponse;
+      }
       
       const reviews = transformReviews(reviewsResponse.reviews);
       const taskData = transformStatsToTask(statsResponse, reviews);
@@ -165,11 +206,19 @@ export function ReviewReader() {
       
       // [NEW] 保存活跃任务状态，并根据状态恢复轮询
       if (statsResponse.active_tasks) {
-        setActiveTasks({
+        const newActiveTasks = {
           translation: statsResponse.active_tasks.translation,
           insights: statsResponse.active_tasks.insights,
           themes: statsResponse.active_tasks.themes,
-        });
+        };
+        setActiveTasks(newActiveTasks);
+        
+        // 如果有活跃任务，清除缓存以确保下次获取最新数据
+        if (newActiveTasks.translation === 'processing' ||
+            newActiveTasks.insights === 'processing' ||
+            newActiveTasks.themes === 'processing') {
+          refetchCache(); // 强制刷新缓存
+        }
         
         // 只有后端任务状态是 processing 时才恢复轮询（用户可控）
         if (!manuallyStoppedRef.current && !pollingRef.current.active) {
@@ -256,7 +305,7 @@ export function ReviewReader() {
     } finally {
       setLoading(false);
     }
-  }, [asin, pageSize]);
+  }, [asin, pageSize]); // 只在 asin 或 pageSize 变化时重新创建
 
   // 加载更多评论
   const loadMoreReviews = useCallback(async () => {
@@ -291,9 +340,21 @@ export function ReviewReader() {
     }
   }, [asin, currentPage, pageSize, isLoadingMore, hasMoreReviews, task]);
 
+  // 初始加载：使用缓存或强制刷新
   useEffect(() => {
-    fetchData();
-  }, [fetchData]);
+    if (asin) {
+      // 检查缓存中是否有活跃任务
+      const cachedHasActiveTasks = cachedData?.statsResponse?.active_tasks && (
+        cachedData.statsResponse.active_tasks.translation === 'processing' ||
+        cachedData.statsResponse.active_tasks.insights === 'processing' ||
+        cachedData.statsResponse.active_tasks.themes === 'processing'
+      );
+      
+      // 如果有活跃任务或没有缓存，强制刷新
+      fetchData(cachedHasActiveTasks || !cachedData);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [asin]); // 只在 asin 变化时触发
 
   // 检查是否有报告
   useEffect(() => {
@@ -490,8 +551,8 @@ export function ReviewReader() {
         
         if ((stats.product.translation_status === 'completed' || progress >= 100) && bulletsDone && titleDone) {
           setIsTranslating(false);
-          // 最终刷新确保数据一致
-          fetchData();
+          // 最终刷新确保数据一致（强制刷新）
+          fetchData(true);
         }
       } catch (err) {
         console.error('Failed to check translation progress:', err);
@@ -564,7 +625,7 @@ export function ReviewReader() {
       
       setDeleteConfirm({ show: false, reviewId: null });
       toast.success('评论删除成功');
-      fetchData(); // Refresh data to update counts
+      fetchData(true); // Refresh data to update counts (强制刷新)
     } catch (err) {
       console.error('Failed to delete review:', err);
       toast.error('删除评论失败', '请重试');
@@ -600,7 +661,7 @@ export function ReviewReader() {
       }
       
       toast.success(review.isHidden ? '评论已显示' : '评论已隐藏');
-      fetchData(); // Refresh data to update counts
+      fetchData(true); // Refresh data to update counts (强制刷新)
     } catch (err) {
       console.error('Failed to toggle review visibility:', err);
       toast.error('操作失败', '请重试');
@@ -876,8 +937,8 @@ export function ReviewReader() {
                 clearTimeout(pollingRef.current.timer);
                 pollingRef.current.timer = null;
               }
-              // 最后刷新一次数据
-              await fetchData();
+              // 最后刷新一次数据（强制刷新）
+              await fetchData(true);
               return; // 直接返回，不进行后续的卡住检测
             }
             
@@ -928,7 +989,7 @@ export function ReviewReader() {
         toast.warning('提取洞察和主题时出现问题', '请手动触发');
         setIsFullAnalysis(false);
         setAnalysisPhase('idle');
-        fetchData();
+        fetchData(true); // 强制刷新
       }
     };
 
@@ -1059,8 +1120,8 @@ export function ReviewReader() {
       phase2TriggeredRef.current = false;
       stuckDetectionRef.current = { lastProgress: 0, stuckCount: 0 };
       
-      // 刷新数据以获取最新状态（后端会返回 stopped 状态）
-      await fetchData();
+      // 刷新数据以获取最新状态（后端会返回 stopped 状态，强制刷新）
+      await fetchData(true);
       
       toast.success('分析已停止', '后台任务已终止，可重新启动');
     } catch (error) {
