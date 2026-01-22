@@ -96,7 +96,13 @@ const SwotGrid = ({ data }: { data: ComparisonResultContent['swot_comparison'] }
 // ----------------------------------------------------------------------
 // 主组件：ComparisonRenderer
 // ----------------------------------------------------------------------
-export const ComparisonRenderer = memo(({ data }: { data: ComparisonResultContent }) => {
+interface ComparisonRendererProps {
+  data: ComparisonResultContent;
+  /** 只读模式（分享页使用） */
+  readOnly?: boolean;
+}
+
+export const ComparisonRenderer = memo(({ data, readOnly = false }: ComparisonRendererProps) => {
   if (!data) return null;
 
   return (

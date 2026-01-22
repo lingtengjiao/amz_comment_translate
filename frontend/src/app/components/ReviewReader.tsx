@@ -34,6 +34,7 @@ import { EditReviewModal } from './EditReviewModal';
 import { ConfirmDialog } from './ConfirmDialog';
 import { InfoDialog } from './InfoDialog';
 import { Progress } from './ui/progress';
+import { ShareButton } from './share/ShareButton';
 import { themeTagsPreset, buildThemeTagsFromHighlights, type ThemeTag } from './ThemeHighlight';
 import { apiService, transformStatsToTask, transformReviews } from '@/api';
 import { getReportHistory } from '@/api/service';
@@ -1176,6 +1177,14 @@ export function ReviewReader() {
                 <ExternalLink className="size-4" />
                 查看产品
               </Button>
+              {/* 分享按钮 */}
+              <ShareButton
+                resourceType="review_reader"
+                asin={asin}
+                title={task?.title}
+                variant="outline"
+                size="sm"
+              />
               {/* 完整分析按钮 - 一键处理（翻译+洞察+主题），优先显示 */}
               {(() => {
                 const allTranslated = totalReviews > 0 && translatedCount >= totalReviews && bulletPointsTranslated;

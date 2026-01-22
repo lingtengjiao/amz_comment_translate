@@ -47,6 +47,7 @@ import { TableOfContents } from './TableOfContents';
 import { PrintHeader } from './PrintHeader';
 import { PrintProvider, usePrintMode } from '../contexts/PrintContext';
 import { CompareReviewSidebar } from './CompareReviewSidebar';
+import { ShareButton } from './share/ShareButton';
 
 // 懒加载独立报告页面（按报告类型分离）
 const SupplyChainReportPage = lazy(() => import('./reports/supply-chain/SupplyChainReportPage'));
@@ -1084,15 +1085,15 @@ function ReportPageInner() {
                 历史 ({reportHistory.length})
               </Button>
             )}
-            <Button
+            {/* 分享按钮 */}
+            <ShareButton
+              resourceType="report"
+              resourceId={report?.id}
+              asin={asin}
+              title={report?.title || `${asin} 分析报告`}
               variant="ghost"
               size="sm"
-              onClick={handleCopyLink}
-              className="gap-1.5"
-            >
-              <Share2 className="size-4" />
-              分享
-            </Button>
+            />
             <Button
               variant="ghost"
               size="sm"

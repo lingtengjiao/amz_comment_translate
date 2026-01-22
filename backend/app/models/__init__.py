@@ -39,6 +39,10 @@ from app.models.profit_calculator import (
     ExchangeRate,
     OtherCostRule
 )
+# Share Link Model (分享链接)
+from app.models.share_link import ShareLink, ShareResourceType
+# Product Dimension Summary Model (维度总结 - 中观层AI分析)
+from app.models.product_dimension_summary import ProductDimensionSummary, SummaryType as DimensionSummaryType
 
 __all__ = [
     "Product", 
@@ -89,5 +93,11 @@ __all__ = [
     "ShippingFeeRule",
     "ExchangeRate",
     "OtherCostRule",
+    # Share Link Model
+    "ShareLink",
+    "ShareResourceType",
+    # Product Dimension Summary Model
+    "ProductDimensionSummary",
+    "DimensionSummaryType",
 ]
 

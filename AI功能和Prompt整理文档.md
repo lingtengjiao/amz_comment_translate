@@ -20,6 +20,7 @@
 9. [批量翻译](#9-批量翻译)
 10. [智能报告生成](#10-智能报告生成)
 11. [产品对比分析](#11-产品对比分析)
+12. [维度总结（中观层AI分析）](#12-维度总结中观层ai分析)
 
 ---
 
@@ -2282,7 +2283,254 @@ insights = translation_service.extract_insights(
 
 ---
 
+## 12. 维度总结（中观层AI分析）
+
+### 功能描述
+
+维度总结是**打通微观（单条评论洞察）到宏观（项目报告）的桥梁层**，提供中观层的AI分析内容。
+
+**数据流转层级：**
+```
+单条评论 → review_insights/review_theme_highlights (微观层)
+    ↓ 聚合分析
+product_dimension_summaries (中观层) ← 新增这一层
+    ↓ 综合
+product_reports (宏观层)
+```
+
+**服务文件：** `backend/app/services/dimension_summary_service.py`  
+**任务文件：** `backend/app/worker.py` → `task_generate_dimension_summaries`  
+**API端点：** `POST /api/v1/share/{token}/generate-summaries`
+
+### 触发机制
+
+**用户手动触发**（不再自动触发）：
+- 触发位置：分享页面（`/share/{token}`）的"生成AI分析"按钮
+- 触发条件：用户确认洞察和主题提取已完成
+- 优势：节省AI调用成本，用户主导，确保数据完整性
+
+### 生成内容类型
+
+维度总结服务生成6种类型的AI分析：
+
+1. **5W主题总结**（6个）：
+   - `theme_buyer` - 购买者画像总结
+   - `theme_user` - 使用者画像总结
+   - `theme_where` - 使用地点总结
+   - `theme_when` - 使用时机总结
+   - `theme_why` - 购买动机总结
+   - `theme_what` - 产品用途总结
+
+2. **产品维度总结**：
+   - `dimension` - 每个评价维度的优劣势总结（如：加热性能、质感体验等）
+
+3. **情感维度总结**：
+   - `emotion` - 每个情感类型的总结（如：失望不满、惊喜好评等）
+
+4. **场景维度总结**：
+   - `scenario` - 每个使用场景的总结
+
+5. **消费者原型**：
+   - `consumer_persona` - 生成3-5个典型消费者画像（基于5W交叉分析）
+
+6. **整体数据总结**：
+   - `overall` - 产品的整体洞察总结
+
+### 调用方法
+
+```python
+from app.services.dimension_summary_service import DimensionSummaryService
+
+# 在API端点中调用
+summary_service = DimensionSummaryService(db)
+results = await summary_service.generate_all_summaries(product_id)
+
+# 返回结果结构
+{
+    "theme_summaries": [...],      # 5W主题总结列表
+    "dimension_summaries": [...],  # 产品维度总结列表
+    "emotion_summaries": [...],    # 情感维度总结列表
+    "scenario_summaries": [...],   # 场景维度总结列表
+    "consumer_personas": [...],    # 消费者原型列表
+    "overall_summary": {...}       # 整体数据总结
+}
+```
+
+### 12.1 5W主题总结 Prompt
+
+```
+请分析以下产品用户画像数据，生成简洁的总结洞察。
+
+产品：{product_title}
+分析维度：{theme_name}（购买者画像/使用者画像/购买/使用地点/购买/使用时机/购买动机/产品用途）
+
+标签统计：
+{labels_text}
+
+请用2-3句话总结这个维度的核心发现，需要：
+1. 指出最主要的群体/特征及其占比
+2. 发现任何有趣的模式或趋势
+3. 给出对产品营销或定位的启示
+
+直接输出总结内容，不需要任何前缀或格式。
+```
+
+### 12.2 产品维度总结 Prompt
+
+```
+请分析以下产品维度的评价数据，生成简洁的维度总结。
+
+产品：{product_title}
+分析维度：{dimension_name}
+
+【产品优势】({strength_count}条)
+{strengths_text}
+
+【改进空间】({weakness_count}条)
+{weaknesses_text}
+
+【用户建议】({suggestion_count}条)
+{suggestions_text}
+
+请用2-3句话总结这个维度的整体表现，需要：
+1. 概括用户对该维度的整体评价（正面/负面/两极分化）
+2. 指出最突出的优点和最主要的问题
+3. 如有改进建议，简要提及
+
+直接输出总结内容，不需要任何前缀或格式。
+```
+
+### 12.3 情感维度总结 Prompt
+
+```
+请分析以下产品的情感维度数据。
+
+产品：{product_title}
+情感类型：{emotion_name}
+提及次数：{count}
+
+具体表述：
+{analyses}
+
+请用1-2句话总结用户在这个情感维度上的核心感受。直接输出总结。
+```
+
+### 12.4 场景维度总结 Prompt
+
+```
+请分析以下产品的使用场景数据。
+
+产品：{product_title}
+场景类型：{scenario_name}
+提及次数：{count}
+
+具体表述：
+{analyses}
+
+请用1-2句话总结用户在这个场景下的使用情况和反馈。直接输出总结。
+```
+
+### 12.5 消费者原型生成 Prompt
+
+```
+请基于以下产品的5W用户画像数据，提炼出3-5个典型的消费者原型。
+
+产品：{product_title}
+评论数量：{review_count}
+
+5W数据：
+{theme_summary}
+
+请生成3-5个消费者原型，每个原型包含：
+1. 一个简短的原型名称（如"新手宝妈"、"送礼达人"等）
+2. 一句话描述这个原型的特征组合
+3. 对应的5W标签组合
+
+请以JSON格式输出，格式如下：
+[
+  {
+    "name": "原型名称",
+    "description": "一句话描述",
+    "tags": {"buyer": "标签", "user": "标签", "why": "标签", ...}
+  }
+]
+
+只输出JSON，不要其他内容。
+```
+
+### 12.6 整体数据总结 Prompt
+
+```
+请为以下产品生成一段整体数据总结（约100-150字）。
+
+产品：{product_title}
+评论数量：{review_count}
+
+用户画像摘要：
+{themes_summary}
+
+产品维度摘要：
+{dimensions_summary}
+
+情感维度数量：{emotion_count}个类别
+场景维度数量：{scenario_count}个类别
+
+请综合以上信息，生成一段整体洞察总结，包括：
+1. 产品的核心用户群体
+2. 产品的主要优势和问题
+3. 一个简短的改进建议
+
+直接输出总结内容。
+```
+
+### 参数配置
+
+- **temperature:** 0.7（中等温度，保证总结的创造性和准确性）
+- **max_tokens:** 
+  - 5W主题总结：300
+  - 产品维度总结：300
+  - 情感/场景总结：200
+  - 消费者原型：800
+  - 整体数据总结：400
+- **timeout:** 60.0 秒
+
+### 数据库表结构
+
+**表名：** `product_dimension_summaries`
+
+**关键字段：**
+- `product_id` - 关联产品
+- `summary_type` - 总结类型（theme_buyer/user/where/when/why/what, dimension, emotion, scenario, consumer_persona, overall）
+- `category` - 具体分类（如维度名、情感类型名等）
+- `title` - 标题/名称
+- `summary` - AI生成的总结内容
+- `key_points` - 核心要点（JSONB）
+- `evidence_count` - 支撑证据数量
+- `sentiment_tendency` - 情感倾向（positive/negative/neutral/mixed）
+- `persona_data` - 消费者原型数据（JSONB，仅consumer_persona类型使用）
+
+### 前端展示
+
+**展示位置：** 分享页面（`/share/{token}`）
+
+**展示内容：**
+1. **用户画像区域**：显示AI消费者原型（3-5个卡片）
+2. **产品维度区域**：每个维度下方显示AI总结
+3. **页面底部**：显示整体数据总结
+
+**触发按钮：** "生成AI分析"按钮（位于数据总览顶部）
+
+---
+
 ## 更新日志
+
+### 2026-01-22 v1.9 更新 - 维度总结（中观层AI分析）🆕
+- ✅ **新增维度总结功能**：打通微观（单条评论）到宏观（项目报告）的桥梁
+- ✅ **6种类型总结**：5W主题总结、产品维度总结、情感/场景维度总结、消费者原型、整体数据总结
+- ✅ **用户手动触发**：分享页面一键生成，节省AI调用成本
+- ✅ **数据库表**：新增 `product_dimension_summaries` 表
+- ✅ **服务实现**：`DimensionSummaryService` 提供完整的总结生成逻辑
+- ✅ **前端展示**：分享页面展示AI生成的消费者原型、维度总结和整体总结
 
 ### 2026-01-15 v1.8 更新 - 异步报告生成和供应链报告字段更新 🆕
 - ✅ **异步报告生成机制**：新增 `task_generate_report` Celery 任务，支持后台异步生成
@@ -2365,6 +2613,6 @@ insights = translation_service.extract_insights(
 
 ---
 
-**文档版本：** v1.8  
-**最后更新：** 2026-01-15  
+**文档版本：** v1.9  
+**最后更新：** 2026-01-22  
 **维护者：** Backend Team

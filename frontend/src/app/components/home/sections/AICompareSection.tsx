@@ -1,7 +1,7 @@
 /**
  * AI 竞品对比页面 - 使用真实 API
  */
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 import { Brain, Package, Clock, ArrowRight, Trash2, Loader2, Plus } from 'lucide-react';
@@ -32,6 +32,7 @@ interface AnalysisProject {
   title: string;
   status: string;
   created_at: string;
+  analysis_type?: string;  // 添加类型字段
   items: AnalysisProjectItem[];
 }
 

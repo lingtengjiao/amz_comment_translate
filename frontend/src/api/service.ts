@@ -1884,5 +1884,224 @@ export async function deleteRufusConversation(conversationId: string): Promise<{
   return response.json();
 }
 
+
+// ============== 分享链接 API ==============
+
+/**
+ * 分享资源类型
+ */
+export type ShareResourceType = 'review_reader' | 'report' | 'analysis_project' | 'rufus_session' | 'keyword_collection';
+
+/**
+ * 分享链接信息
+ */
+export interface ShareLink {
+  id: string;
+  token: string;
+  resource_type: ShareResourceType;
+  resource_id: string | null;
+  asin: string | null;
+  title: string | null;
+  expires_at: string | null;
+  view_count: number;
+  is_active: boolean;
+  created_at: string | null;
+  share_url: string;
+}
+
+/**
+ * 创建分享链接参数
+ */
+export interface CreateShareLinkParams {
+  resource_type: ShareResourceType;
+  resource_id?: string;
+  asin?: string;
+  title?: string;
+  expires_in_days?: number;
+}
+
+/**
+ * 分享资源数据响应
+ */
+export interface SharedResourceData {
+  success: boolean;
+  resource_type: ShareResourceType;
+  title: string | null;
+  view_count: number;
+  data: {
+    product?: any;
+    reviews?: any[];
+    stats?: any;
+    report?: any;
+    project?: any;
+    items?: any[];
+    session?: any;
+    conversations?: any[];
+  };
+}
+
+/**
+ * 创建分享链接
+ * 
+ * @param params 分享参数
+ * @returns 创建的分享链接信息
+ */
+export async function createShareLink(params: CreateShareLinkParams): Promise<{
+  success: boolean;
+  share_link: ShareLink;
+  share_url: string;
+}> {
+  const url = `${API_BASE}/share`;
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: getAuthHeaders(),
+    body: JSON.stringify(params),
+  });
+  if (!response.ok) {
+    const errorText = await response.text();
+    let message = response.statusText;
+    try {
+      const errorJson = JSON.parse(errorText);
+      message = errorJson.detail || errorJson.message || message;
+    } catch {
+      message = errorText || message;
+    }
+    throw new ApiError(response.status, message);
+  }
+  return response.json();
+}
+
+/**
+ * 获取分享资源数据（公开 API，无需认证）
+ * 
+ * @param token 分享令牌
+ * @param skipIncrement 是否跳过访问次数增加（用于刷新页面等场景）
+ * @returns 分享资源数据
+ */
+export async function getSharedResource(token: string, skipIncrement: boolean = false): Promise<SharedResourceData> {
+  const url = `${API_BASE}/share/${token}/data${skipIncrement ? '?skip_increment=true' : ''}`;
+  const response = await fetch(url, {
+    method: 'GET',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+  });
+  if (!response.ok) {
+    const errorText = await response.text();
+    let message = response.statusText;
+    try {
+      const errorJson = JSON.parse(errorText);
+      message = errorJson.detail || errorJson.message || message;
+    } catch {
+      message = errorText || message;
+    }
+    throw new ApiError(response.status, message);
+  }
+  return response.json();
+}
+
+/**
+ * 获取分享链接元信息（公开 API，无需认证）
+ * 
+ * @param token 分享令牌
+ * @returns 分享链接元信息
+ */
+export async function getShareMeta(token: string): Promise<{
+  success: boolean;
+  meta: {
+    token: string;
+    resource_type: ShareResourceType;
+    title: string | null;
+    is_valid: boolean;
+    is_expired: boolean;
+    expires_at: string | null;
+    view_count: number;
+    created_at: string | null;
+  };
+}> {
+  const url = `${API_BASE}/share/${token}/meta`;
+  const response = await fetch(url, {
+    method: 'GET',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+  });
+  if (!response.ok) {
+    const errorText = await response.text();
+    let message = response.statusText;
+    try {
+      const errorJson = JSON.parse(errorText);
+      message = errorJson.detail || errorJson.message || message;
+    } catch {
+      message = errorText || message;
+    }
+    throw new ApiError(response.status, message);
+  }
+  return response.json();
+}
+
+/**
+ * 获取我的分享链接列表
+ * 
+ * @param resourceType 可选，筛选特定资源类型
+ * @param includeExpired 是否包含已过期/已撤销的链接
+ * @returns 分享链接列表
+ */
+export async function getMyShareLinks(
+  resourceType?: ShareResourceType,
+  includeExpired = false
+): Promise<{
+  success: boolean;
+  share_links: ShareLink[];
+  total: number;
+}> {
+  const params = new URLSearchParams();
+  if (resourceType) {
+    params.append('resource_type', resourceType);
+  }
+  if (includeExpired) {
+    params.append('include_expired', 'true');
+  }
+  
+  const url = `${API_BASE}/share/my?${params.toString()}`;
+  const response = await fetch(url, {
+    method: 'GET',
+    headers: getAuthHeaders(),
+  });
+  if (!response.ok) {
+    throw new ApiError(response.status, response.statusText);
+  }
+  return response.json();
+}
+
+/**
+ * 撤销分享链接
+ * 
+ * @param token 分享令牌
+ * @returns 操作结果
+ */
+export async function revokeShareLink(token: string): Promise<{
+  success: boolean;
+  message: string;
+}> {
+  const url = `${API_BASE}/share/${token}`;
+  const response = await fetch(url, {
+    method: 'DELETE',
+    headers: getAuthHeaders(),
+  });
+  if (!response.ok) {
+    const errorText = await response.text();
+    let message = response.statusText;
+    try {
+      const errorJson = JSON.parse(errorText);
+      message = errorJson.detail || errorJson.message || message;
+    } catch {
+      message = errorText || message;
+    }
+    throw new ApiError(response.status, message);
+  }
+  return response.json();
+}
+
 export default apiService;
 

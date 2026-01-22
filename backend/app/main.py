@@ -25,6 +25,7 @@ from app.api.analytics import router as analytics_router
 from app.api.rufus import router as rufus_router
 from app.api.keyword_collections import router as keyword_collections_router
 from app.api.profit_calculator import router as profit_calculator_router
+from app.api.share import router as share_router
 
 # Configure logging
 logging.basicConfig(
@@ -120,6 +121,7 @@ app.include_router(analytics_router, prefix="/api/v1")  # 用户行为分析接�
 app.include_router(rufus_router, prefix="/api/v1")  # Rufus AI 对话接口
 app.include_router(keyword_collections_router, prefix="/api/v1")  # 关键词产品库接口
 app.include_router(profit_calculator_router, prefix="/api/v1")  # 毛利计算接口
+app.include_router(share_router, prefix="/api/v1")  # 分享链接接口
 
 
 # Error handlers

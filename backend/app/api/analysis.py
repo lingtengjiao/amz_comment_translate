@@ -8,12 +8,16 @@ Analysis API Router - 对比分析模块 API
 4. 触发分析任务
 5. 删除项目
 6. 获取对比预览数据
+7. [NEW] SSE 流式进度推送
 """
 import logging
+import json
+import asyncio
 from typing import List, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Query
+from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from pydantic import BaseModel, Field
 
@@ -22,6 +26,7 @@ from app.services.analysis_service import AnalysisService
 from app.models.analysis import AnalysisStatus
 from app.models.user import User
 from app.services.auth_service import get_current_user
+from app.core.redis import get_async_redis, AnalysisProgressTracker
 from sqlalchemy import select
 
 logger = logging.getLogger(__name__)
@@ -80,6 +85,7 @@ class AnalysisProjectResponse(BaseModel):
     title: str
     description: Optional[str]
     analysis_type: str
+    user_id: Optional[str] = None
     status: str
     result_content: Optional[dict] = None
     raw_data_snapshot: Optional[dict] = None
@@ -263,16 +269,29 @@ async def create_analysis_project(
 
 
 async def _run_analysis_background(project_id: UUID):
-    """后台执行分析任务"""
+    """后台执行分析任务（带进度追踪）"""
+    from app.core.redis import get_async_redis, AnalysisProgressTracker
+    
+    # 初始化进度追踪器
+    redis = await get_async_redis()
+    tracker = AnalysisProgressTracker(redis)
+    await tracker.init_progress(str(project_id), total_steps=5)
+    
+    # 定义进度回调函数
+    async def progress_callback(step: int, step_name: str, percent: int, message: str = ""):
+        await tracker.update_progress(str(project_id), step, step_name, percent, message)
+    
     # 在后台任务中重新创建数据库会话
     async with async_session_maker() as db:
         try:
             service = AnalysisService(db)
-            await service.run_analysis(project_id)
+            await service.run_analysis(project_id, progress_callback=progress_callback)
             await db.commit()
+            await tracker.complete(str(project_id), success=True)
             logger.info(f"后台分析任务完成: {project_id}")
         except Exception as e:
             await db.rollback()
+            await tracker.complete(str(project_id), success=False, error_message=str(e))
             logger.error(f"后台分析任务失败: {project_id}, error: {e}", exc_info=True)
             # 更新项目状态为失败
             try:
@@ -327,6 +346,7 @@ async def list_projects(
                     title=p.title,
                     description=p.description,
                     analysis_type=p.analysis_type,
+                    user_id=str(p.user_id) if p.user_id else None,
                     status=p.status,
                     result_content=p.result_content,
                     raw_data_snapshot=p.raw_data_snapshot,
@@ -389,6 +409,7 @@ async def get_project_detail(
         "title": project.title,
         "description": project.description,
         "analysis_type": project.analysis_type,
+        "user_id": str(project.user_id) if project.user_id else None,
         "status": project.status,
         "result_content": project.result_content,
         "raw_data_snapshot": project.raw_data_snapshot,
@@ -470,6 +491,86 @@ async def delete_project(
         raise HTTPException(status_code=404, detail="项目不存在")
     
     return {"success": True, "message": "项目已删除"}
+
+
+# ==========================================
+# [NEW] SSE 流式进度推送
+# ==========================================
+
+@router.get("/projects/{project_id}/progress/stream")
+async def stream_analysis_progress(project_id: UUID):
+    """
+    SSE 流式推送分析进度
+    
+    前端使用 EventSource 连接此端点，实时获取分析进度。
+    
+    事件格式：
+    data: {"status": "processing", "step": 2, "step_name": "产品分析", "percent": 45, "message": "分析中..."}
+    
+    状态说明：
+    - started: 任务已启动
+    - processing: 正在处理
+    - completed: 处理完成
+    - failed: 处理失败
+    """
+    async def event_generator():
+        redis = await get_async_redis()
+        tracker = AnalysisProgressTracker(redis)
+        
+        # 最长等待 5 分钟（300秒）
+        max_wait = 300
+        elapsed = 0
+        last_progress = None
+        
+        while elapsed < max_wait:
+            progress = await tracker.get_progress(str(project_id))
+            
+            if progress:
+                # 只有进度变化时才发送
+                if progress != last_progress:
+                    yield f"data: {json.dumps(progress, ensure_ascii=False)}\n\n"
+                    last_progress = progress
+                
+                # 如果任务已完成或失败，发送最终事件并关闭
+                if progress.get("status") in ["completed", "failed"]:
+                    yield f"event: close\ndata: {json.dumps({'reason': progress.get('status')})}\n\n"
+                    break
+            else:
+                # 没有进度数据，可能任务还没启动
+                yield f"data: {json.dumps({'status': 'waiting', 'message': '等待任务启动...'})}\n\n"
+            
+            await asyncio.sleep(1)  # 每秒检查一次
+            elapsed += 1
+        
+        if elapsed >= max_wait:
+            yield f"event: timeout\ndata: {json.dumps({'message': '进度超时'})}\n\n"
+    
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no"  # 禁用 Nginx 缓冲
+        }
+    )
+
+
+@router.get("/projects/{project_id}/progress")
+async def get_analysis_progress(project_id: UUID):
+    """
+    获取当前分析进度（轮询备用接口）
+    
+    如果 SSE 不可用，前端可以用此接口轮询
+    """
+    redis = await get_async_redis()
+    tracker = AnalysisProgressTracker(redis)
+    
+    progress = await tracker.get_progress(str(project_id))
+    if not progress:
+        return {"status": "unknown", "message": "无进度数据"}
+    
+    return progress
 
 
 # [NEW] 产品分析状态检查接口

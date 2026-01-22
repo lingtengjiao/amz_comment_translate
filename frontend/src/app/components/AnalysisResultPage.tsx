@@ -9,6 +9,7 @@ import type { AnalysisProject } from '@/api/types';
 import { isStructuredResult, isComparisonResult } from '@/api/types';
 import { Button } from './ui/button';
 import { toast } from '@/app/utils/toast';
+import { ShareButton } from './share/ShareButton';
 
 // 检查是否是市场洞察结果
 const isMarketInsightResult = (data: any): boolean => {
@@ -240,8 +241,20 @@ export default function AnalysisResultPage() {
               </p>
             </div>
           </div>
-          <div className="text-sm text-gray-500 dark:text-gray-400">
-            {project?.items.length || 0} 款产品{project?.analysis_type === 'market_insight' ? '聚合分析' : '对比'}
+          <div className="flex items-center gap-3">
+            <span className="text-sm text-gray-500 dark:text-gray-400">
+              {project?.items.length || 0} 款产品{project?.analysis_type === 'market_insight' ? '聚合分析' : '对比'}
+            </span>
+            {/* 分享按钮 */}
+            {project && project.status === 'completed' && (
+              <ShareButton
+                resourceType="analysis_project"
+                resourceId={project.id}
+                title={project.title}
+                variant="outline"
+                size="sm"
+              />
+            )}
           </div>
         </div>
       </header>

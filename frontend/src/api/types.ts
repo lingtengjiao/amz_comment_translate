@@ -941,8 +941,9 @@ export interface DimensionInsight {
 
 /** 维度洞察集合（10个维度：5W用户画像 + 5类口碑洞察） */
 export interface DimensionInsights {
-  // 5W 用户画像
-  who?: DimensionInsight;
+  // 6W 用户画像 (who 拆分为 buyer + user)
+  buyer?: DimensionInsight;   // 购买者身份
+  user?: DimensionInsight;    // 使用者身份
   when?: DimensionInsight;
   where?: DimensionInsight;
   why?: DimensionInsight;

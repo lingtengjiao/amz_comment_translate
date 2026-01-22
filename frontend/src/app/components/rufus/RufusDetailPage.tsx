@@ -29,6 +29,7 @@ import {
   type RufusConversationDetail
 } from '../../../api/service';
 import { ConversationEditDialog } from './dialogs/ConversationEditDialog';
+import { ShareButton } from '../share/ShareButton';
 
 // 页面类型配置
 const PAGE_TYPE_CONFIG = {
@@ -172,6 +173,15 @@ export function RufusDetailPage() {
                     <span>{sessionData.conversations.length} 条对话</span>
                     <span className="text-slate-300 select-none">·</span>
                     <span className="font-medium text-slate-600">{sessionData.marketplace}</span>
+                    <span className="text-slate-300 select-none">·</span>
+                    {/* 分享按钮 */}
+                    <ShareButton
+                      resourceType="rufus_session"
+                      asin={sessionData.session_id}
+                      title={sessionData.product_title || sessionData.keyword || 'Rufus 调研'}
+                      variant="outline"
+                      size="sm"
+                    />
                   </div>
                 </div>
                 

@@ -1797,6 +1797,9 @@ def task_extract_themes(self, product_id: str):
             task_record.processed_items = processed
             db.commit()
         
+        # [NOTE 2026-01-22] 维度总结改为用户手动触发（通过分享页面的"生成AI分析"按钮）
+        # 不再自动触发，避免在数据不完整时生成，同时节省AI调用成本
+        
         return {
             "product_id": product_id,
             "total_reviews": total_reviews,
@@ -3406,3 +3409,164 @@ def task_analysis_completion_patrol(self):
         return {"error": str(e)}
     finally:
         db.close()
+
+
+# ============== [NEW 2026-01-22] 任务: 维度总结生成 ==============
+
+@celery_app.task(bind=True, max_retries=2, default_retry_delay=60)
+def task_generate_dimension_summaries(self, product_id: str):
+    """
+    生成产品维度总结（中观层AI分析）
+    
+    打通微观(单条评论洞察)到宏观(项目报告)的桥梁，包括：
+    - 5W主题总结 (buyer/user/where/when/why/what)
+    - 产品维度总结 (各评价维度的优劣势总结)
+    - 情感维度总结
+    - 场景维度总结
+    - 消费者原型 (3-5个典型用户画像)
+    - 整体数据总结
+    
+    触发条件：主题提取任务完成后自动触发
+    
+    Args:
+        product_id: UUID of the product
+    """
+    import asyncio
+    from app.services.dimension_summary_service import DimensionSummaryService
+    
+    logger.info(f"[维度总结] 开始生成产品维度总结: {product_id}")
+    
+    # 获取异步数据库会话
+    async def run_async():
+        from app.core.database import async_session_maker
+        async with async_session_maker() as session:
+            service = DimensionSummaryService(session)
+            return await service.generate_all_summaries(product_id)
+    
+    try:
+        result = asyncio.get_event_loop().run_until_complete(run_async())
+        
+        summary_counts = {
+            "themes": len(result.get("theme_summaries", [])),
+            "dimensions": len(result.get("dimension_summaries", [])),
+            "emotions": len(result.get("emotion_summaries", [])),
+            "scenarios": len(result.get("scenario_summaries", [])),
+            "personas": len(result.get("consumer_personas", [])),
+            "overall": 1 if result.get("overall_summary") else 0,
+        }
+        
+        logger.info(f"[维度总结] ✅ 生成完成: {product_id}, 统计: {summary_counts}")
+        
+        return {
+            "product_id": product_id,
+            "success": True,
+            "summary_counts": summary_counts
+        }
+        
+    except Exception as e:
+        logger.error(f"[维度总结] ❌ 生成失败: {product_id}, 错误: {e}")
+        raise self.retry(exc=e)
+
+
+# ============================================================================
+# 🚀 对比分析任务 (Comparison Analysis Task)
+# ============================================================================
+
+@celery_app.task(bind=True, max_retries=2, default_retry_delay=60, time_limit=600, soft_time_limit=540)
+def task_run_comparison_analysis(self, project_id: str):
+    """
+    🚀 对比分析异步任务 (Async Comparison Analysis)
+    
+    在 Celery Worker 中执行对比分析，支持：
+    1. 进度实时追踪（通过 Redis）
+    2. 失败自动重试
+    3. 超时保护（10分钟）
+    
+    参数：
+        project_id: 分析项目 UUID
+    
+    返回：
+        {
+            "project_id": "...",
+            "success": True/False,
+            "status": "completed/failed",
+            "message": "..."
+        }
+    """
+    import asyncio
+    from app.core.redis import get_sync_redis, AnalysisProgressTrackerSync
+    from app.models.analysis import AnalysisProject, AnalysisStatus
+    
+    logger.info(f"[对比分析] 🚀 开始执行: {project_id}")
+    
+    # 初始化进度追踪
+    redis_client = get_sync_redis()
+    progress_tracker = AnalysisProgressTrackerSync(redis_client)
+    progress_tracker.init_progress(project_id, total_steps=5)
+    
+    db = get_sync_db()
+    
+    try:
+        # 获取项目
+        from app.models.analysis import AnalysisProject
+        project = db.query(AnalysisProject).filter(AnalysisProject.id == project_id).first()
+        
+        if not project:
+            progress_tracker.complete(project_id, success=False, error_message="项目不存在")
+            return {"project_id": project_id, "success": False, "message": "项目不存在"}
+        
+        # 更新状态为处理中
+        project.status = AnalysisStatus.PROCESSING.value
+        db.commit()
+        
+        progress_tracker.update_progress(project_id, 1, "数据收集", 10, "正在收集产品数据...")
+        
+        # 异步执行分析（在同步上下文中运行异步代码）
+        async def run_async_analysis():
+            from app.db.session import async_session_maker
+            from app.services.analysis_service import AnalysisService
+            
+            async def sync_progress_callback(step: int, step_name: str, percent: int, message: str = ""):
+                """同步进度回调包装器"""
+                progress_tracker.update_progress(project_id, step, step_name, percent, message)
+            
+            async with async_session_maker() as async_db:
+                service = AnalysisService(async_db)
+                result = await service.run_analysis(project_id, progress_callback=sync_progress_callback)
+                await async_db.commit()
+                return result
+        
+        # 运行异步分析
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            result = loop.run_until_complete(run_async_analysis())
+        finally:
+            loop.close()
+        
+        # 标记完成
+        progress_tracker.complete(project_id, success=True)
+        
+        logger.info(f"[对比分析] ✅ 完成: {project_id}")
+        return {
+            "project_id": project_id,
+            "success": True,
+            "status": "completed",
+            "message": "分析完成"
+        }
+        
+    except Exception as e:
+        logger.error(f"[对比分析] ❌ 失败: {project_id}, 错误: {e}")
+        progress_tracker.complete(project_id, success=False, error_message=str(e))
+        
+        # 更新项目状态
+        try:
+            project = db.query(AnalysisProject).filter(AnalysisProject.id == project_id).first()
+            if project:
+                project.status = AnalysisStatus.FAILED.value
+                project.error_message = str(e)
+                db.commit()
+        except Exception as update_error:
+            logger.error(f"[对比分析] 更新状态失败: {update_error}")
+        
+        raise self.retry(exc=e)

@@ -10,8 +10,9 @@ import { toast } from 'sonner';
 import { 
   Plus, CheckSquare, X, LayoutGrid, DollarSign, Settings, 
   TrendingUp, ArrowUpDown, Calendar, Tag, Trophy, Upload, 
-  Palette, ArrowLeft, Loader2, BarChart3
+  Palette, ArrowLeft, Loader2, BarChart3, Share2
 } from 'lucide-react';
+import { ShareButton } from '../share/ShareButton';
 import { Product } from './ProductCard';
 import { DraggableBoard } from './DraggableBoard';
 import { PriceRangeSettings, PriceRange } from './PriceRangeSettings';
@@ -1122,6 +1123,17 @@ export function ProductBoardSection() {
               )}
             </div>
             <div className="flex gap-2 flex-wrap">
+              {/* 分享按钮 */}
+              {collectionId && (
+                <ShareButton
+                  resourceType="keyword_collection"
+                  resourceId={collectionId}
+                  title={collectionInfo?.keyword || '市场格局分析'}
+                  variant="outline"
+                  size="sm"
+                />
+              )}
+              
               {/* 洞察分析按钮 */}
               <button
                 onClick={() => setDetailDialogOpen(true)}

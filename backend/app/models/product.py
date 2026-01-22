@@ -122,6 +122,13 @@ class Product(Base):
         uselist=False  # One-to-one relationship
     )
     
+    # 维度总结（中观层AI分析）
+    dimension_summaries: Mapped[List["ProductDimensionSummary"]] = relationship(
+        "ProductDimensionSummary",
+        back_populates="product",
+        cascade="all, delete-orphan"
+    )
+    
     def __repr__(self) -> str:
         return f"<Product(asin={self.asin}, title={self.title[:50] if self.title else 'N/A'})>"
 

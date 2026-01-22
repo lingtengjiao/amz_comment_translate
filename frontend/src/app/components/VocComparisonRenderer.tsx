@@ -25,16 +25,25 @@ import type {
   AnalysisItem
 } from '@/api/types';
 
-// 10个维度配置（5W用户画像 + 5类口碑洞察）
+// 11个维度配置（6W用户画像 + 5类口碑洞察）
 const DIMENSION_CONFIG = [
-  // 5W 用户画像
+  // 6W 用户画像 (who 拆分为 buyer + user)
   {
-    key: 'who',
-    name: '用户是谁',
+    key: 'buyer',
+    name: '购买者',
     icon: Users,
     iconColor: 'text-blue-600',
     bgColor: 'bg-blue-50 dark:bg-blue-900/20 border-blue-200 dark:border-blue-800',
     color: '#3B82F6',
+    category: 'five_w',
+  },
+  {
+    key: 'user',
+    name: '使用者',
+    icon: Users,
+    iconColor: 'text-cyan-600',
+    bgColor: 'bg-cyan-50 dark:bg-cyan-900/20 border-cyan-200 dark:border-cyan-800',
+    color: '#06B6D4',
     category: 'five_w',
   },
   {
@@ -124,9 +133,11 @@ const DIMENSION_CONFIG = [
 interface VocComparisonRendererProps {
   data: StructuredResultContent;
   items?: AnalysisItem[];
+  /** 只读模式（分享页使用） */
+  readOnly?: boolean;
 }
 
-export const VocComparisonRenderer = memo(({ data, items }: VocComparisonRendererProps) => {
+export const VocComparisonRenderer = memo(({ data, items, readOnly = false }: VocComparisonRendererProps) => {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [selectedReview, setSelectedReview] = useState<{
     productId: number;
@@ -209,9 +220,10 @@ export const VocComparisonRenderer = memo(({ data, items }: VocComparisonRendere
   return (
     <>
       {/* 吸顶产品头部 - 背景铺满整个页面宽度，内容对齐 */}
-      {/* top-16 = 64px，对应父组件 Header 的高度 h-16 */}
+      {/* 正常模式: top-16 = 64px，对应父组件 Header 的高度 h-16 */}
+      {/* 只读模式: top-12 = 48px，对应分享页顶部蓝色条的高度 h-12 */}
       {/* z-[35] 确保在 Header (z-40) 下方但高于其他内容 */}
-      <div className="w-full sticky top-16 z-[35] bg-gradient-to-b from-gray-50 to-white dark:from-gray-900 dark:to-gray-950 backdrop-blur-md border-b border-gray-200 dark:border-gray-800 shadow-lg">
+      <div className={`w-full sticky ${readOnly ? 'top-12' : 'top-16'} z-[35] bg-gradient-to-b from-gray-50 to-white dark:from-gray-900 dark:to-gray-950 backdrop-blur-md border-b border-gray-200 dark:border-gray-800 shadow-lg`}>
         <div className="max-w-[1800px] mx-auto px-6 py-5">
           <ProductCompareHeader products={products} totalReviews={totalReviews} />
         </div>

@@ -283,3 +283,172 @@ class BatchStatusTrackerSync:
             })
         except Exception as e:
             logger.error(f"Failed to update batch status: {e}")
+
+
+# ==========================================
+# 分析任务进度追踪 (Analysis Progress)
+# ==========================================
+
+KEY_PREFIX_ANALYSIS_PROGRESS = "analysis:progress:"
+
+
+class AnalysisProgressTracker:
+    """
+    分析任务进度追踪器
+    
+    用于 SSE 流式输出，实时向前端推送分析进度
+    """
+    
+    def __init__(self, redis_client):
+        self.redis = redis_client
+        self.prefix = KEY_PREFIX_ANALYSIS_PROGRESS
+        self.expire_seconds = 1800  # 30 分钟过期
+    
+    async def init_progress(self, project_id: str, total_steps: int = 5) -> bool:
+        """初始化进度"""
+        try:
+            key = f"{self.prefix}{project_id}"
+            await self.redis.hset(key, mapping={
+                "status": "started",
+                "current_step": "0",
+                "total_steps": str(total_steps),
+                "step_name": "初始化",
+                "percent": "0",
+                "message": "分析任务已启动",
+                "started_at": str(int(__import__('time').time()))
+            })
+            await self.redis.expire(key, self.expire_seconds)
+            return True
+        except Exception as e:
+            logger.error(f"Failed to init analysis progress: {e}")
+            return False
+    
+    async def update_progress(
+        self, 
+        project_id: str, 
+        step: int, 
+        step_name: str, 
+        percent: int,
+        message: str = "",
+        extra_data: dict = None
+    ):
+        """更新进度"""
+        try:
+            key = f"{self.prefix}{project_id}"
+            mapping = {
+                "status": "processing",
+                "current_step": str(step),
+                "step_name": step_name,
+                "percent": str(percent),
+                "message": message,
+                "updated_at": str(int(__import__('time').time()))
+            }
+            if extra_data:
+                mapping["extra_data"] = json.dumps(extra_data, ensure_ascii=False)
+            await self.redis.hset(key, mapping=mapping)
+        except Exception as e:
+            logger.error(f"Failed to update analysis progress: {e}")
+    
+    async def complete(self, project_id: str, success: bool = True, error_message: str = None):
+        """标记完成"""
+        try:
+            key = f"{self.prefix}{project_id}"
+            mapping = {
+                "status": "completed" if success else "failed",
+                "percent": "100" if success else "-1",
+                "step_name": "完成" if success else "失败",
+                "message": "分析完成" if success else (error_message or "分析失败"),
+                "completed_at": str(int(__import__('time').time()))
+            }
+            await self.redis.hset(key, mapping=mapping)
+        except Exception as e:
+            logger.error(f"Failed to complete analysis progress: {e}")
+    
+    async def get_progress(self, project_id: str) -> Optional[dict]:
+        """获取进度"""
+        try:
+            key = f"{self.prefix}{project_id}"
+            result = await self.redis.hgetall(key)
+            if not result:
+                return None
+            return {
+                "status": result.get("status", "unknown"),
+                "current_step": int(result.get("current_step", 0)),
+                "total_steps": int(result.get("total_steps", 5)),
+                "step_name": result.get("step_name", ""),
+                "percent": int(result.get("percent", 0)),
+                "message": result.get("message", ""),
+                "extra_data": json.loads(result.get("extra_data", "{}")) if result.get("extra_data") else {}
+            }
+        except Exception as e:
+            logger.error(f"Failed to get analysis progress: {e}")
+            return None
+
+
+class AnalysisProgressTrackerSync:
+    """同步版本（用于 Celery Worker）"""
+    
+    def __init__(self, redis_client: redis.Redis):
+        self.redis = redis_client
+        self.prefix = KEY_PREFIX_ANALYSIS_PROGRESS
+        self.expire_seconds = 1800
+    
+    def init_progress(self, project_id: str, total_steps: int = 5) -> bool:
+        """初始化进度"""
+        try:
+            key = f"{self.prefix}{project_id}"
+            self.redis.hset(key, mapping={
+                "status": "started",
+                "current_step": "0",
+                "total_steps": str(total_steps),
+                "step_name": "初始化",
+                "percent": "0",
+                "message": "分析任务已启动",
+                "started_at": str(int(__import__('time').time()))
+            })
+            self.redis.expire(key, self.expire_seconds)
+            return True
+        except Exception as e:
+            logger.error(f"Failed to init analysis progress: {e}")
+            return False
+    
+    def update_progress(
+        self, 
+        project_id: str, 
+        step: int, 
+        step_name: str, 
+        percent: int,
+        message: str = "",
+        extra_data: dict = None
+    ):
+        """更新进度"""
+        try:
+            key = f"{self.prefix}{project_id}"
+            mapping = {
+                "status": "processing",
+                "current_step": str(step),
+                "step_name": step_name,
+                "percent": str(percent),
+                "message": message,
+                "updated_at": str(int(__import__('time').time()))
+            }
+            if extra_data:
+                mapping["extra_data"] = json.dumps(extra_data, ensure_ascii=False)
+            self.redis.hset(key, mapping=mapping)
+        except Exception as e:
+            logger.error(f"Failed to update analysis progress: {e}")
+    
+    def complete(self, project_id: str, success: bool = True, error_message: str = None):
+        """标记完成"""
+        try:
+            key = f"{self.prefix}{project_id}"
+            mapping = {
+                "status": "completed" if success else "failed",
+                "percent": "100" if success else "-1",
+                "step_name": "完成" if success else "失败",
+                "message": "分析完成" if success else (error_message or "分析失败"),
+                "completed_at": str(int(__import__('time').time()))
+            }
+            self.redis.hset(key, mapping=mapping)
+        except Exception as e:
+            logger.error(f"Failed to complete analysis progress: {e}")

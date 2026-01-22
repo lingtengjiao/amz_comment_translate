@@ -77,9 +77,13 @@ SINGLE_PRODUCT_PROMPT = """分析产品"{product_name}"的用户反馈数据，�
   "product_name": "{product_name}",
   "asin": "{asin}",
   "five_w": {{
-    "who": [
+    "buyer": [
+      {{"label": "家长", "desc": "主要购买群体，为孩子购买", "count": 30}},
+      {{"label": "送礼者", "desc": "作为礼物购买", "count": 15}}
+    ],
+    "user": [
       {{"label": "儿童", "desc": "主要使用者，用于感统训练", "count": 42}},
-      {{"label": "家长", "desc": "重要购买群体", "count": 30}}
+      {{"label": "成人", "desc": "自用缓解压力", "count": 12}}
     ],
     "when": [
       {{"label": "焦虑时", "desc": "使用频率最高", "count": 18}},
@@ -141,21 +145,33 @@ DIMENSION_INSIGHT_PROMPT = """基于以下产品的对比数据，为每个维�
 产品列表：
 {product_summaries}
 
-为10个维度生成洞察，每个洞察包含：
+为11个维度生成洞察，每个洞察包含：
 1. commonality：所有产品的共性特征（1句话）
 2. differences：每个产品的差异特点（每个产品1句话，标注产品序号）
 3. positioning：每个产品的定位洞察（每个产品1句话，标注产品序号）
 
-10个维度说明：
-- 5W用户画像：who(用户是谁), when(何时使用), where(在哪里用), why(购买动机), what(具体用途)
+11个维度说明：
+- 6W用户画像：buyer(购买者身份), user(使用者身份), when(何时使用), where(在哪里用), why(购买动机), what(具体用途)
 - 5类口碑洞察：pros(优势卖点), cons(痛点问题), suggestion(用户建议), scenario(使用场景), emotion(情绪反馈)
 
 输出JSON格式：
 {{
   "dimension_insights": {{
-    "who": {{
-      "name": "用户是谁",
-      "commonality": "五款产品均定位于减压解压赛道...",
+    "buyer": {{
+      "name": "购买者身份",
+      "commonality": "五款产品购买者均以家长和送礼者为主...",
+      "differences": [
+        {{"product": 1, "text": "自购比例高，个人消费者为主"}},
+        {{"product": 2, "text": "礼品属性强，送礼场景突出"}}
+      ],
+      "positioning": [
+        {{"product": 1, "text": "大众消费品定位，面向个人用户"}},
+        {{"product": 2, "text": "礼品市场定位，强调送礼价值"}}
+      ]
+    }},
+    "user": {{
+      "name": "使用者身份",
+      "commonality": "五款产品使用者均以儿童和青少年为主...",
       "differences": [
         {{"product": 1, "text": "全年龄覆盖，大众市场通用型产品"}},
         {{"product": 2, "text": "深耕特殊儿童市场"}}
@@ -1062,9 +1078,17 @@ class AnalysisService:
     # 核心分析逻辑 - 路由入口
     # ==========================================
     
-    async def run_analysis(self, project_id: UUID) -> AnalysisProject:
+    async def run_analysis(
+        self, 
+        project_id: UUID,
+        progress_callback: callable = None
+    ) -> AnalysisProject:
         """
         分析入口：根据 analysis_type 路由到不同的分析方法
+        
+        Args:
+            project_id: 项目 ID
+            progress_callback: 可选的进度回调函数 (step, step_name, percent, message)
         """
         project = await self.get_project(project_id)
         if not project or not project.items:
@@ -1075,13 +1099,17 @@ class AnalysisService:
             return await self._run_market_insight_analysis(project)
         else:
             # 默认执行对比分析
-            return await self._run_comparison_analysis(project)
+            return await self._run_comparison_analysis(project, progress_callback)
 
     # ==========================================
     # 对比分析逻辑 (Comparison Analysis)
     # ==========================================
     
-    async def _run_comparison_analysis(self, project: AnalysisProject) -> AnalysisProject:
+    async def _run_comparison_analysis(
+        self, 
+        project: AnalysisProject,
+        progress_callback: callable = None
+    ) -> AnalysisProject:
         """
         执行 VOC 对比分析
         
@@ -1090,20 +1118,61 @@ class AnalysisService:
         2. 每个产品独立分析（小请求，稳定）
         3. 并行调用 AI（多产品同时分析）
         4. 生成维度洞察和策略总结
+        5. [NEW] 批量数据库查询优化
+        6. [NEW] 进度回调支持
+        
+        Args:
+            project: 分析项目
+            progress_callback: 可选的进度回调函数 (step, step_name, percent, message)
         """
+        
+        async def report_progress(step: int, step_name: str, percent: int, message: str = ""):
+            """统一的进度上报"""
+            if progress_callback:
+                try:
+                    await progress_callback(step, step_name, percent, message)
+                except Exception as e:
+                    logger.warning(f"进度回调失败: {e}")
 
         try:
             # 更新状态
             project.status = AnalysisStatus.PROCESSING.value
             await self.db.commit()
+            
+            await report_progress(1, "数据收集", 10, "正在收集产品数据...")
 
-            # 1. 收集产品数据（顺序，因为 SQLAlchemy 限制）
+            # 1. [OPTIMIZED] 批量收集产品数据
             products_info = []
             product_data_map = {}
-            product_count = len(project.items)  # 获取产品总数，用于动态调整标签数量
+            product_count = len(project.items)
             
+            # 批量获取所有产品 ID
+            product_ids = [item.product_id for item in project.items]
+            
+            # [NEW] 使用批量查询获取所有产品的统计数据
+            batch_5w_stats = await self.summary_service.batch_aggregate_5w_stats(product_ids)
+            batch_insight_stats = await self.summary_service.batch_aggregate_insight_stats(product_ids)
+            
+            await report_progress(1, "数据收集", 20, f"已获取 {len(product_ids)} 个产品数据")
+            
+            # 组装每个产品的数据
             for item in project.items:
-                res = await self._fetch_product_data(item, product_count=product_count)
+                product = item.product
+                raw_name = product.title_translated or product.title or product.asin
+                safe_name = raw_name[:30].replace('"', '').replace("'", "").strip() + f" ({product.asin[-4:]})"
+                
+                context_stats = batch_5w_stats.get(item.product_id, {})
+                insight_stats = batch_insight_stats.get(item.product_id, {})
+                
+                res = {
+                    "name": safe_name,
+                    "asin": product.asin,
+                    "image_url": product.image_url,
+                    "data": {
+                        "user_context": self._simplify_stats(context_stats, product_count=product_count),
+                        "key_insights": self._simplify_stats(insight_stats, product_count=product_count)
+                    }
+                }
                 products_info.append(res)
                 product_data_map[res['name']] = res['data']
                 product_data_map[res['name']]['asin'] = res['asin']
@@ -1112,8 +1181,12 @@ class AnalysisService:
             project.raw_data_snapshot = product_data_map
             await self.db.commit()
             
+            await report_progress(1, "数据收集", 25, "数据收集完成")
+            
             # 2. 获取异步客户端
             client = get_async_client()
+            
+            await report_progress(2, "产品分析", 30, f"开始分析 {len(products_info)} 个产品...")
             
             # 3. 并行分析每个产品
             logger.info(f"开始并行分析 {len(products_info)} 个产品...")
@@ -1188,16 +1261,20 @@ class AnalysisService:
                     result["image_url"] = products_info[i].get('image_url')
                     valid_profiles.append(result)
             
-            logger.info(f"产品分析完成，成功 {len([p for p in valid_profiles if 'error' not in p])} 个")
+            success_count = len([p for p in valid_profiles if 'error' not in p])
+            logger.info(f"产品分析完成，成功 {success_count} 个")
+            
+            await report_progress(2, "产品分析", 50, f"产品分析完成 ({success_count}/{len(products_info)})")
             
             # 4. 生成产品摘要用于后续分析
             product_summaries = self._generate_product_summaries(valid_profiles)
             
             # 5. 分批生成维度洞察和策略总结
             async def generate_dimension_insights_batch(dimensions: List[str], batch_name: str) -> Dict[str, Any]:
-                """分批生成维度洞察（每批3-5个维度）"""
+                """分批生成维度洞察（每批3-6个维度）"""
                 dimension_names = {
-                    "who": "用户是谁", "when": "何时使用", "where": "在哪里用",
+                    "buyer": "购买者身份", "user": "使用者身份",
+                    "when": "何时使用", "where": "在哪里用",
                     "why": "购买动机", "what": "具体用途", "pros": "优势卖点",
                     "cons": "痛点问题", "suggestion": "用户建议", 
                     "scenario": "使用场景", "emotion": "情绪反馈"
@@ -1266,10 +1343,10 @@ class AnalysisService:
                             return {}
             
             async def generate_all_dimension_insights() -> Dict[str, Any]:
-                """分3批生成所有10个维度的洞察"""
-                # 将10个维度分成3批：5W画像(5个) + 正面口碑(2个) + 负面/建议口碑(3个)
+                """分3批生成所有11个维度的洞察"""
+                # 将11个维度分成3批：6W画像(6个) + 正面口碑(2个) + 负面/建议口碑(3个)
                 batches = [
-                    (["who", "when", "where", "why", "what"], "5W用户画像"),
+                    (["buyer", "user", "when", "where", "why", "what"], "6W用户画像"),
                     (["pros", "cons"], "优势痛点"),
                     (["suggestion", "scenario", "emotion"], "建议场景情绪"),
                 ]
@@ -1315,12 +1392,16 @@ class AnalysisService:
                             logger.error(f"策略总结生成最终失败: {e}")
                             return {"market_summary": "", "strategy_summary": {}}
             
+            await report_progress(3, "维度洞察", 55, "正在生成维度洞察和策略总结...")
+            
             # 并行执行洞察和总结生成
             insights_result, strategy_result = await asyncio.gather(
                 generate_all_dimension_insights(),
                 generate_strategy_summary(),
                 return_exceptions=True
             )
+            
+            await report_progress(4, "结果整合", 85, "正在整合分析结果...")
             
             # 处理结果
             dimension_insights = {}
@@ -1349,6 +1430,7 @@ class AnalysisService:
             project.status = AnalysisStatus.COMPLETED.value
             project.error_message = None
             
+            await report_progress(5, "完成", 100, "分析完成")
             logger.info(f"对比分析完成: {project.id}")
             
         except Exception as e:
@@ -1361,15 +1443,16 @@ class AnalysisService:
         return project
 
     def _generate_product_summaries(self, profiles: List[Dict[str, Any]]) -> str:
-        """生成产品摘要用于后续 prompt（10维）"""
+        """生成产品摘要用于后续 prompt（11维：who 拆分为 buyer + user）"""
         summaries = []
         for i, p in enumerate(profiles, 1):
             name = p.get("product_name", f"产品{i}")
             asin = p.get("asin", "")
             
-            # 提取关键标签 - 5W用户画像
+            # 提取关键标签 - 6W用户画像 (buyer + user 替代 who)
             five_w = p.get("five_w", {})
-            who_tags = [t.get("label", "") for t in five_w.get("who", [])[:3]]
+            buyer_tags = [t.get("label", "") for t in five_w.get("buyer", [])[:3]]
+            user_tags = [t.get("label", "") for t in five_w.get("user", [])[:3]]
             when_tags = [t.get("label", "") for t in five_w.get("when", [])[:3]]
             where_tags = [t.get("label", "") for t in five_w.get("where", [])[:3]]
             why_tags = [t.get("label", "") for t in five_w.get("why", [])[:3]]
@@ -1384,8 +1467,9 @@ class AnalysisService:
             emotion_tags = [t.get("label", "") for t in dims.get("emotion", [])[:3]]
             
             summary = f"""产品{i}: {name} ({asin})
-  【5W用户画像】
-  - 用户(Who): {', '.join(who_tags) or '无数据'}
+  【6W用户画像】
+  - 购买者(Buyer): {', '.join(buyer_tags) or '无数据'}
+  - 使用者(User): {', '.join(user_tags) or '无数据'}
   - 时机(When): {', '.join(when_tags) or '无数据'}
   - 场景(Where): {', '.join(where_tags) or '无数据'}
   - 动机(Why): {', '.join(why_tags) or '无数据'}

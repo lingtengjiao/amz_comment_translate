@@ -20,11 +20,9 @@ export function useSectionCache<T>(
   fetchFn: () => Promise<T>,
   options?: {
     ttl?: number; // 缓存过期时间（毫秒）
-    enabled?: boolean; // 是否启用缓存
   }
 ) {
   const ttl = options?.ttl ?? CACHE_TTL;
-  const enabled = options?.enabled ?? true;
   
   const [data, setData] = useState<T | null>(() => {
     // 初始化时从缓存读取
@@ -51,8 +49,8 @@ export function useSectionCache<T>(
     // 防止重复请求
     if (fetchingRef.current) return;
     
-    // 如果启用缓存且未过期，且不是强制刷新，则使用缓存
-    if (enabled && !force) {
+    // 如果未过期，且不是强制刷新，则使用缓存
+    if (!force) {
       const cached = cacheStore.get(cacheKey);
       if (cached && Date.now() - cached.timestamp < ttl) {
         setData(cached.data);
@@ -69,13 +67,11 @@ export function useSectionCache<T>(
       const result = await fetchFn();
       
       // 更新缓存
-      if (enabled) {
-        cacheStore.set(cacheKey, {
-          data: result,
-          timestamp: Date.now(),
-          loading: false,
-        });
-      }
+      cacheStore.set(cacheKey, {
+        data: result,
+        timestamp: Date.now(),
+        loading: false,
+      });
       
       setData(result);
       setError(null);

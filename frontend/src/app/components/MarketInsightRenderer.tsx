@@ -209,6 +209,7 @@ interface MarketInsightRendererProps {
   data: MarketInsightData;
   items?: any[];
   projectId?: string;  // 项目 ID，用于查询评论
+  readOnly?: boolean;  // 只读模式（分享页使用）
 }
 
 // 侧边栏状态类型
@@ -1722,7 +1723,7 @@ const ProductPositioningSection = memo(({ data }: { data: MarketInsightData }) =
 });
 
 // 主组件
-export const MarketInsightRenderer = memo(({ data, items, projectId }: MarketInsightRendererProps) => {
+export const MarketInsightRenderer = memo(({ data, items, projectId, readOnly = false }: MarketInsightRendererProps) => {
   // 侧边栏状态
   const [sidebarState, setSidebarState] = useState<SidebarState>({
     isOpen: false,
