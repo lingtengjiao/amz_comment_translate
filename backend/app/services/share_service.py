@@ -419,7 +419,7 @@ class ShareService:
                 "confidence": insight.confidence or "high",
             })
         
-        # 获取所有评论的 theme_highlights
+        # 🚀 获取预览评论的 theme_highlights（用于评论详情展示）
         themes_result = await self.db.execute(
             select(ReviewThemeHighlight)
             .where(ReviewThemeHighlight.review_id.in_(review_ids))
@@ -519,7 +519,15 @@ class ShareService:
                         "dimension": insight["dimension"],
                     })
         
-        # 聚合 themes
+        # 🚀 获取产品所有评论的 theme_highlights（用于构建完整的 aggregated_themes）
+        # 这里使用 JOIN 查询，不再限制于预览评论
+        all_themes_result = await self.db.execute(
+            select(ReviewThemeHighlight)
+            .join(Review, ReviewThemeHighlight.review_id == Review.id)
+            .where(Review.product_id == product.id)
+        )
+        
+        # 聚合 themes（从产品所有评论构建，确保数据完整）
         aggregated_themes = {
             "buyer": defaultdict(lambda: {"count": 0, "review_ids": []}),
             "user": defaultdict(lambda: {"count": 0, "review_ids": []}),
@@ -530,15 +538,15 @@ class ShareService:
             "what": defaultdict(lambda: {"count": 0, "review_ids": []}),
         }
         
-        for review_id, themes_list in themes_map.items():
-            for theme in themes_list:
-                theme_type = theme["theme_type"]
-                label_name = theme["label_name"]
-                
-                if theme_type in aggregated_themes and label_name:
-                    if review_id not in aggregated_themes[theme_type][label_name]["review_ids"]:
-                        aggregated_themes[theme_type][label_name]["count"] += 1
-                        aggregated_themes[theme_type][label_name]["review_ids"].append(str(review_id))
+        for theme in all_themes_result.scalars().all():
+            theme_type = theme.theme_type
+            label_name = theme.label_name
+            review_id = str(theme.review_id)
+            
+            if theme_type in aggregated_themes and label_name:
+                if review_id not in aggregated_themes[theme_type][label_name]["review_ids"]:
+                    aggregated_themes[theme_type][label_name]["count"] += 1
+                    aggregated_themes[theme_type][label_name]["review_ids"].append(review_id)
         
         # 转换为列表格式
         for theme_type in aggregated_themes:
