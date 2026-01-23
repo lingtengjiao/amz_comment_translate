@@ -1262,15 +1262,17 @@ async def clear_and_reanalyze(
 async def batch_clear_and_reanalyze(
     before_date: str = Query(..., description="清空此日期之前的产品，格式: YYYY-MM-DD，如 2026-01-17"),
     dry_run: bool = Query(True, description="试运行模式，只返回将处理的产品列表，不实际执行"),
+    reanalyze: bool = Query(True, description="是否触发重新分析，false则只清空数据"),
     limit: int = Query(100, description="最多处理多少个产品"),
     db: AsyncSession = Depends(get_db)
 ):
     """
-    🧹 批量清空指定日期之前的产品 AI 分析数据，并重新触发分析
+    🧹 批量清空指定日期之前的产品 AI 分析数据
     
     用法示例：
     - 试运行: POST /products/batch-clear-and-reanalyze?before_date=2026-01-17&dry_run=true
-    - 实际执行: POST /products/batch-clear-and-reanalyze?before_date=2026-01-17&dry_run=false
+    - 只清空: POST /products/batch-clear-and-reanalyze?before_date=2026-01-17&dry_run=false&reanalyze=false
+    - 清空并重分析: POST /products/batch-clear-and-reanalyze?before_date=2026-01-17&dry_run=false&reanalyze=true
     
     清空内容（每个产品）：
     - 产品维度、5W标签、评论洞察、评论主题、产品报告、维度总结、任务
@@ -1369,34 +1371,44 @@ async def batch_clear_and_reanalyze(
             
             await db.commit()
             
-            # 创建新任务
-            new_task = Task(
-                product_id=product_id,
-                task_type=TaskType.AUTO_ANALYSIS.value,
-                status=TaskStatus.PENDING.value,
-                total_items=4,
-                processed_items=0
-            )
-            db.add(new_task)
-            await db.commit()
-            await db.refresh(new_task)
+            # 根据 reanalyze 参数决定是否触发重新分析
+            if reanalyze:
+                # 创建新任务
+                new_task = Task(
+                    product_id=product_id,
+                    task_type=TaskType.AUTO_ANALYSIS.value,
+                    status=TaskStatus.PENDING.value,
+                    total_items=4,
+                    processed_items=0
+                )
+                db.add(new_task)
+                await db.commit()
+                await db.refresh(new_task)
+                
+                # 触发分析（延迟执行，避免瞬间压力太大）
+                import random
+                countdown = random.randint(5, 60)  # 随机延迟 5-60 秒
+                task_full_auto_analysis.apply_async(
+                    args=[str(product_id), str(new_task.id)],
+                    countdown=countdown
+                )
+                
+                results.append({
+                    "asin": asin,
+                    "status": "cleared_and_queued",
+                    "task_id": str(new_task.id),
+                    "countdown": countdown
+                })
+                logger.info(f"[批量重分析] {asin} 清空并已加入队列，任务ID: {new_task.id}，延迟 {countdown}s")
+            else:
+                # 只清空，不触发分析
+                results.append({
+                    "asin": asin,
+                    "status": "cleared_only"
+                })
+                logger.info(f"[批量清空] {asin} 已清空AI分析数据")
             
-            # 触发分析（延迟执行，避免瞬间压力太大）
-            import random
-            countdown = random.randint(5, 60)  # 随机延迟 5-60 秒
-            task_full_auto_analysis.apply_async(
-                args=[str(product_id), str(new_task.id)],
-                countdown=countdown
-            )
-            
-            results.append({
-                "asin": asin,
-                "status": "success",
-                "task_id": str(new_task.id),
-                "countdown": countdown
-            })
             success_count += 1
-            logger.info(f"[批量重分析] {asin} 成功，任务ID: {new_task.id}，延迟 {countdown}s")
             
         except Exception as e:
             results.append({
@@ -1408,10 +1420,12 @@ async def batch_clear_and_reanalyze(
             logger.error(f"[批量重分析] {asin} 失败: {e}")
             await db.rollback()
     
+    action_desc = "清空并加入分析队列" if reanalyze else "仅清空AI数据"
     return {
         "success": True,
-        "message": f"批量处理完成：成功 {success_count} 个，失败 {fail_count} 个",
+        "message": f"批量{action_desc}完成：成功 {success_count} 个，失败 {fail_count} 个",
         "dry_run": False,
+        "reanalyze": reanalyze,
         "before_date": before_date,
         "success_count": success_count,
         "fail_count": fail_count,
