@@ -382,6 +382,10 @@ celery_app.conf.update(
         # 🏷️ 主攻主题提取，闲时支援建模
         "app.worker.task_extract_themes": {"queue": "theme_extraction"},
         
+        # ============== 5.5. 维度总结生成 (worker-insight/vip) ==============
+        # 📊 AI 总结生成，需要大量 AI 调用
+        "app.worker.task_generate_dimension_summaries": {"queue": "learning"},
+        
         # ============== 6. 组装：报告生成 (worker-base) ==============
         # 📊 最后的整合，生成分析报告
         "app.worker.task_generate_report": {"queue": "reports"},
@@ -3455,13 +3459,19 @@ def task_generate_dimension_summaries(self, product_id: str):
     
     # 获取异步数据库会话
     async def run_async():
-        from app.core.database import async_session_maker
+        from app.db.session import async_session_maker
         async with async_session_maker() as session:
             service = DimensionSummaryService(session)
             return await service.generate_all_summaries(product_id)
     
     try:
-        result = asyncio.get_event_loop().run_until_complete(run_async())
+        # 在 worker 线程中创建新的事件循环
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            result = loop.run_until_complete(run_async())
+        finally:
+            loop.close()
         
         summary_counts = {
             "themes": len(result.get("theme_summaries", [])),
