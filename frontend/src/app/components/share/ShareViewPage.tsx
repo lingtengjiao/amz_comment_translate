@@ -46,6 +46,71 @@ const RESOURCE_TYPE_CONFIG: Record<ShareResourceType, {
   keyword_collection: { label: '市场格局分析', icon: LayoutGrid, color: 'pink' },
 };
 
+// 统一使用的logo图片URL
+const LOGO_URL = 'https://98kamz.com/favicon.svg';
+
+// 文本截断工具函数
+function truncateText(text: string, maxLength: number): string {
+  if (!text || text.length <= maxLength) return text;
+  return text.substring(0, maxLength - 1) + '…';
+}
+
+// 生成meta标签标题和描述的函数
+function generateMetaTags(
+  resourceType: ShareResourceType,
+  resourceData: SharedResourceData,
+  meta: { title: string | null }
+): { title: string; description: string } {
+  const baseTitle = resourceData.title || meta.title || RESOURCE_TYPE_CONFIG[resourceType].label || '分享内容';
+  
+  switch (resourceType) {
+    case 'review_reader': {
+      // 评论详情：标题简洁，描述提供更多信息
+      const data = resourceData.data as any;
+      const reviews = data?.reviews || [];
+      const reviewCount = reviews.length || data?.stats?.total_reviews || 0;
+      const productTitle = truncateText(baseTitle, 40); // 标题截断到40字符，为后面的信息留空间
+      const title = `${productTitle} - ${reviewCount}条评论分析 - 洞察大王`;
+      const description = truncateText(`${productTitle} - 深度分析${reviewCount}条用户评论，洞察产品优劣势 - 亚马逊产品洞察助手`, 120);
+      return { title, description };
+    }
+    
+    case 'report': {
+      // 分析报告：标题简洁，描述提供更多信息
+      const title = truncateText(baseTitle, 50) + ' - 洞察大王';
+      const description = truncateText(`${baseTitle} - 亚马逊产品洞察助手`, 120);
+      return { title, description };
+    }
+    
+    case 'analysis_project': {
+      // 竞品分析：标题简洁，描述提供更多信息
+      const title = truncateText(baseTitle, 50) + ' - 洞察大王';
+      const description = truncateText(`${baseTitle} - 多维度竞品对比分析，发现市场机会 - 亚马逊产品洞察助手`, 120);
+      return { title, description };
+    }
+    
+    case 'rufus_session': {
+      // Rufus 调研：标题简洁，描述提供更多信息
+      const title = truncateText(baseTitle, 50) + ' - 洞察大王';
+      const description = truncateText(`${baseTitle} - AI驱动的市场调研分析 - 亚马逊产品洞察助手`, 120);
+      return { title, description };
+    }
+    
+    case 'keyword_collection': {
+      // 市场格局分析：标题简洁，描述强调市场细分需求
+      const title = truncateText(baseTitle, 50) + ' - 洞察大王';
+      const description = truncateText(`${baseTitle} - 市场整体细分需求分析 - 亚马逊产品洞察助手`, 120);
+      return { title, description };
+    }
+    
+    default: {
+      const title = truncateText(baseTitle, 50) + ' - 洞察大王';
+      const description = truncateText(`${baseTitle} - 亚马逊产品洞察助手`, 120);
+      return { title, description };
+    }
+  }
+}
+
 export default function ShareViewPage() {
   const { token } = useParams<{ token: string }>();
   const [loading, setLoading] = useState(true);
@@ -130,17 +195,24 @@ export default function ShareViewPage() {
 
   // 加载中 - 也设置默认 meta 标签
   if (loading) {
-    const defaultTitle = meta?.title || '分享内容';
+    const defaultTitle = truncateText(meta?.title || '分享内容', 50) + ' - 洞察大王';
+    const defaultDescription = truncateText(`${meta?.title || '分享内容'} - 洞察大王`, 120);
     const shareUrl = typeof window !== 'undefined' ? window.location.href : '';
     return (
       <>
         <Helmet>
-          <title>{defaultTitle} - 洞察大王</title>
-          <meta name="description" content={`${defaultTitle} - 亚马逊产品洞察助手`} />
+          <title>{defaultTitle}</title>
+          <meta name="description" content={defaultDescription} />
           <meta property="og:type" content="website" />
           <meta property="og:url" content={shareUrl} />
           <meta property="og:title" content={defaultTitle} />
-          <meta property="og:description" content={`${defaultTitle} - 亚马逊产品洞察助手`} />
+          <meta property="og:description" content={defaultDescription} />
+          <meta property="og:image" content={LOGO_URL} />
+          <meta name="twitter:card" content="summary_large_image" />
+          <meta name="twitter:url" content={shareUrl} />
+          <meta name="twitter:title" content={defaultTitle} />
+          <meta name="twitter:description" content={defaultDescription} />
+          <meta name="twitter:image" content={LOGO_URL} />
         </Helmet>
         <div className="min-h-screen bg-slate-50 flex items-center justify-center">
           <div className="text-center">
@@ -181,20 +253,18 @@ export default function ShareViewPage() {
   const config = resourceData ? RESOURCE_TYPE_CONFIG[resourceData.resource_type] : null;
   const Icon = config?.icon || Share2;
 
-  // 构建分享标题和描述（优先使用 resourceData.title，然后是 meta.title）
-  const shareTitle = resourceData?.title || meta?.title || config?.label || '分享内容';
-  const shareDescription = resourceData?.resource_type === 'report' 
-    ? `${shareTitle} - 亚马逊产品洞察助手`
-    : `${shareTitle} - 洞察大王`;
+  // 生成meta标签
+  const { title: shareTitle, description: shareDescription } = generateMetaTags(
+    resourceData.resource_type,
+    resourceData,
+    meta
+  );
   const shareUrl = typeof window !== 'undefined' ? window.location.href : '';
-  const shareImage = resourceData?.resource_type === 'report' && resourceData.data?.product?.image_url
-    ? resourceData.data.product.image_url
-    : undefined;
 
   return (
     <>
       <Helmet>
-        <title>{shareTitle} - 洞察大王</title>
+        <title>{shareTitle}</title>
         <meta name="description" content={shareDescription} />
         
         {/* Open Graph / Facebook */}
@@ -202,14 +272,14 @@ export default function ShareViewPage() {
         <meta property="og:url" content={shareUrl} />
         <meta property="og:title" content={shareTitle} />
         <meta property="og:description" content={shareDescription} />
-        {shareImage && <meta property="og:image" content={shareImage} />}
+        <meta property="og:image" content={LOGO_URL} />
         
         {/* Twitter */}
         <meta name="twitter:card" content="summary_large_image" />
         <meta name="twitter:url" content={shareUrl} />
         <meta name="twitter:title" content={shareTitle} />
         <meta name="twitter:description" content={shareDescription} />
-        {shareImage && <meta name="twitter:image" content={shareImage} />}
+        <meta name="twitter:image" content={LOGO_URL} />
       </Helmet>
       
       <div className="min-h-screen bg-slate-50">
@@ -269,8 +339,7 @@ export default function ShareViewPage() {
       <div className="flex-1">
         {resourceData.resource_type === 'review_reader' && (
           <SharedReviewReader data={resourceData.data} title={resourceData.title} token={token!} onDataRefresh={() => {
-            // 刷新数据
-            const visitedKey = `share_visited_${token}`;
+            // 刷新数据（skipIncrement=true 跳过访问计数增加）
             getSharedResource(token!, true).then(res => setResourceData(res));
           }} />
         )}
@@ -284,7 +353,7 @@ export default function ShareViewPage() {
           <SharedRufusPage data={resourceData.data} title={resourceData.title} />
         )}
         {resourceData.resource_type === 'keyword_collection' && (
-          <SharedProductBoardPage data={resourceData.data} title={resourceData.title} />
+          <SharedProductBoardPage data={resourceData.data as any} title={resourceData.title} />
         )}
       </div>
     </div>
