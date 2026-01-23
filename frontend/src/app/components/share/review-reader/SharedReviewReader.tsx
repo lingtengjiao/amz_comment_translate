@@ -244,7 +244,13 @@ export function SharedReviewReader({ data, token, onDataRefresh }: SharedReviewR
     const t = aggregated_themes[key] || [];
     if (t.length > 0 && t.some((x: any) => x.count > 0)) return t;
     const c = context_labels[key] || [];
-    return c.map((x: any) => ({ label: x.name, count: x.count || 1, review_ids: [] }));
+    // 🚀 尝试从 aggregated_themes 获取 review_ids（即使主数据用 context_labels）
+    const themeMap = new Map((aggregated_themes[key] || []).map((x: any) => [x.label, x.review_ids || []]));
+    return c.map((x: any) => ({ 
+      label: x.name, 
+      count: x.count || 1, 
+      review_ids: themeMap.get(x.name) || [] 
+    }));
   };
 
   const dimGroups = useMemo(() => {
@@ -1117,8 +1123,9 @@ export function SharedReviewReader({ data, token, onDataRefresh }: SharedReviewR
                 </div>
               ) : (
                 (() => {
-                  let list = reviews.filter(r => selectedLabel.reviewIds.includes(r.id));
-                  if (!list.length) list = reviews.filter(r => (r.theme_highlights || []).some((t: any) => t.theme_type === selectedLabel.type && (t.label_name === selectedLabel.label)));
+                  // 🚀 使用 displayReviews（完整评论数据）而不是 reviews（预览数据）
+                  let list = displayReviews.filter(r => selectedLabel.reviewIds.includes(r.id));
+                  if (!list.length) list = displayReviews.filter(r => (r.theme_highlights || []).some((t: any) => t.theme_type === selectedLabel.type && (t.label_name === selectedLabel.label)));
                   if (!list.length) return <p className="text-xs text-gray-400 text-center py-8">无相关评论</p>;
                   return list.slice(0, 20).map(r => <ReviewCardWithInsights key={r.id} review={r} labelType={selectedLabel.type} labelName={selectedLabel.label} />);
                 })()
