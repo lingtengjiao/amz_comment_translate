@@ -307,6 +307,70 @@ async def get_share_link_data(
         )
 
 
+class ShareReviewsResponse(BaseModel):
+    """分页评论响应"""
+    success: bool
+    reviews: List[dict]
+    pagination: dict
+    filters: dict
+
+
+@router.get("/{token}/reviews")
+async def get_share_reviews_paginated(
+    token: str,
+    page: int = Query(1, ge=1, description="页码（从1开始）"),
+    page_size: int = Query(50, ge=10, le=100, description="每页数量（10-100）"),
+    rating: Optional[int] = Query(None, ge=1, le=5, description="筛选评分（1-5）"),
+    sentiment: Optional[str] = Query(None, description="筛选情感（positive/neutral/negative）"),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    分页获取分享链接的评论列表（公开）
+    
+    无需登录，返回分页的评论列表。
+    支持按评分和情感筛选。
+    
+    性能优化：
+    - 带 Redis 缓存（5分钟TTL）
+    - 按需加载，减少首次加载数据量
+    """
+    try:
+        # 验证 sentiment 参数
+        if sentiment and sentiment not in ["positive", "neutral", "negative"]:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="sentiment 必须是 positive/neutral/negative 之一"
+            )
+        
+        service = ShareService(db)
+        result = await service.get_share_reviews_paginated(
+            token=token,
+            page=page,
+            page_size=page_size,
+            rating=rating,
+            sentiment=sentiment
+        )
+        
+        return ShareReviewsResponse(
+            success=True,
+            reviews=result["reviews"],
+            pagination=result["pagination"],
+            filters=result["filters"]
+        )
+        
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e)
+        )
+    except Exception as e:
+        logger.exception(f"获取分页评论失败: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="获取评论列表失败"
+        )
+
+
 # ==========================================
 # 兼容性接口：直接通过 token 获取数据
 # ==========================================

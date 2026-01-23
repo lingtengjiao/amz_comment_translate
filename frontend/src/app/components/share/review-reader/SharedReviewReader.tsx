@@ -42,11 +42,67 @@ export function SharedReviewReader({ data, token, onDataRefresh }: SharedReviewR
   const [scenarioModal, setScenarioModal] = useState(false);
   const [dataChangeCheck, setDataChangeCheck] = useState<{ has_changes: boolean; checking: boolean; message: string } | null>(null);
   const [reviewViewMode, setReviewViewMode] = useState<'sentiment' | 'rating' | 'buyer' | 'user' | 'where' | 'when' | 'why' | 'what'>('sentiment');
+  
+  // 分页加载评论相关状态
+  const [fullReviews, setFullReviews] = useState<any[]>([]);
+  const [loadingReviews, setLoadingReviews] = useState(false);
+  const [hasLoadedReviews, setHasLoadedReviews] = useState(false);
+  const [reviewsTotal, setReviewsTotal] = useState(0);
 
   const hasAISummaries = useMemo(() => {
     const summaries = data.dimension_summaries || [];
     return summaries.some((s: any) => s.summary_type === 'consumer_persona' || s.summary_type === 'overall');
   }, [data.dimension_summaries]);
+
+  // 加载全部评论（分页获取）
+  const loadAllReviews = async () => {
+    if (loadingReviews || hasLoadedReviews) return;
+    
+    setLoadingReviews(true);
+    try {
+      const allReviews: any[] = [];
+      let page = 1;
+      const pageSize = 100;
+      let hasMore = true;
+      
+      while (hasMore) {
+        const response = await fetch(`/api/v1/share/${token}/reviews?page=${page}&page_size=${pageSize}`, {
+          method: 'GET',
+          headers: { 'Content-Type': 'application/json' },
+        });
+        
+        if (!response.ok) {
+          throw new Error('加载评论失败');
+        }
+        
+        const result = await response.json();
+        allReviews.push(...(result.reviews || []));
+        setReviewsTotal(result.total || 0);
+        
+        hasMore = result.has_next;
+        page++;
+        
+        // 防止无限循环，最多加载50页
+        if (page > 50) break;
+      }
+      
+      setFullReviews(allReviews);
+      setHasLoadedReviews(true);
+    } catch (err) {
+      console.error('加载评论失败:', err);
+      // 失败时回退使用 data.reviews
+      setFullReviews(data.reviews || []);
+    } finally {
+      setLoadingReviews(false);
+    }
+  };
+
+  // 切换到评论Tab时加载全部评论
+  useEffect(() => {
+    if (activeTab === 'reviews' && !hasLoadedReviews && !loadingReviews) {
+      loadAllReviews();
+    }
+  }, [activeTab, hasLoadedReviews, loadingReviews]);
 
   // 检查数据变化
   const checkDataChanges = async () => {
@@ -153,9 +209,14 @@ export function SharedReviewReader({ data, token, onDataRefresh }: SharedReviewR
   const emotions = aggregated_insights.emotions || [];
   const scenarios = aggregated_insights.scenarios || [];
 
+  // 使用完整评论数据（分页加载后）或预览数据
+  const displayReviews = useMemo(() => {
+    return hasLoadedReviews && fullReviews.length > 0 ? fullReviews : reviews;
+  }, [hasLoadedReviews, fullReviews, reviews]);
+
   const filteredReviews = useMemo(() => {
-    return searchQuery ? reviews.filter(r => r.title?.toLowerCase().includes(searchQuery.toLowerCase()) || r.content?.toLowerCase().includes(searchQuery.toLowerCase())) : reviews;
-  }, [reviews, searchQuery]);
+    return searchQuery ? displayReviews.filter(r => r.title?.toLowerCase().includes(searchQuery.toLowerCase()) || r.content?.toLowerCase().includes(searchQuery.toLowerCase())) : displayReviews;
+  }, [displayReviews, searchQuery]);
 
   const reviewsBySentiment = useMemo(() => {
     return { positive: filteredReviews.filter(r => r.sentiment === 'positive'), neutral: filteredReviews.filter(r => r.sentiment === 'neutral'), negative: filteredReviews.filter(r => r.sentiment === 'negative') };
@@ -755,8 +816,21 @@ export function SharedReviewReader({ data, token, onDataRefresh }: SharedReviewR
               </div>
             </div>
             
+            {/* 加载状态 */}
+            {loadingReviews && (
+              <div className="flex-1 flex items-center justify-center">
+                <div className="flex flex-col items-center gap-3">
+                  <Loader2 className="h-8 w-8 text-indigo-500 animate-spin" />
+                  <p className="text-sm text-gray-500">正在加载全部评论数据...</p>
+                  {reviewsTotal > 0 && (
+                    <p className="text-xs text-gray-400">共 {reviewsTotal} 条评论</p>
+                  )}
+                </div>
+              </div>
+            )}
+
             {/* 情感视角 - 3列 */}
-            {reviewViewMode === 'sentiment' && (
+            {!loadingReviews && reviewViewMode === 'sentiment' && (
               <div className="flex gap-4 flex-1 min-h-0">
                 {(['positive', 'neutral', 'negative'] as const).map(s => {
                   const cfg = { 
@@ -772,7 +846,7 @@ export function SharedReviewReader({ data, token, onDataRefresh }: SharedReviewR
                         <span className="text-xs text-white/80 bg-white/20 px-2 py-0.5 rounded-full">{list.length}</span>
                       </div>
                       <div className="flex-1 overflow-y-auto p-3 space-y-2 min-h-0">
-                        {list.slice(0, 100).map(r => <ReviewCard key={r.id} review={r} />)}
+                        {list.map(r => <ReviewCard key={r.id} review={r} />)}
                         {list.length === 0 && <p className="text-xs text-gray-400 text-center py-8">暂无评价</p>}
                       </div>
                     </div>
@@ -782,7 +856,7 @@ export function SharedReviewReader({ data, token, onDataRefresh }: SharedReviewR
             )}
 
             {/* 星级视角 - 5列 */}
-            {reviewViewMode === 'rating' && (
+            {!loadingReviews && reviewViewMode === 'rating' && (
               <div className="flex gap-3 flex-1 min-h-0">
                 {([5, 4, 3, 2, 1] as const).map(rating => {
                   const list = reviewsByRating[rating];
@@ -801,7 +875,7 @@ export function SharedReviewReader({ data, token, onDataRefresh }: SharedReviewR
                         <span className="text-xs text-white/80 bg-white/20 px-1.5 py-0.5 rounded-full ml-1">{list.length}</span>
                       </div>
                       <div className="flex-1 overflow-y-auto p-2 space-y-2 min-h-0">
-                        {list.slice(0, 100).map(r => <ReviewCard key={r.id} review={r} />)}
+                        {list.map(r => <ReviewCard key={r.id} review={r} />)}
                         {list.length === 0 && <p className="text-xs text-gray-400 text-center py-8">暂无</p>}
                       </div>
                     </div>
@@ -811,7 +885,7 @@ export function SharedReviewReader({ data, token, onDataRefresh }: SharedReviewR
             )}
 
             {/* 5W主题视角 - 按标签分组 */}
-            {['buyer', 'user', 'where', 'when', 'why', 'what'].includes(reviewViewMode) && (
+            {!loadingReviews && ['buyer', 'user', 'where', 'when', 'why', 'what'].includes(reviewViewMode) && (
               <div className="flex-1 min-h-0 overflow-hidden">
                 {(() => {
                   const themeKey = reviewViewMode as 'buyer' | 'user' | 'where' | 'when' | 'why' | 'what';
@@ -836,7 +910,7 @@ export function SharedReviewReader({ data, token, onDataRefresh }: SharedReviewR
                             <span className="text-[10px] text-white/80 bg-white/20 px-1.5 py-0.5 rounded-full ml-auto shrink-0">{revs.length}</span>
                           </div>
                           <div className="flex-1 overflow-y-auto p-2 space-y-2 min-h-0">
-                            {revs.slice(0, 50).map((r: any) => <ReviewCard key={r.id} review={r} />)}
+                            {revs.map((r: any) => <ReviewCard key={r.id} review={r} />)}
                             {revs.length === 0 && <p className="text-xs text-gray-400 text-center py-4">暂无</p>}
                           </div>
                         </div>

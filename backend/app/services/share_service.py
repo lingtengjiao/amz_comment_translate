@@ -4,17 +4,29 @@
 提供分享链接的创建、验证、撤销等功能。
 支持将评论详情页、报告详情页、竞品对比分析、市场品类分析、Rufus 调研详情页
 分享给未登录用户查看。
+
+性能优化：
+- Redis 缓存：分享数据缓存 5 分钟
+- 分页加载：评论列表延迟加载，支持分页
 """
+import json
 import logging
 from datetime import datetime, timezone, timedelta
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Tuple
 from uuid import UUID
 
-from sqlalchemy import select, update, and_
+from sqlalchemy import select, update, and_, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.models.share_link import ShareLink, ShareResourceType
+
+# ==========================================
+# 分享数据缓存配置
+# ==========================================
+CACHE_PREFIX_SHARE = "cache:share:"
+CACHE_TTL_SHARE_DATA = 300  # 分享数据缓存 5 分钟
+CACHE_TTL_SHARE_REVIEWS = 300  # 分页评论缓存 5 分钟
 from app.models.product import Product
 from app.models.report import ProductReport
 from app.models.analysis import AnalysisProject
@@ -259,7 +271,7 @@ class ShareService:
     
     async def validate_and_get_resource(self, token: str, skip_increment: bool = False) -> Dict[str, Any]:
         """
-        验证分享令牌并返回资源数据
+        验证分享令牌并返回资源数据（带 Redis 缓存）
         
         Args:
             token: 分享令牌
@@ -287,17 +299,65 @@ class ShareService:
             share_link.view_count += 1
             await self.db.commit()
         
+        # 尝试从缓存获取数据
+        cache_key = f"{CACHE_PREFIX_SHARE}data:{token}"
+        cached_data = await self._get_from_cache(cache_key)
+        if cached_data:
+            logger.debug(f"分享数据命中缓存: {token}")
+            # 更新 view_count（缓存中的可能过时）
+            cached_data["view_count"] = share_link.view_count
+            return cached_data
+        
         # 根据资源类型获取数据
         resource_type = ShareResourceType(share_link.resource_type)
         data = await self._get_resource_data(resource_type, share_link.resource_id, share_link.asin)
         
-        return {
+        result = {
             "resource_type": resource_type.value,
             "title": share_link.title,
             "created_at": share_link.created_at.isoformat() if share_link.created_at else None,
             "view_count": share_link.view_count,
             "data": data
         }
+        
+        # 写入缓存
+        await self._set_to_cache(cache_key, result, CACHE_TTL_SHARE_DATA)
+        logger.info(f"分享数据写入缓存: {token}")
+        
+        return result
+    
+    async def _get_from_cache(self, key: str) -> Optional[Dict[str, Any]]:
+        """从 Redis 获取缓存数据"""
+        try:
+            from app.core.cache import get_cache_service
+            cache = await get_cache_service()
+            return await cache.get(key)
+        except Exception as e:
+            logger.warning(f"获取缓存失败 {key}: {e}")
+            return None
+    
+    async def _set_to_cache(self, key: str, value: Dict[str, Any], ttl: int) -> bool:
+        """写入 Redis 缓存"""
+        try:
+            from app.core.cache import get_cache_service
+            cache = await get_cache_service()
+            return await cache.set(key, value, ttl)
+        except Exception as e:
+            logger.warning(f"写入缓存失败 {key}: {e}")
+            return False
+    
+    async def invalidate_share_cache(self, token: str) -> bool:
+        """使分享数据缓存失效"""
+        try:
+            from app.core.cache import get_cache_service
+            cache = await get_cache_service()
+            await cache.delete(f"{CACHE_PREFIX_SHARE}data:{token}")
+            await cache.delete_pattern(f"{CACHE_PREFIX_SHARE}reviews:{token}:*")
+            logger.info(f"已清除分享缓存: {token}")
+            return True
+        except Exception as e:
+            logger.warning(f"清除缓存失败 {token}: {e}")
+            return False
     
     async def _get_resource_data(
         self,
@@ -548,6 +608,9 @@ class ShareService:
             s.to_dict() for s in summaries_result.scalars().all()
         ]
         
+        # 性能优化：首次只返回前10条评论作为预览，完整列表通过分页接口加载
+        preview_reviews = reviews[:10]
+        
         return {
             "product": {
                 "asin": product.asin,
@@ -559,6 +622,7 @@ class ShareService:
                 "bullet_points_translated": product.bullet_points_translated,
             },
             "bullet_points": bullet_points,
+            # 只返回前10条评论预览，完整列表通过 /{token}/reviews 分页接口获取
             "reviews": [
                 {
                     "id": str(r.id),
@@ -575,8 +639,14 @@ class ShareService:
                     "insights": insights_map.get(r.id, []),
                     "theme_highlights": themes_map.get(r.id, []),
                 }
-                for r in reviews
+                for r in preview_reviews
             ],
+            "reviews_pagination": {
+                "total": len(reviews),
+                "preview_count": len(preview_reviews),
+                "has_more": len(reviews) > 10,
+                "page_size": 50,  # 分页接口每页数量
+            },
             "stats": {
                 "total_reviews": len(reviews),
                 "average_rating": sum(r.rating for r in reviews) / len(reviews) if reviews else 0,
@@ -887,3 +957,177 @@ class ShareService:
             "view_count": share_link.view_count,
             "created_at": share_link.created_at.isoformat() if share_link.created_at else None,
         }
+    
+    # ==========================================
+    # 分页获取评论（性能优化）
+    # ==========================================
+    
+    async def get_share_reviews_paginated(
+        self,
+        token: str,
+        page: int = 1,
+        page_size: int = 50,
+        rating: Optional[int] = None,
+        sentiment: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        分页获取分享链接的评论列表（带缓存）
+        
+        Args:
+            token: 分享令牌
+            page: 页码（从1开始）
+            page_size: 每页数量（默认50，最大100）
+            rating: 筛选评分（1-5）
+            sentiment: 筛选情感（positive/neutral/negative）
+            
+        Returns:
+            分页的评论列表
+        """
+        from collections import defaultdict
+        
+        # 验证分享链接
+        share_link = await self.get_share_link_by_token(token)
+        if not share_link:
+            raise ValueError("分享链接不存在")
+        if not share_link.is_active:
+            raise ValueError("分享链接已被撤销")
+        if share_link.is_expired:
+            raise ValueError("分享链接已过期")
+        
+        # 只支持 review_reader 类型
+        if share_link.resource_type != ShareResourceType.REVIEW_READER.value:
+            raise ValueError("该分享类型不支持评论分页")
+        
+        asin = share_link.asin
+        if not asin:
+            raise ValueError("分享链接缺少 ASIN")
+        
+        # 限制 page_size
+        page_size = min(max(page_size, 10), 100)
+        
+        # 尝试从缓存获取
+        cache_key = f"{CACHE_PREFIX_SHARE}reviews:{token}:p{page}:s{page_size}"
+        if rating:
+            cache_key += f":r{rating}"
+        if sentiment:
+            cache_key += f":st_{sentiment}"
+        
+        cached_data = await self._get_from_cache(cache_key)
+        if cached_data:
+            logger.debug(f"分页评论命中缓存: {cache_key}")
+            return cached_data
+        
+        # 获取产品
+        result = await self.db.execute(
+            select(Product).where(Product.asin == asin)
+        )
+        product = result.scalar_one_or_none()
+        if not product:
+            raise ValueError(f"产品不存在: {asin}")
+        
+        # 构建查询条件
+        conditions = [Review.product_id == product.id]
+        if rating:
+            conditions.append(Review.rating == rating)
+        if sentiment:
+            conditions.append(Review.sentiment == sentiment)
+        
+        # 获取总数
+        count_result = await self.db.execute(
+            select(func.count(Review.id)).where(and_(*conditions))
+        )
+        total = count_result.scalar() or 0
+        
+        # 分页查询
+        offset = (page - 1) * page_size
+        review_result = await self.db.execute(
+            select(Review)
+            .where(and_(*conditions))
+            .order_by(Review.review_date.desc().nullslast())
+            .offset(offset)
+            .limit(page_size)
+        )
+        reviews = list(review_result.scalars().all())
+        review_ids = [r.id for r in reviews]
+        
+        # 获取 insights
+        insights_map = defaultdict(list)
+        if review_ids:
+            insights_result = await self.db.execute(
+                select(ReviewInsight).where(ReviewInsight.review_id.in_(review_ids))
+            )
+            for insight in insights_result.scalars().all():
+                insights_map[insight.review_id].append({
+                    "type": insight.insight_type,
+                    "quote": insight.quote,
+                    "quote_translated": insight.quote_translated,
+                    "analysis": insight.analysis,
+                    "dimension": insight.dimension,
+                    "confidence": insight.confidence or "high",
+                })
+        
+        # 获取 theme_highlights
+        themes_map = defaultdict(list)
+        if review_ids:
+            themes_result = await self.db.execute(
+                select(ReviewThemeHighlight).where(ReviewThemeHighlight.review_id.in_(review_ids))
+            )
+            for theme in themes_result.scalars().all():
+                items = []
+                if theme.label_name:
+                    items.append({
+                        "content": theme.label_name,
+                        "content_original": theme.quote,
+                        "quote_translated": theme.quote_translated,
+                        "explanation": theme.explanation,
+                        "confidence": theme.confidence or "high",
+                    })
+                elif theme.items:
+                    items = theme.items if isinstance(theme.items, list) else []
+                
+                themes_map[theme.review_id].append({
+                    "theme_type": theme.theme_type,
+                    "label_name": theme.label_name,
+                    "items": items,
+                })
+        
+        # 构建返回数据
+        reviews_data = [
+            {
+                "id": str(r.id),
+                "title": r.title_translated or r.title_original or "",
+                "content": r.body_translated or r.body_original or "",
+                "rating": r.rating,
+                "author": r.author or "Anonymous",
+                "date": r.review_date.isoformat() if r.review_date else None,
+                "sentiment": r.sentiment,
+                "verified": r.verified_purchase,
+                "helpful_votes": r.helpful_votes or 0,
+                "has_media": r.has_video or r.has_images,
+                "review_url": r.review_url,
+                "insights": insights_map.get(r.id, []),
+                "theme_highlights": themes_map.get(r.id, []),
+            }
+            for r in reviews
+        ]
+        
+        result_data = {
+            "reviews": reviews_data,
+            "pagination": {
+                "page": page,
+                "page_size": page_size,
+                "total": total,
+                "total_pages": (total + page_size - 1) // page_size,
+                "has_next": offset + len(reviews) < total,
+                "has_prev": page > 1,
+            },
+            "filters": {
+                "rating": rating,
+                "sentiment": sentiment,
+            }
+        }
+        
+        # 写入缓存
+        await self._set_to_cache(cache_key, result_data, CACHE_TTL_SHARE_REVIEWS)
+        
+        return result_data
