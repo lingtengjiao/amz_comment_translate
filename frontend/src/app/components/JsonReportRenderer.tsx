@@ -809,8 +809,18 @@ const ComprehensiveRenderer = memo(function ComprehensiveRenderer({
           
           if (typeof item === 'object' && item !== null) {
             const obj = item as Record<string, unknown>;
-            // 兼容中英文字段名
-            const text = String(obj.point || obj['描述'] || obj.description || '');
+            // 🔧 [FIX] 兼容多种字段名：point, dimension, name, insight, description, item, 描述
+            const text = String(
+              obj.point || 
+              obj.dimension || 
+              obj.name || 
+              obj.insight || 
+              obj.description || 
+              obj.item ||
+              obj['描述'] || 
+              obj['维度'] ||
+              ''
+            );
             const confidence = String(obj.confidence || obj['置信度'] || '');
             const evidence = (obj.evidence || obj['证据'] || []) as unknown[];
             
@@ -818,7 +828,7 @@ const ComprehensiveRenderer = memo(function ComprehensiveRenderer({
               <li key={key} className={`p-2 ${bgColors[variant]} rounded`}>
                 <div className="flex items-center gap-2">
                   <span>{icon}</span>
-                  <span className="flex-1 text-sm">{text}</span>
+                  <span className="flex-1 text-sm font-medium">{text}</span>
                   {confidence && <ConfidenceBadge confidence={confidence} />}
                 </div>
                 {evidence.length > 0 && <EvidenceInline evidence={evidence} />}
