@@ -10,6 +10,7 @@
  */
 import { useState, useEffect, useCallback } from 'react';
 import { useParams, Link } from 'react-router-dom';
+import { Helmet } from 'react-helmet-async';
 import { 
   Loader2, 
   AlertCircle, 
@@ -127,15 +128,27 @@ export default function ShareViewPage() {
     }
   }, []);
 
-  // 加载中
+  // 加载中 - 也设置默认 meta 标签
   if (loading) {
+    const defaultTitle = meta?.title || '分享内容';
+    const shareUrl = typeof window !== 'undefined' ? window.location.href : '';
     return (
-      <div className="min-h-screen bg-slate-50 flex items-center justify-center">
-        <div className="text-center">
-          <Loader2 className="h-10 w-10 animate-spin text-blue-600 mx-auto" />
-          <p className="mt-4 text-slate-600">加载分享内容...</p>
+      <>
+        <Helmet>
+          <title>{defaultTitle} - 洞察大王</title>
+          <meta name="description" content={`${defaultTitle} - 亚马逊产品洞察助手`} />
+          <meta property="og:type" content="website" />
+          <meta property="og:url" content={shareUrl} />
+          <meta property="og:title" content={defaultTitle} />
+          <meta property="og:description" content={`${defaultTitle} - 亚马逊产品洞察助手`} />
+        </Helmet>
+        <div className="min-h-screen bg-slate-50 flex items-center justify-center">
+          <div className="text-center">
+            <Loader2 className="h-10 w-10 animate-spin text-blue-600 mx-auto" />
+            <p className="mt-4 text-slate-600">加载分享内容...</p>
+          </div>
         </div>
-      </div>
+      </>
     );
   }
 
@@ -165,11 +178,41 @@ export default function ShareViewPage() {
     return null;
   }
 
-  const config = RESOURCE_TYPE_CONFIG[resourceData.resource_type];
+  const config = resourceData ? RESOURCE_TYPE_CONFIG[resourceData.resource_type] : null;
   const Icon = config?.icon || Share2;
 
+  // 构建分享标题和描述（优先使用 resourceData.title，然后是 meta.title）
+  const shareTitle = resourceData?.title || meta?.title || config?.label || '分享内容';
+  const shareDescription = resourceData?.resource_type === 'report' 
+    ? `${shareTitle} - 亚马逊产品洞察助手`
+    : `${shareTitle} - 洞察大王`;
+  const shareUrl = typeof window !== 'undefined' ? window.location.href : '';
+  const shareImage = resourceData?.resource_type === 'report' && resourceData.data?.product?.image_url
+    ? resourceData.data.product.image_url
+    : undefined;
+
   return (
-    <div className="min-h-screen bg-slate-50">
+    <>
+      <Helmet>
+        <title>{shareTitle} - 洞察大王</title>
+        <meta name="description" content={shareDescription} />
+        
+        {/* Open Graph / Facebook */}
+        <meta property="og:type" content="website" />
+        <meta property="og:url" content={shareUrl} />
+        <meta property="og:title" content={shareTitle} />
+        <meta property="og:description" content={shareDescription} />
+        {shareImage && <meta property="og:image" content={shareImage} />}
+        
+        {/* Twitter */}
+        <meta name="twitter:card" content="summary_large_image" />
+        <meta name="twitter:url" content={shareUrl} />
+        <meta name="twitter:title" content={shareTitle} />
+        <meta name="twitter:description" content={shareDescription} />
+        {shareImage && <meta name="twitter:image" content={shareImage} />}
+      </Helmet>
+      
+      <div className="min-h-screen bg-slate-50">
       {/* 分享页面顶部提示栏 - 固定在顶部 */}
       <div className="bg-gradient-to-r from-blue-600 to-indigo-600 text-white sticky top-0 z-50">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
@@ -245,5 +288,6 @@ export default function ShareViewPage() {
         )}
       </div>
     </div>
+    </>
   );
 }

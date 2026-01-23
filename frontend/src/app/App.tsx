@@ -1,5 +1,6 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { lazy, Suspense } from 'react';
+import { HelmetProvider } from 'react-helmet-async';
 import { ThemeProvider } from './contexts/ThemeContext';
 import { AuthProvider } from './contexts/AuthContext';
 import { ProtectedRoute } from './components/ProtectedRoute';
@@ -34,11 +35,12 @@ function LoadingFallback() {
 
 export default function App() {
   return (
-    <AuthProvider>
-      <ThemeProvider>
-        <BrowserRouter>
-          <Suspense fallback={<LoadingFallback />}>
-            <Routes>
+    <HelmetProvider>
+      <AuthProvider>
+        <ThemeProvider>
+          <BrowserRouter>
+            <Suspense fallback={<LoadingFallback />}>
+              <Routes>
               {/* 公开页面 - 无需认证 */}
               <Route path="/login" element={<LoginPage />} />
               <Route path="/docs/PRIVACY" element={<PrivacyPolicyPage />} />
@@ -61,11 +63,12 @@ export default function App() {
               
               {/* 默认重定向 */}
               <Route path="*" element={<Navigate to="/home/home" replace />} />
-            </Routes>
-          </Suspense>
-        </BrowserRouter>
-        <Toaster position="top-center" richColors />
-      </ThemeProvider>
-    </AuthProvider>
+              </Routes>
+            </Suspense>
+          </BrowserRouter>
+          <Toaster position="top-center" richColors />
+        </ThemeProvider>
+      </AuthProvider>
+    </HelmetProvider>
   );
 }
