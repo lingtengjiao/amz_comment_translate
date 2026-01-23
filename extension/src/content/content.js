@@ -24,7 +24,7 @@
   // 生产环境配置 - 使用 HTTPS 域名
   const CONFIG = {
   API_BASE_URL: 'https://98kamz.com/api/v1',
-  DASHBOARD_URL: 'https://98kamz.com',  // 生产前端地址
+  DASHBOARD_URL: 'https://98kamz.com',  // 生产环境前端地址
   DELAY_BETWEEN_PAGES: { min: 2000, max: 5000 }, // Increased for safety
   DELAY_BETWEEN_STARS: { min: 3000, max: 6000 },
   BATCH_SIZE: 20
@@ -2520,37 +2520,45 @@ function updateOverlay(state) {
     
     if (state.asin) els.asin.textContent = `ASIN: ${state.asin}`;
     if (state.title) els.title.textContent = state.title;
-    if (state.message) els.msg.textContent = state.message;
+  }
+  
+  // [FIXED] 以下代码应该在所有页面类型下都执行，用于更新消息和进度
+  if (state.message && els.msg) {
+    els.msg.textContent = state.message;
+    console.log(`[Content] 📝 更新消息: ${state.message}`);
   }
 
-  if (state.reviewCount) {
+  if (state.reviewCount && els.count) {
     els.count.textContent = `已采集: ${state.reviewCount}`;
     els.count.style.display = 'block';
+    console.log(`[Content] 📊 更新采集数量显示: ${state.reviewCount}`);
   }
 
   // 产品页的采集相关逻辑（只在产品页显示）
   if (isProductPage) {
     if (['collecting', 'uploading'].includes(state.status)) {
-      els.prog.style.display = 'block';
-      els.fill.style.width = `${state.progress || 0}%`;
-      els.text.textContent = `${state.progress || 0}%`;
-      els.config.style.display = 'none';
-      els.start.style.display = 'none';
-      els.stop.style.display = 'block';
-      els.dash.style.display = 'none';
+      if (els.prog) els.prog.style.display = 'block';
+      const progressValue = state.progress || 0;
+      if (els.fill) els.fill.style.width = `${progressValue}%`;
+      if (els.text) els.text.textContent = `${progressValue}%`;
+      console.log(`[Content] 📈 更新进度条: ${progressValue}%`);
+      if (els.config) els.config.style.display = 'none';
+      if (els.start) els.start.style.display = 'none';
+      if (els.stop) els.stop.style.display = 'block';
+      if (els.dash) els.dash.style.display = 'none';
     } else if (state.status === 'complete') {
-      els.prog.style.display = 'none';
-      els.config.style.display = 'none';
-      els.start.style.display = 'none';
-      els.stop.style.display = 'none';
-      els.dash.style.display = 'block';
-      if(state.dashboardUrl) els.dash.href = state.dashboardUrl;
+      if (els.prog) els.prog.style.display = 'none';
+      if (els.config) els.config.style.display = 'none';
+      if (els.start) els.start.style.display = 'none';
+      if (els.stop) els.stop.style.display = 'none';
+      if (els.dash) els.dash.style.display = 'block';
+      if (state.dashboardUrl && els.dash) els.dash.href = state.dashboardUrl;
     } else {
-      els.prog.style.display = 'none';
-      els.config.style.display = 'block';
-      els.start.style.display = 'block';
-      els.stop.style.display = 'none';
-      els.dash.style.display = 'none';
+      if (els.prog) els.prog.style.display = 'none';
+      if (els.config) els.config.style.display = 'block';
+      if (els.start) els.start.style.display = 'block';
+      if (els.stop) els.stop.style.display = 'none';
+      if (els.dash) els.dash.style.display = 'none';
     }
   }
 }
@@ -4516,7 +4524,11 @@ function showRufusResult(answer) {
  * Chrome Message Listener
  * [UPDATED] Added handler for 'GET_PAGE_INFO' to support Popup
  */
+// [DEBUG] 确保消息监听器已注册
+console.log('[Content] 📡 Message listener registered');
+
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  console.log('[Content] 📨 Received message:', msg.type, msg);
   // 1. 处理 Popup 获取页面信息的请求 (修复 ASIN 不显示的问题)
   if (msg.type === 'GET_PAGE_INFO') {
     const asin = detectASIN(); // 使用增强版的 detectASIN
@@ -4574,25 +4586,37 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
   // 3. 处理后台传来的采集进度
   else if (msg.type === 'COLLECTION_PROGRESS') {
+    console.log('[Content] 📨 收到进度更新消息:', msg);
+    
     // [FIXED] 如果后台传来了具体的 totalReviews，就用后台的
     // 如果没传，就保持当前的 g_displayCount 不变（避免数字消失）
     if (typeof msg.totalReviews === 'number') {
       // 只增不减，确保数字不会倒退
       if (msg.totalReviews > g_displayCount) {
         g_displayCount = msg.totalReviews;
+        console.log(`[Content] ✅ 更新采集数量: ${g_displayCount}`);
       }
     }
     
     // 使用后台计算好的百分比（如果提供了），否则自己计算
-    const progress = msg.progress !== undefined ? msg.progress : 
-      Math.min(Math.round((msg.page / msg.pagesPerStar) * 20 + (msg.star - 1) * 20), 99);
+    // [FIXED] 移除99%限制，允许进度正常达到100%
+    const progress = msg.progress !== undefined ? Math.min(msg.progress, 100) : 
+      Math.min(Math.round((msg.page / msg.pagesPerStar) * 20 + (msg.star - 1) * 20), 100);
     
+    console.log(`[Content] 📊 更新进度条: ${progress}%, 消息: ${msg.message || 'N/A'}`);
+    
+    // [FIXED] 传递 asin 和 pageType，确保 isProductPage 判断正确
+    const currentAsin = detectASIN();
     updateOverlay({
       status: 'collecting',
       message: msg.message || `正在采集 ${msg.star} 星评论...`,
       progress: progress,
-      reviewCount: g_displayCount // 🔥 始终使用最新的已知总数
+      reviewCount: g_displayCount, // 🔥 始终使用最新的已知总数
+      asin: currentAsin,  // [FIXED] 传递 asin
+      pageType: 'product_detail'  // [FIXED] 明确指定为产品页
     });
+    
+    console.log('[Content] ✅ 进度更新完成');
   } 
 
   // 4. 处理采集完成
@@ -4604,10 +4628,14 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       g_displayCount = msg.reviewCount;
     }
 
+    // [FIXED] 设置进度为100%，确保完成时显示100%
     showOverlay({
       status: msg.success ? 'complete' : 'error',
       message: msg.success ? `采集完成! 共 ${g_displayCount} 条` : `失败: ${msg.error}`,
       reviewCount: g_displayCount, // 确保完成态也传这个数
+      progress: 100, // [FIXED] 完成时设置为100%
+      asin: asin, // [FIXED] 传递 asin 确保 isProductPage 判断正确
+      pageType: 'product_detail', // [FIXED] 明确指定为产品页
       // [FIXED] 跳转到"我的洞察"页面，而不是产品详情页
       dashboardUrl: `${CONFIG.DASHBOARD_URL}/home/my-projects`
     });

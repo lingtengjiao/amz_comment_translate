@@ -105,10 +105,12 @@ class ReviewIngestionQueue:
             是否成功
         """
         try:
-            await self.redis.lpush(self.queue_name, json.dumps(payload))
+            logger.info(f"[Redis Queue] 推入队列: queue_name={self.queue_name}, payload_keys={list(payload.keys())}")
+            result = await self.redis.lpush(self.queue_name, json.dumps(payload))
+            logger.info(f"[Redis Queue] ✅ 推入成功，队列长度: {result}")
             return True
         except Exception as e:
-            logger.error(f"Failed to push to ingestion queue: {e}")
+            logger.error(f"[Redis Queue] ❌ Failed to push to ingestion queue: {e}", exc_info=True)
             return False
     
     async def push_batch(self, payloads: List[dict]) -> int:
@@ -155,8 +157,11 @@ class ReviewIngestionQueue:
     async def length(self) -> int:
         """获取队列长度"""
         try:
-            return await self.redis.llen(self.queue_name)
-        except Exception:
+            length = await self.redis.llen(self.queue_name)
+            logger.debug(f"[Redis Queue] 队列长度查询: queue_name={self.queue_name}, length={length}")
+            return length
+        except Exception as e:
+            logger.error(f"[Redis Queue] ❌ Failed to get queue length: {e}")
             return 0
 
 

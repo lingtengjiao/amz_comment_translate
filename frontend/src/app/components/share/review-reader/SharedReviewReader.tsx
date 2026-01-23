@@ -1058,50 +1058,55 @@ export function SharedReviewReader({ data, token, onDataRefresh }: SharedReviewR
 
       {/* 维度详情弹窗 - 原文直接显示 */}
       {dimensionModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4">
           <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={() => setDimensionModal(null)} />
-          <div className="relative bg-white rounded-2xl shadow-2xl max-w-5xl w-full max-h-[85vh] flex flex-col overflow-hidden">
-            <div className="px-6 py-4 border-b border-gray-200 bg-gradient-to-r from-gray-50 to-white flex items-center justify-between shrink-0">
+          <div className="relative bg-white rounded-xl sm:rounded-2xl shadow-2xl max-w-5xl w-full max-h-[90vh] sm:max-h-[85vh] flex flex-col overflow-hidden">
+            {/* Header */}
+            <div className="px-3 sm:px-6 py-3 sm:py-4 border-b border-gray-200 bg-gradient-to-r from-gray-50 to-white flex items-center justify-between shrink-0">
               <div>
-                <h3 className="text-lg font-bold text-gray-900">{dimensionModal.dim}</h3>
-                <p className="text-sm text-gray-500">用户评价详情</p>
+                <h3 className="text-base sm:text-lg font-bold text-gray-900">{dimensionModal.dim}</h3>
+                <p className="text-xs sm:text-sm text-gray-500">用户评价详情</p>
               </div>
-              <button onClick={() => setDimensionModal(null)} className="p-2 hover:bg-gray-100 rounded-xl transition-colors"><X className="h-5 w-5 text-gray-400" /></button>
+              <button onClick={() => setDimensionModal(null)} className="p-1.5 sm:p-2 hover:bg-gray-100 rounded-lg sm:rounded-xl transition-colors">
+                <X className="h-4 w-4 sm:h-5 sm:w-5 text-gray-400" />
+              </button>
             </div>
+
+            {/* AI Analysis Section */}
             {dimensionModal.summary && (
-              <div className="px-6 py-4 bg-gradient-to-r from-blue-50 to-indigo-50 border-b border-blue-100 shrink-0">
+              <div className="px-3 sm:px-6 py-3 sm:py-4 bg-gradient-to-r from-blue-50 to-indigo-50 border-b border-blue-100 shrink-0">
                 {(() => {
                   const structured = dimensionModal.summary.key_points?.find((p: any) => p.structured)?.structured;
                   if (structured && !structured.raw) {
                     return (
                       <div className="space-y-2">
                         <div className="flex items-start gap-2">
-                          <Sparkles className="h-4 w-4 text-blue-500 mt-0.5 shrink-0" />
-                          <span className="text-sm font-bold text-gray-800">AI 分析</span>
+                          <Sparkles className="h-3.5 w-3.5 sm:h-4 sm:w-4 text-blue-500 mt-0.5 shrink-0" />
+                          <span className="text-xs sm:text-sm font-bold text-gray-800">AI 分析</span>
                         </div>
-                        <div className="grid grid-cols-2 gap-3 ml-6">
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 sm:gap-3 ml-0 sm:ml-6">
                           {structured.overall && (
-                            <div className="col-span-2 bg-white/60 rounded-lg p-2">
-                              <span className="text-xs font-bold text-gray-500">整体评价</span>
-                              <p className="text-sm text-gray-700 mt-0.5">{structured.overall}</p>
+                            <div className="col-span-1 sm:col-span-2 bg-white/60 rounded-lg p-2">
+                              <span className="text-[10px] sm:text-xs font-bold text-gray-500">整体评价</span>
+                              <p className="text-xs sm:text-sm text-gray-700 mt-0.5">{structured.overall}</p>
                             </div>
                           )}
                           {structured.pros_highlight && (
                             <div className="bg-emerald-50/60 rounded-lg p-2 border-l-2 border-emerald-400">
-                              <span className="text-xs font-bold text-emerald-600">值得称赞</span>
-                              <p className="text-sm text-gray-700 mt-0.5">{structured.pros_highlight}</p>
+                              <span className="text-[10px] sm:text-xs font-bold text-emerald-600">值得称赞</span>
+                              <p className="text-xs sm:text-sm text-gray-700 mt-0.5">{structured.pros_highlight}</p>
                             </div>
                           )}
                           {structured.cons_highlight && (
                             <div className="bg-rose-50/60 rounded-lg p-2 border-l-2 border-rose-400">
-                              <span className="text-xs font-bold text-rose-600">需要关注</span>
-                              <p className="text-sm text-gray-700 mt-0.5">{structured.cons_highlight}</p>
+                              <span className="text-[10px] sm:text-xs font-bold text-rose-600">需要关注</span>
+                              <p className="text-xs sm:text-sm text-gray-700 mt-0.5">{structured.cons_highlight}</p>
                             </div>
                           )}
                           {structured.suggestion && (
-                            <div className="col-span-2 bg-blue-50/60 rounded-lg p-2 border-l-2 border-blue-400">
-                              <span className="text-xs font-bold text-blue-600">改进建议</span>
-                              <p className="text-sm text-gray-700 mt-0.5">{structured.suggestion}</p>
+                            <div className="col-span-1 sm:col-span-2 bg-blue-50/60 rounded-lg p-2 border-l-2 border-blue-400">
+                              <span className="text-[10px] sm:text-xs font-bold text-blue-600">改进建议</span>
+                              <p className="text-xs sm:text-sm text-gray-700 mt-0.5">{structured.suggestion}</p>
                             </div>
                           )}
                         </div>
@@ -1110,55 +1115,116 @@ export function SharedReviewReader({ data, token, onDataRefresh }: SharedReviewR
                   }
                   return (
                     <div className="flex items-start gap-2">
-                      <Sparkles className="h-4 w-4 text-blue-500 mt-0.5 shrink-0" />
-                      <p className="text-sm text-gray-700 leading-relaxed">{dimensionModal.summary.summary}</p>
+                      <Sparkles className="h-3.5 w-3.5 sm:h-4 sm:w-4 text-blue-500 mt-0.5 shrink-0" />
+                      <p className="text-xs sm:text-sm text-gray-700 leading-relaxed">{dimensionModal.summary.summary}</p>
                     </div>
                   );
                 })()}
               </div>
             )}
-            <div className="flex-1 overflow-y-auto p-6">
-              <div className="grid grid-cols-3 gap-4">
-                <div>
-                  <h5 className="text-sm font-bold text-emerald-700 mb-3 flex items-center gap-2">
-                    <div className="w-5 h-5 bg-gradient-to-br from-emerald-500 to-teal-600 rounded-lg flex items-center justify-center">
-                      <ThumbsUp className="h-3 w-3 text-white" />
+
+            {/* Three Column Layout - Desktop: grid, Mobile: horizontal scroll */}
+            <div className="flex-1 overflow-y-auto lg:overflow-y-visible">
+              {/* Mobile: Horizontal Scroll */}
+              <div className="lg:hidden overflow-x-auto -mx-2 sm:mx-0 px-2 sm:px-0 py-3">
+                <div className="flex gap-3 min-w-max px-1">
+                  {/* 大家喜欢 */}
+                  <div className="flex flex-col w-[280px] bg-white rounded-xl border border-gray-200 overflow-hidden shadow-sm">
+                    <div className="px-3 py-2 bg-gradient-to-r from-emerald-500 to-teal-600 flex items-center gap-2 shrink-0">
+                      <div className="w-4 h-4 bg-white/20 rounded flex items-center justify-center">
+                        <ThumbsUp className="h-2.5 w-2.5 text-white" />
+                      </div>
+                      <span className="text-xs font-bold text-white">大家喜欢</span>
+                      <span className="text-[10px] text-white/80 bg-white/20 px-1.5 py-0.5 rounded-full ml-auto">{dimensionModal.s.length}</span>
                     </div>
-                    大家喜欢 ({dimensionModal.s.length})
-                  </h5>
-                  <div className="space-y-2 max-h-[50vh] overflow-y-auto">
-                    {dimensionModal.s.map((item: any, i: number) => (
-                      <InsightCard key={i} item={item} type="positive" findReview={findReview} />
-                    ))}
-                    {dimensionModal.s.length === 0 && <p className="text-xs text-gray-400 py-4 text-center">暂无</p>}
+                    <div className="flex-1 overflow-y-auto p-2 space-y-2 max-h-[400px]">
+                      {dimensionModal.s.map((item: any, i: number) => (
+                        <InsightCard key={i} item={item} type="positive" findReview={findReview} />
+                      ))}
+                      {dimensionModal.s.length === 0 && <p className="text-xs text-gray-400 py-4 text-center">暂无</p>}
+                    </div>
+                  </div>
+
+                  {/* 需要注意 */}
+                  <div className="flex flex-col w-[280px] bg-white rounded-xl border border-gray-200 overflow-hidden shadow-sm">
+                    <div className="px-3 py-2 bg-gradient-to-r from-rose-500 to-pink-600 flex items-center gap-2 shrink-0">
+                      <div className="w-4 h-4 bg-white/20 rounded flex items-center justify-center">
+                        <ThumbsDown className="h-2.5 w-2.5 text-white" />
+                      </div>
+                      <span className="text-xs font-bold text-white">需要注意</span>
+                      <span className="text-[10px] text-white/80 bg-white/20 px-1.5 py-0.5 rounded-full ml-auto">{dimensionModal.w.length}</span>
+                    </div>
+                    <div className="flex-1 overflow-y-auto p-2 space-y-2 max-h-[400px]">
+                      {dimensionModal.w.map((item: any, i: number) => (
+                        <InsightCard key={i} item={item} type="negative" findReview={findReview} />
+                      ))}
+                      {dimensionModal.w.length === 0 && <p className="text-xs text-gray-400 py-4 text-center">暂无</p>}
+                    </div>
+                  </div>
+
+                  {/* 希望改进 */}
+                  <div className="flex flex-col w-[280px] bg-white rounded-xl border border-gray-200 overflow-hidden shadow-sm">
+                    <div className="px-3 py-2 bg-gradient-to-r from-blue-500 to-indigo-600 flex items-center gap-2 shrink-0">
+                      <div className="w-4 h-4 bg-white/20 rounded flex items-center justify-center">
+                        <Lightbulb className="h-2.5 w-2.5 text-white" />
+                      </div>
+                      <span className="text-xs font-bold text-white">希望改进</span>
+                      <span className="text-[10px] text-white/80 bg-white/20 px-1.5 py-0.5 rounded-full ml-auto">{dimensionModal.u.length}</span>
+                    </div>
+                    <div className="flex-1 overflow-y-auto p-2 space-y-2 max-h-[400px]">
+                      {dimensionModal.u.map((item: any, i: number) => (
+                        <InsightCard key={i} item={item} type="suggestion" findReview={findReview} />
+                      ))}
+                      {dimensionModal.u.length === 0 && <p className="text-xs text-gray-400 py-4 text-center">暂无</p>}
+                    </div>
                   </div>
                 </div>
-                <div>
-                  <h5 className="text-sm font-bold text-rose-700 mb-3 flex items-center gap-2">
-                    <div className="w-5 h-5 bg-gradient-to-br from-rose-500 to-pink-600 rounded-lg flex items-center justify-center">
-                      <ThumbsDown className="h-3 w-3 text-white" />
+              </div>
+
+              {/* Desktop: Grid Layout */}
+              <div className="hidden lg:block p-6">
+                <div className="grid grid-cols-3 gap-4">
+                  <div>
+                    <h5 className="text-sm font-bold text-emerald-700 mb-3 flex items-center gap-2">
+                      <div className="w-5 h-5 bg-gradient-to-br from-emerald-500 to-teal-600 rounded-lg flex items-center justify-center">
+                        <ThumbsUp className="h-3 w-3 text-white" />
+                      </div>
+                      大家喜欢 ({dimensionModal.s.length})
+                    </h5>
+                    <div className="space-y-2 max-h-[50vh] overflow-y-auto">
+                      {dimensionModal.s.map((item: any, i: number) => (
+                        <InsightCard key={i} item={item} type="positive" findReview={findReview} />
+                      ))}
+                      {dimensionModal.s.length === 0 && <p className="text-xs text-gray-400 py-4 text-center">暂无</p>}
                     </div>
-                    需要注意 ({dimensionModal.w.length})
-                  </h5>
-                  <div className="space-y-2 max-h-[50vh] overflow-y-auto">
-                    {dimensionModal.w.map((item: any, i: number) => (
-                      <InsightCard key={i} item={item} type="negative" findReview={findReview} />
-                    ))}
-                    {dimensionModal.w.length === 0 && <p className="text-xs text-gray-400 py-4 text-center">暂无</p>}
                   </div>
-                </div>
-                <div>
-                  <h5 className="text-sm font-bold text-blue-700 mb-3 flex items-center gap-2">
-                    <div className="w-5 h-5 bg-gradient-to-br from-blue-500 to-indigo-600 rounded-lg flex items-center justify-center">
-                      <Lightbulb className="h-3 w-3 text-white" />
+                  <div>
+                    <h5 className="text-sm font-bold text-rose-700 mb-3 flex items-center gap-2">
+                      <div className="w-5 h-5 bg-gradient-to-br from-rose-500 to-pink-600 rounded-lg flex items-center justify-center">
+                        <ThumbsDown className="h-3 w-3 text-white" />
+                      </div>
+                      需要注意 ({dimensionModal.w.length})
+                    </h5>
+                    <div className="space-y-2 max-h-[50vh] overflow-y-auto">
+                      {dimensionModal.w.map((item: any, i: number) => (
+                        <InsightCard key={i} item={item} type="negative" findReview={findReview} />
+                      ))}
+                      {dimensionModal.w.length === 0 && <p className="text-xs text-gray-400 py-4 text-center">暂无</p>}
                     </div>
-                    希望改进 ({dimensionModal.u.length})
-                  </h5>
-                  <div className="space-y-2 max-h-[50vh] overflow-y-auto">
-                    {dimensionModal.u.map((item: any, i: number) => (
-                      <InsightCard key={i} item={item} type="suggestion" findReview={findReview} />
-                    ))}
-                    {dimensionModal.u.length === 0 && <p className="text-xs text-gray-400 py-4 text-center">暂无</p>}
+                  </div>
+                  <div>
+                    <h5 className="text-sm font-bold text-blue-700 mb-3 flex items-center gap-2">
+                      <div className="w-5 h-5 bg-gradient-to-br from-blue-500 to-indigo-600 rounded-lg flex items-center justify-center">
+                        <Lightbulb className="h-3 w-3 text-white" />
+                      </div>
+                      希望改进 ({dimensionModal.u.length})
+                    </h5>
+                    <div className="space-y-2 max-h-[50vh] overflow-y-auto">
+                      {dimensionModal.u.map((item: any, i: number) => (
+                        <InsightCard key={i} item={item} type="suggestion" findReview={findReview} />
+                      ))}
+                      {dimensionModal.u.length === 0 && <p className="text-xs text-gray-400 py-4 text-center">暂无</p>}
+                    </div>
                   </div>
                 </div>
               </div>

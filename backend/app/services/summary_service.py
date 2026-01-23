@@ -1564,11 +1564,17 @@ class SummaryService:
                         continue
                     
                     # 获取文本内容用于分类
-                    text = str(item.get('insight', '') or item.get('point', '') or item.get('description', '')).lower()
+                    text = str(item.get('insight', '') or item.get('point', '') or item.get('dimension', '') or item.get('name', '') or item.get('description', '') or item.get('item', '')).lower()
                     
-                    # 转换字段名：insight -> point
+                    # 转换字段名：insight/dimension/name/item -> point（统一字段名）
                     if 'insight' in item and 'point' not in item:
                         item['point'] = item['insight']
+                    elif 'dimension' in item and 'point' not in item:
+                        item['point'] = item['dimension']
+                    elif 'name' in item and 'point' not in item:
+                        item['point'] = item['name']
+                    elif 'item' in item and 'point' not in item:
+                        item['point'] = item['item']
                     
                     # 基于关键词分类
                     is_positive = any(kw in text for kw in positive_keywords)

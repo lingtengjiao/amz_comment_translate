@@ -402,6 +402,55 @@ class ReviewListResponse(BaseModel):
     reviews: List[ReviewResponse]
 
 
+class ReviewListItemCompact(BaseModel):
+    """
+    🚀 精简版评论响应（用于列表页，减少数据传输量）
+    
+    与 ReviewResponse 相比：
+    - 不返回 insights 和 theme_highlights 的完整内容
+    - 只返回 insights_count 和 themes_count 数量
+    - 截断 body_translated 到 200 字符
+    
+    数据量优化：从 ~1KB/条 降低到 ~300B/条
+    """
+    id: UUID
+    review_id: str
+    author: Optional[str]
+    rating: int
+    title_original: Optional[str]
+    title_translated: Optional[str]
+    body_original: str
+    body_translated: Optional[str]  # 完整内容，前端可自行截断显示
+    review_date: Optional[date]
+    verified_purchase: bool
+    helpful_votes: int
+    # Media fields
+    has_video: bool = False
+    has_images: bool = False
+    # Review link
+    review_url: Optional[str] = None
+    # Analysis
+    sentiment: Sentiment
+    translation_status: TranslationStatus
+    # User actions
+    is_pinned: bool = False
+    is_hidden: bool = False
+    # 🚀 精简：只返回数量，不返回完整内容
+    insights_count: int = 0
+    themes_count: int = 0
+    created_at: datetime
+    
+    model_config = ConfigDict(from_attributes=True)
+
+
+class ReviewListCompactResponse(BaseModel):
+    """🚀 精简版评论列表响应（优化性能）"""
+    total: int
+    page: int
+    page_size: int
+    reviews: List[ReviewListItemCompact]
+
+
 # ============== Product Schemas ==============
 
 class ProductResponse(BaseModel):

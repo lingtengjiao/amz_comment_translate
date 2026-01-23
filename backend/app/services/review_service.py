@@ -787,6 +787,7 @@ class ReviewService:
         
         # 查询 2: 使用条件聚合一次获取所有基础统计
         # 包括：星级分布(5个)、情感分布(3个)、总数、翻译数、平均分
+        # 🚀 优化：添加 skipped 和 failed 统计，避免API层额外查询
         stats_query = select(
             # Total reviews (exclude deleted)
             func.count(case((Review.is_deleted == False, Review.id), else_=literal(None))).label('total_reviews'),
@@ -795,6 +796,16 @@ class ReviewService:
                 (and_(Review.is_deleted == False, Review.translation_status == TranslationStatus.COMPLETED.value), Review.id),
                 else_=literal(None)
             )).label('translated_reviews'),
+            # 🚀 Skipped reviews (不需要翻译的评论)
+            func.count(case(
+                (and_(Review.is_deleted == False, Review.translation_status == TranslationStatus.SKIPPED.value), Review.id),
+                else_=literal(None)
+            )).label('skipped_reviews'),
+            # 🚀 Failed reviews (翻译失败的评论)
+            func.count(case(
+                (and_(Review.is_deleted == False, Review.translation_status == TranslationStatus.FAILED.value), Review.id),
+                else_=literal(None)
+            )).label('failed_reviews'),
             # Star ratings distribution
             func.count(case((and_(Review.is_deleted == False, Review.rating == 1), Review.id), else_=literal(None))).label('star_1'),
             func.count(case((and_(Review.is_deleted == False, Review.rating == 2), Review.id), else_=literal(None))).label('star_2'),
@@ -814,6 +825,9 @@ class ReviewService:
         
         total_reviews = stats_row.total_reviews or 0
         translated_reviews = stats_row.translated_reviews or 0
+        # 🚀 新增：skipped 和 failed 统计
+        skipped_reviews = stats_row.skipped_reviews or 0
+        failed_reviews = stats_row.failed_reviews or 0
         
         rating_dist = {
             "star_1": stats_row.star_1 or 0,
@@ -926,6 +940,9 @@ class ReviewService:
                 "bullet_points_translated": bullet_points_translated,
                 "total_reviews": total_reviews,
                 "translated_reviews": translated_reviews,
+                # 🚀 新增：skipped 和 failed 统计，避免API层额外查询
+                "skipped_reviews": skipped_reviews,
+                "failed_reviews": failed_reviews,
                 "reviews_with_insights": reviews_with_insights,
                 "reviews_with_themes": reviews_with_themes,
                 "average_rating": round(float(avg_rating), 2),

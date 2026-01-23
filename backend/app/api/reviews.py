@@ -17,6 +17,8 @@ from app.api.schemas import (
     ReviewIngestRequest,
     IngestResponse,
     ReviewListResponse,
+    ReviewListCompactResponse,  # 🚀 精简版响应
+    ReviewListItemCompact,      # 🚀 精简版列表项
     ReviewResponse,
     ProductListResponse,
     ProductResponse,
@@ -353,7 +355,7 @@ async def get_queue_length():
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/{asin}", response_model=ReviewListResponse)
+@router.get("/{asin}")
 async def get_reviews(
     asin: str,
     page: int = Query(1, ge=1),
@@ -361,6 +363,7 @@ async def get_reviews(
     rating: Optional[int] = Query(None, ge=1, le=5),
     sentiment: Optional[str] = Query(None, pattern="^(positive|neutral|negative)$"),
     status: Optional[str] = Query(None, pattern="^(pending|processing|completed|failed)$"),
+    compact: bool = Query(False, description="🚀 精简模式：不返回 insights/theme_highlights 完整内容，只返回数量"),
     no_cache: bool = Query(False, description="跳过缓存，强制从数据库获取"),
     db: AsyncSession = Depends(get_db)
 ):
@@ -373,19 +376,63 @@ async def get_reviews(
     - rating: Filter by star rating (1-5)
     - sentiment: Filter by sentiment (positive/neutral/negative)
     - status: Filter by translation status
+    - compact: 🚀 精简模式（默认 false）- 设为 true 可减少约 70% 数据传输量
     - no_cache: Skip cache and fetch from database
     
-    🚀 Performance: Results are cached in Redis for 5 minutes.
+    🚀 Performance: 
+    - Results are cached in Redis for 5 minutes.
+    - Use compact=true for list pages to reduce response size from ~50KB to ~15KB
     """
     from app.core.cache import get_cache_service
     
     cache = await get_cache_service()
     
+    # 🚀 精简模式使用不同的缓存键
+    cache_suffix = "_compact" if compact else ""
+    
     # 尝试从缓存获取（除非指定 no_cache）
     if not no_cache:
         cached = await cache.get_reviews(asin, page, page_size, rating, sentiment)
         if cached:
+            # 如果请求精简模式但缓存是完整模式，需要转换
+            if compact and "reviews" in cached and len(cached["reviews"]) > 0:
+                if "insights" in cached["reviews"][0]:  # 完整模式缓存
+                    # 转换为精简模式
+                    compact_reviews = []
+                    for r in cached["reviews"]:
+                        compact_reviews.append({
+                            "id": r.get("id"),
+                            "review_id": r.get("review_id"),
+                            "author": r.get("author"),
+                            "rating": r.get("rating"),
+                            "title_original": r.get("title_original"),
+                            "title_translated": r.get("title_translated"),
+                            "body_original": r.get("body_original"),
+                            "body_translated": r.get("body_translated"),
+                            "review_date": r.get("review_date"),
+                            "verified_purchase": r.get("verified_purchase"),
+                            "helpful_votes": r.get("helpful_votes"),
+                            "has_video": r.get("has_video", False),
+                            "has_images": r.get("has_images", False),
+                            "review_url": r.get("review_url"),
+                            "sentiment": r.get("sentiment"),
+                            "translation_status": r.get("translation_status"),
+                            "is_pinned": r.get("is_pinned", False),
+                            "is_hidden": r.get("is_hidden", False),
+                            "insights_count": len(r.get("insights") or []),
+                            "themes_count": len(r.get("theme_highlights") or []),
+                            "created_at": r.get("created_at")
+                        })
+                    logger.debug(f"[Cache HIT + Transform] Reviews for {asin} page={page} (compact)")
+                    return ReviewListCompactResponse(
+                        total=cached["total"],
+                        page=cached["page"],
+                        page_size=cached["page_size"],
+                        reviews=compact_reviews
+                    )
             logger.debug(f"[Cache HIT] Reviews for {asin} page={page}")
+            if compact:
+                return ReviewListCompactResponse(**cached)
             return ReviewListResponse(**cached)
     
     # 缓存未命中，从数据库获取
@@ -400,18 +447,56 @@ async def get_reviews(
         status_filter=status
     )
     
-    response_data = {
-        "total": total,
-        "page": page,
-        "page_size": page_size,
-        "reviews": [ReviewResponse.model_validate(r).model_dump() for r in reviews]
-    }
-    
-    # 写入缓存
-    await cache.set_reviews(asin, response_data, page, page_size, rating, sentiment)
-    logger.debug(f"[Cache SET] Reviews for {asin} page={page}")
-    
-    return ReviewListResponse(**response_data)
+    if compact:
+        # 🚀 精简模式：只返回基本信息 + 数量
+        compact_reviews = []
+        for r in reviews:
+            compact_reviews.append(ReviewListItemCompact(
+                id=r.id,
+                review_id=r.review_id,
+                author=r.author,
+                rating=r.rating,
+                title_original=r.title_original,
+                title_translated=r.title_translated,
+                body_original=r.body_original,
+                body_translated=r.body_translated,
+                review_date=r.review_date,
+                verified_purchase=r.verified_purchase,
+                helpful_votes=r.helpful_votes,
+                has_video=r.has_video,
+                has_images=r.has_images,
+                review_url=r.review_url,
+                sentiment=r.sentiment,
+                translation_status=r.translation_status,
+                is_pinned=r.is_pinned,
+                is_hidden=r.is_hidden,
+                insights_count=len(r.insights) if r.insights else 0,
+                themes_count=len(r.theme_highlights) if r.theme_highlights else 0,
+                created_at=r.created_at
+            ))
+        
+        response_data = {
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+            "reviews": [r.model_dump() for r in compact_reviews]
+        }
+        logger.debug(f"[DB Query] Reviews for {asin} page={page} (compact mode)")
+        return ReviewListCompactResponse(**response_data)
+    else:
+        # 完整模式：返回所有数据
+        response_data = {
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+            "reviews": [ReviewResponse.model_validate(r).model_dump() for r in reviews]
+        }
+        
+        # 写入缓存（只缓存完整模式）
+        await cache.set_reviews(asin, response_data, page, page_size, rating, sentiment)
+        logger.debug(f"[Cache SET] Reviews for {asin} page={page}")
+        
+        return ReviewListResponse(**response_data)
 
 
 @router.get("/{asin}/export")
@@ -736,32 +821,11 @@ async def get_product_stats(
     total = product_data.get("total_reviews", 0)
     
     if total > 0:
-        # [FIXED] 翻译进度：已翻译 + 已跳过 = 已处理（避免 skipped 评论导致无限循环）
+        # 🚀 优化：直接使用服务层返回的统计数据，无需额外数据库查询
+        # [FIXED] 翻译进度：已翻译 + 已跳过 + 已失败 = 已处理（避免无限轮询）
         translated = product_data.get("translated_reviews", 0)
-        
-        # 查询 skipped 和 failed 评论数量（都算作已处理，避免前端无限轮询）
-        skipped_result = await db.execute(
-            select(func.count(Review.id)).where(
-                and_(
-                    Review.product_id == product.id,
-                    Review.translation_status == TranslationStatus.SKIPPED.value,
-                    Review.is_deleted == False
-                )
-            )
-        )
-        skipped_count = skipped_result.scalar() or 0
-        
-        # 查询 failed 评论数量
-        failed_result = await db.execute(
-            select(func.count(Review.id)).where(
-                and_(
-                    Review.product_id == product.id,
-                    Review.translation_status == TranslationStatus.FAILED.value,
-                    Review.is_deleted == False
-                )
-            )
-        )
-        failed_count = failed_result.scalar() or 0
+        skipped_count = product_data.get("skipped_reviews", 0)  # 🚀 从服务层获取
+        failed_count = product_data.get("failed_reviews", 0)    # 🚀 从服务层获取
         
         # 已处理 = 已翻译 + 已跳过 + 已失败（避免 failed 评论导致前端无限轮询）
         processed = translated + skipped_count + failed_count

@@ -12,7 +12,7 @@
 // Backend API configuration
 // 生产环境配置 - 使用 HTTPS 域名
 const API_BASE_URL = 'https://98kamz.com/api/v1';
-const DASHBOARD_URL = 'https://98kamz.com';  // 前端 Dashboard URL
+const DASHBOARD_URL = 'https://98kamz.com';  // 生产环境前端地址
 
 // ==========================================
 // 用户认证状态管理
@@ -266,7 +266,7 @@ async function logout() {
   return { success: true };
 }
 
-// [NEW] 同步登录状态到所有打开的网页（98kamz.com）
+// [NEW] 同步登录状态到所有打开的网页（98kamz.com 生产环境）
 async function syncAuthToWebPages() {
   try {
     const tabs = await chrome.tabs.query({
@@ -293,7 +293,7 @@ async function syncAuthToWebPages() {
   }
 }
 
-// [NEW] 同步登出状态到所有打开的网页
+// [NEW] 同步登出状态到所有打开的网页（98kamz.com 生产环境）
 async function syncLogoutToWebPages() {
   try {
     const tabs = await chrome.tabs.query({
@@ -429,30 +429,49 @@ async function uploadReviews(data, maxRetries = 3) {
     ? `${API_BASE_URL}/reviews/ingest/queue`
     : `${API_BASE_URL}/reviews/ingest`;
   
+  // [DEBUG] 记录上传详情
+  console.log(`[Upload] 📤 准备上传数据:`, {
+    endpoint,
+    asin: data.asin,
+    reviewCount: data.reviews?.length || 0,
+    hasAuth: !!getAuthHeaders()['Authorization']
+  });
+  
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
       console.log(`[Upload] Attempt ${attempt}/${maxRetries} to ${useQueueAPI ? 'queue' : 'direct'}...`);
+      
+      const headers = getAuthHeaders();
+      console.log(`[Upload] Request headers:`, { 
+        'Content-Type': headers['Content-Type'],
+        'Has-Auth': !!headers['Authorization'],
+        'Endpoint': endpoint
+      });
       
       const response = await fetchWithTimeout(
         endpoint,
         {
           method: 'POST',
-          headers: getAuthHeaders(),  // [NEW] 添加认证头
+          headers: headers,
           body: JSON.stringify(data)
         },
         useQueueAPI ? 15000 : 60000  // 队列模式超时更短
       );
 
+      console.log(`[Upload] Response status: ${response.status} ${response.statusText}`);
+
       if (!response.ok) {
-        const error = await response.text();
-        throw new Error(`Upload failed: ${error}`);
+        const errorText = await response.text();
+        console.error(`[Upload] ❌ Server error response:`, errorText);
+        throw new Error(`Upload failed (${response.status}): ${errorText.substring(0, 200)}`);
       }
 
       const result = await response.json();
-      console.log(`[Upload] Success on attempt ${attempt}`, useQueueAPI ? `(queued: ${result.batch_id})` : '');
+      console.log(`[Upload] ✅ Success on attempt ${attempt}`, useQueueAPI ? `(queued: ${result.batch_id})` : '', result);
       return result;
     } catch (error) {
-      console.error(`[Upload] Attempt ${attempt} failed:`, error.message);
+      console.error(`[Upload] ❌ Attempt ${attempt} failed:`, error.message);
+      console.error(`[Upload] ❌ Error details:`, error);
       lastError = error;
       
       // Don't retry if it's a server error (4xx/5xx means the request was received)
@@ -463,13 +482,14 @@ async function uploadReviews(data, maxRetries = 3) {
       // Wait before retry (exponential backoff)
       if (attempt < maxRetries) {
         const waitTime = Math.min(1000 * Math.pow(2, attempt - 1), 5000);
-        console.log(`[Upload] Waiting ${waitTime}ms before retry...`);
+        console.log(`[Upload] ⏳ Waiting ${waitTime}ms before retry...`);
         await new Promise(r => setTimeout(r, waitTime));
       }
     }
   }
   
   // All retries failed
+  console.error(`[Upload] ❌ All ${maxRetries} attempts failed. Last error:`, lastError);
   throw new Error(`上传失败 (已重试${maxRetries}次): ${lastError.message}`);
 }
 
@@ -1119,6 +1139,7 @@ async function collectReviewsWithTab(asin, stars, pagesPerStar, mediaType, speed
   let totalUploaded = 0;  // [NEW] 累计上传计数
   // [UPDATED] 优先使用传入的 productInfo（已包含 categories），否则后面自动爬取
   let scrapedProductInfo = initialProductInfo;
+  let collectionCompleted = false;  // [NEW] 标记采集是否正常完成
   
   // [NEW] 记录工作流模式
   console.log(`[Collector] Workflow mode: ${workflowMode}`);
@@ -1202,17 +1223,69 @@ async function collectReviewsWithTab(asin, stars, pagesPerStar, mediaType, speed
       try {
         await chrome.tabs.update(originalTabId, { active: true });
         console.log('[Collector] Switched back to original tab');
+        
+        // [FIXED] 切换回原始标签页后，等待一下确保 content script 已加载，再发送初始进度更新
+        await new Promise(r => setTimeout(r, 200));
+        console.log('[Collector] 📤 Sending initial progress update...');
+        sendProgress({
+          star: stars[0] || 5,
+          page: 0,
+          pagesPerStar,
+          totalReviews: 0,
+          progress: 1,
+          message: '采集引擎已就绪，准备开始采集...'
+        });
+        console.log('[Collector] ✅ Initial progress update sent');
       } catch (e) {
         console.log('[Collector] Could not switch back to original tab');
+        // 即使切换失败，也尝试发送进度更新
+        sendProgress({
+          star: stars[0] || 5,
+          page: 0,
+          pagesPerStar,
+          totalReviews: 0,
+          progress: 1,
+          message: '采集引擎已就绪，准备开始采集...'
+        });
       }
+    } else {
+      // 如果没有原始标签页，也发送进度更新
+      sendProgress({
+        star: stars[0] || 5,
+        page: 0,
+        pagesPerStar,
+        totalReviews: 0,
+        progress: 1,
+        message: '采集引擎已就绪，准备开始采集...'
+      });
     }
     
     // [UPDATED] 🔥 如果已有产品信息（从 content.js 传入），跳过爬取；否则爬取
     if (scrapedProductInfo && scrapedProductInfo.title) {
       console.log('[Collector] ✅ Using pre-scraped product info:', scrapedProductInfo.title?.substring(0, 50));
       console.log('[Collector] Categories count:', scrapedProductInfo.categories?.length || 0);
+      // [FIXED] 如果已有产品信息，也发送进度更新
+      console.log('[Collector] 📤 Sending product info ready progress update...');
+      sendProgress({
+        star: stars[0] || 5,
+        page: 0,
+        pagesPerStar,
+        totalReviews: 0,
+        progress: 2,
+        message: '产品信息已就绪，开始采集评论...'
+      });
+      console.log('[Collector] ✅ Product info progress update sent');
     } else {
       console.log('[Collector] Fetching product info for stream mode...');
+      sendProgress({
+        star: stars[0] || 5,
+        page: 0,
+        pagesPerStar,
+        totalReviews: 0,
+        progress: 1,
+        message: '正在获取产品信息...'
+      });
+      
       try {
         const domain = getAmazonDomain(marketplace);
         const productPageUrl = `https://www.${domain}/dp/${asin}`;
@@ -1291,6 +1364,16 @@ async function collectReviewsWithTab(asin, stars, pagesPerStar, mediaType, speed
         // 使用默认信息，不阻塞采集
         scrapedProductInfo = { title: `Product ${asin}`, marketplace: 'US' };
       }
+      
+      // [FIXED] 产品信息抓取完成后，发送进度更新
+      sendProgress({
+        star: stars[0] || 5,
+        page: 0,
+        pagesPerStar,
+        totalReviews: 0,
+        progress: 2,
+        message: '产品信息已获取，开始采集评论...'
+      });
     }
 
     for (const star of stars) {
@@ -1301,7 +1384,9 @@ async function collectReviewsWithTab(asin, stars, pagesPerStar, mediaType, speed
       
       // [NEW] 星级开始时发送初始进度更新
       const starIndex = stars.indexOf(star);
-      const initialProgress = Math.min(Math.round((starIndex / stars.length) * 100), 99);
+      // [FIXED] 移除99%限制，允许进度正常达到100%
+      const initialProgress = Math.min(Math.round((starIndex / stars.length) * 100), 100);
+      console.log(`[Collector] 📤 Sending star ${star} start progress update (progress: ${initialProgress}%)...`);
       sendProgress({
         star,
         page: 0,
@@ -1310,10 +1395,13 @@ async function collectReviewsWithTab(asin, stars, pagesPerStar, mediaType, speed
         progress: initialProgress,
         message: `开始采集 ${star} 星评论...`
       });
+      console.log(`[Collector] ✅ Star ${star} start progress update sent`);
       
       for (let page = 1; page <= pagesPerStar; page++) {
         lastPage = page; // 更新最后扫描的页数
-        if (!collectorTabId) {
+        // [FIXED] 只有在采集未完成且标签页被关闭时才抛出错误
+        // 如果采集已完成（collectionCompleted = true），即使 collectorTabId 为 null 也不应该抛出错误
+        if (!collectorTabId && !collectionCompleted) {
           throw new Error('Collection cancelled');
         }
 
@@ -1433,12 +1521,23 @@ async function collectReviewsWithTab(asin, stars, pagesPerStar, mediaType, speed
               is_stream: true           // 标记为流式传输
             };
             
-            await uploadReviews(streamBatchData, 2);  // 重试次数降低，快速失败
+            console.log(`[Stream] 📤 准备上传第 ${page} 页，${pageNewReviews.length} 条评论到后端...`);
+            const uploadResult = await uploadReviews(streamBatchData, 2);  // 重试次数降低，快速失败
             totalUploaded += pageNewReviews.length;
-            console.log(`[Stream] ✅ 已上传第 ${page} 页，${pageNewReviews.length} 条新评论 (累计: ${totalUploaded})`);
+            console.log(`[Stream] ✅ 已上传第 ${page} 页，${pageNewReviews.length} 条新评论 (累计: ${totalUploaded})`, uploadResult);
             
           } catch (uploadErr) {
             console.error(`[Stream] ❌ 上传失败 (page ${page}):`, uploadErr.message);
+            console.error(`[Stream] ❌ 上传错误详情:`, uploadErr);
+            // [FIXED] 上传失败时也发送进度更新，让用户知道有问题
+            sendProgress({
+              star,
+              page,
+              pagesPerStar,
+              totalReviews: allReviews.length,
+              progress: Math.min(Math.round(((starIndex + starProgress) / stars.length) * 100), 100),
+              message: `⚠️ 第 ${page} 页上传失败: ${uploadErr.message.substring(0, 50)}`
+            });
             // 失败不阻塞采集，继续下一页
           }
         }
@@ -1447,8 +1546,10 @@ async function collectReviewsWithTab(asin, stars, pagesPerStar, mediaType, speed
         // 计算总体进度百分比
         const starIndex = stars.indexOf(star);
         const starProgress = page / pagesPerStar;
-        const totalProgress = Math.min(Math.round(((starIndex + starProgress) / stars.length) * 100), 99);
+        // [FIXED] 移除99%限制，允许进度正常达到100%
+        const totalProgress = Math.min(Math.round(((starIndex + starProgress) / stars.length) * 100), 100);
         
+        console.log(`[Collector] 📤 Sending page ${page} progress update (progress: ${totalProgress}%, totalReviews: ${allReviews.length})...`);
         sendProgress({
           star,
           page,
@@ -1457,6 +1558,7 @@ async function collectReviewsWithTab(asin, stars, pagesPerStar, mediaType, speed
           progress: totalProgress, // 计算好的百分比
           message: `正在采集 ${star} 星评论... 第 ${page}/${pagesPerStar} 页`
         });
+        console.log(`[Collector] ✅ Page ${page} progress update sent`);
 
         // Check if we got new reviews
         if (newCount === 0 && reviews.length > 0) {
@@ -1491,7 +1593,8 @@ async function collectReviewsWithTab(asin, stars, pagesPerStar, mediaType, speed
 
       // [FIXED] 星级完成时发送一次进度更新，确保总数准确
       // starIndex 已在循环开始处声明，直接复用
-      const finalProgress = Math.min(Math.round(((starIndex + 1) / stars.length) * 100), 99);
+      // [FIXED] 移除99%限制，允许进度达到100%
+      const finalProgress = Math.round(((starIndex + 1) / stars.length) * 100);
       
       sendProgress({
         star,
@@ -1535,6 +1638,9 @@ async function collectReviewsWithTab(asin, stars, pagesPerStar, mediaType, speed
     console.log('[Collector] ========================================');
     console.log(`[Collector] ✅ Collection complete: ${allReviews.length} reviews`);
     console.log('[Collector] ========================================');
+    
+    // [FIXED] 标记采集已完成，避免后续检查误判
+    collectionCompleted = true;
     
     // [FIXED] 🚀 采集完成后触发全自动分析（带重试机制，优化响应处理）
     // [FIXED] 不再使用 sendProgress，而是直接发送 COLLECTION_COMPLETE 消息
@@ -1610,6 +1716,11 @@ async function collectReviewsWithTab(asin, stars, pagesPerStar, mediaType, speed
       } catch (e) {}
       collectorTabId = null;
     }
+    // [FIXED] 如果采集已完成，不应该抛出错误
+    if (collectionCompleted && error.message === 'Collection cancelled') {
+      console.log('[Collector] ⚠️ Collection already completed, ignoring cancellation error');
+      return allReviews;
+    }
     throw error;
   }
 }
@@ -1662,11 +1773,51 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         config.speedMode || 'fast',
         (progress) => {
           // Send progress updates to content script
+          console.log('[Background] 📨 Progress callback called:', progress);
           if (originTabId) {
-            chrome.tabs.sendMessage(originTabId, {
-              type: 'COLLECTION_PROGRESS',
-              ...progress
-            }).catch(() => {});
+            console.log(`[Background] 📤 Sending progress to tab ${originTabId}:`, progress);
+            
+            // [FIXED] 发送消息，带重试机制
+            const sendWithRetry = async (retries = 3, delay = 500) => {
+              for (let i = 0; i < retries; i++) {
+                try {
+                  // 先检查标签页是否存在
+                  const tab = await chrome.tabs.get(originTabId);
+                  if (!tab) {
+                    console.warn(`[Background] ⚠️ Tab ${originTabId} not found`);
+                    return;
+                  }
+                  
+                  // 尝试发送消息
+                  await chrome.tabs.sendMessage(originTabId, {
+                    type: 'COLLECTION_PROGRESS',
+                    ...progress
+                  });
+                  
+                  console.log(`[Background] ✅ Progress message sent successfully (attempt ${i + 1})`);
+                  return; // 成功，退出重试循环
+                } catch (err) {
+                  console.warn(`[Background] ⚠️ Attempt ${i + 1} failed:`, err.message);
+                  
+                  // 如果是连接错误且还有重试机会，等待后重试
+                  if (i < retries - 1 && err.message && err.message.includes('Could not establish connection')) {
+                    console.log(`[Background] ⏳ Waiting ${delay}ms before retry...`);
+                    await new Promise(r => setTimeout(r, delay));
+                    delay *= 2; // 指数退避
+                  } else {
+                    // 最后一次尝试或非连接错误，记录错误
+                    console.error('[Background] ❌ Failed to send progress update:', err.message, err);
+                    break;
+                  }
+                }
+              }
+            };
+            
+            sendWithRetry().catch((err) => {
+              console.error(`[Background] ❌ Failed to send progress after retries:`, err);
+            });
+          } else {
+            console.warn('[Background] ⚠️ originTabId is null, cannot send progress update');
           }
         },
         productInfo,  // [NEW] 传入 productInfo（包含 categories）
@@ -1677,6 +1828,24 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         // [UPDATED] 🔥 流式模式：数据已在采集过程中逐页上传
         // 这里只需要发送完成通知，不需要再次上传全部数据
         console.log('[Background] Stream mode: data already uploaded during collection');
+        
+        // [FIXED] 先发送100%的进度更新，然后再发送完成消息
+        if (originTabId) {
+          try {
+            chrome.tabs.sendMessage(originTabId, {
+              type: 'COLLECTION_PROGRESS',
+              progress: 100,
+              totalReviews: reviews.length,
+              message: `采集完成！共 ${reviews.length} 条评论`
+            }).catch((error) => {
+              if (!error.message.includes('Receiving end') && !error.message.includes('Could not establish')) {
+                console.warn('[Background] Error sending final progress:', error.message);
+              }
+            });
+          } catch (e) {
+            console.warn('[Background] Error sending final progress:', e.message);
+          }
+        }
         
         // 直接发送完成通知（数据已经流式上传完毕）
         if (originTabId) {
@@ -2476,7 +2645,8 @@ async function collectReviewsWithTabAuto(asin, stars, pagesPerStar, mediaType, s
         // 进度更新
         const starIndex = stars.indexOf(star);
         const starProgress = page / pagesPerStar;
-        const totalProgress = Math.min(Math.round(((starIndex + starProgress) / stars.length) * 100), 99);
+        // [FIXED] 移除99%限制，允许进度正常达到100%
+        const totalProgress = Math.min(Math.round(((starIndex + starProgress) / stars.length) * 100), 100);
         
         sendProgress({
           star,
