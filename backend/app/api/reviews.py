@@ -1222,6 +1222,17 @@ async def clear_and_reanalyze(
     
     await db.commit()
     
+    # 清理 Redis 中的 label_cache（避免主题提取使用旧缓存）
+    try:
+        from app.core.redis import get_redis
+        redis = get_redis()
+        cache_key = f"label_cache:{product_id}"
+        redis.delete(cache_key)
+        cleared["redis_cache"] = cache_key
+        logger.info(f"[清空重分析] Redis 缓存已清理: {cache_key}")
+    except Exception as cache_err:
+        logger.warning(f"[清空重分析] 清理 Redis 缓存失败: {cache_err}")
+    
     logger.info(f"[清空重分析] 清空完成: {cleared}")
     
     # ==================== 创建新任务并触发分析 ====================
@@ -1372,6 +1383,16 @@ async def batch_clear_and_reanalyze(
             await db.execute(delete(Task).where(Task.product_id == product_id))
             
             await db.commit()
+            
+            # 3. 清理 Redis 中的 label_cache（避免主题提取使用旧缓存）
+            try:
+                from app.core.redis import get_redis
+                redis = get_redis()
+                cache_key = f"label_cache:{product_id}"
+                redis.delete(cache_key)
+                logger.info(f"[批量清空] {asin} Redis 缓存已清理: {cache_key}")
+            except Exception as cache_err:
+                logger.warning(f"[批量清空] {asin} 清理 Redis 缓存失败: {cache_err}")
             
             # 根据 reanalyze 参数决定是否触发重新分析
             if reanalyze:
