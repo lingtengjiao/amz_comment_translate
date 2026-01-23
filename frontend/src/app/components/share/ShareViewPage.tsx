@@ -76,7 +76,8 @@ function generateMetaTags(
       // 评论详情：标题简洁，描述不重复标题信息
       const data = resourceData.data as any;
       const reviews = data?.reviews || [];
-      const reviewCount = reviews.length || data?.stats?.total_reviews || 0;
+      // 优先使用stats中的总评论数（完整统计），而非预览评论数量
+      const reviewCount = data?.stats?.total_reviews || reviews.length || 0;
       // 标题：产品标题截断到30字符（留出" - {数量}条评论分析 - 洞察大王"的空间）
       const truncatedForTitle = truncateText(baseTitle, 30);
       const title = `${truncatedForTitle} - ${reviewCount}条评论分析 - 洞察大王`;

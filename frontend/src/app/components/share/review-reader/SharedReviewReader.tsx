@@ -446,7 +446,7 @@ export function SharedReviewReader({ data, token, onDataRefresh }: SharedReviewR
               <div className="flex items-center gap-1.5 bg-amber-50 px-3 py-1.5 rounded-full">
                 <Star className="h-4 w-4 text-amber-500 fill-amber-500" />
                 <span className="text-lg font-bold text-amber-700">{product.average_rating.toFixed(1)}</span>
-                <span className="text-xs text-amber-600">({reviews.length})</span>
+                <span className="text-xs text-amber-600">({stats?.total_reviews || product?.review_count || reviews.length})</span>
               </div>
             )}
             <div className="flex items-center gap-2 text-sm font-medium">
