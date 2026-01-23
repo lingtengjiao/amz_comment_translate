@@ -583,7 +583,7 @@ export function SharedReviewReader({ data, token, onDataRefresh }: SharedReviewR
                           )}
                         </div>
                         <h4 className="text-sm font-bold text-gray-900 mb-1.5">{persona.title || `类型${i + 1}`}</h4>
-                        <p className="text-xs text-gray-600 leading-relaxed mb-2 line-clamp-2">{persona.summary}</p>
+                        <p className="text-xs text-gray-600 leading-relaxed mb-2 line-clamp-3">{persona.summary}</p>
                         {Object.keys(pd).length > 0 && (
                           <div className="flex flex-wrap gap-1 pt-2 border-t border-gray-100">
                             {pd.buyer && <span className="px-1.5 py-0.5 bg-amber-50 text-amber-700 rounded text-[10px]">{pd.buyer}</span>}
