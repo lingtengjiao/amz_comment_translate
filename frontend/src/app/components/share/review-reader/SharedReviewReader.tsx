@@ -104,6 +104,19 @@ export function SharedReviewReader({ data, token, onDataRefresh }: SharedReviewR
     }
   }, [activeTab, hasLoadedReviews, loadingReviews]);
 
+  // 🚀 打开5W标签弹窗时，自动加载完整评论（确保弹窗数据完整）
+  useEffect(() => {
+    if (selectedLabel && selectedLabel.reviewIds?.length > 0 && !hasLoadedReviews && !loadingReviews) {
+      // 检查是否有 review_ids 不在当前 displayReviews 中
+      const currentIds = new Set(reviews.map((r: any) => r.id));
+      const missingIds = selectedLabel.reviewIds.filter((id: string) => !currentIds.has(id));
+      if (missingIds.length > 0) {
+        loadAllReviews();
+      }
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedLabel]);
+
   // 检查数据变化
   const checkDataChanges = async () => {
     setDataChangeCheck({ has_changes: false, checking: true, message: '正在检查数据变化...' });
