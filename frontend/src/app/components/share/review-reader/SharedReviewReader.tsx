@@ -427,76 +427,76 @@ export function SharedReviewReader({ data, token, onDataRefresh }: SharedReviewR
     <div className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-blue-50/30">
       {/* 顶部导航 */}
       <header className="sticky top-0 z-50 bg-white/80 backdrop-blur-lg border-b border-gray-200/50 shadow-sm">
-        <div className="max-w-7xl mx-auto px-4 h-14 flex items-center justify-between">
-          <div className="flex items-center gap-4">
+        <div className="max-w-7xl mx-auto px-4 py-2 sm:py-0 sm:h-14 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 sm:gap-0">
+          <div className="flex items-center gap-2 sm:gap-4 w-full sm:w-auto">
             <div className="flex items-center gap-2">
-              <EyeIcon className="w-8 h-8" withBackground />
-              <span className="text-lg font-bold bg-gradient-to-r from-gray-900 to-gray-600 bg-clip-text text-transparent">洞察大王分析报告</span>
+              <EyeIcon className="w-6 h-6 sm:w-8 sm:h-8" withBackground />
+              <span className="text-base sm:text-lg font-bold bg-gradient-to-r from-gray-900 to-gray-600 bg-clip-text text-transparent">洞察大王分析报告</span>
             </div>
-            <div className="flex bg-gray-100 rounded-xl p-1 ml-4">
+            <div className="flex bg-gray-100 rounded-xl p-1 ml-auto sm:ml-4">
               {[{ k: 'overview', l: '数据总览' }, { k: 'reviews', l: '评论明细' }].map(t => (
                 <button key={t.k} onClick={() => setActiveTab(t.k as TabType)}
-                  className={`px-4 py-1.5 text-sm font-medium rounded-lg transition-all ${activeTab === t.k ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>{t.l}</button>
+                  className={`px-3 sm:px-4 py-1.5 text-xs sm:text-sm font-medium rounded-lg transition-all ${activeTab === t.k ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>{t.l}</button>
               ))}
             </div>
           </div>
           
-          <div className="flex items-center gap-4">
+          <div className="flex items-center gap-2 sm:gap-4 w-full sm:w-auto">
             {product?.average_rating && (
-              <div className="flex items-center gap-1.5 bg-amber-50 px-3 py-1.5 rounded-full">
-                <Star className="h-4 w-4 text-amber-500 fill-amber-500" />
-                <span className="text-lg font-bold text-amber-700">{product.average_rating.toFixed(1)}</span>
-                <span className="text-xs text-amber-600">({stats?.total_reviews || product?.review_count || reviews.length})</span>
+              <div className="flex items-center gap-1 sm:gap-1.5 bg-amber-50 px-2 sm:px-3 py-1 sm:py-1.5 rounded-full">
+                <Star className="h-3 sm:h-4 w-3 sm:w-4 text-amber-500 fill-amber-500" />
+                <span className="text-base sm:text-lg font-bold text-amber-700">{product.average_rating.toFixed(1)}</span>
+                <span className="text-[10px] sm:text-xs text-amber-600">({stats?.total_reviews || product?.review_count || reviews.length})</span>
               </div>
             )}
-            <div className="flex items-center gap-2 text-sm font-medium">
-              <span className="px-2 py-1 bg-emerald-50 text-emerald-700 rounded-full">{stats?.sentiment_distribution?.positive || 0}正</span>
-              <span className="px-2 py-1 bg-gray-100 text-gray-600 rounded-full">{stats?.sentiment_distribution?.neutral || 0}中</span>
-              <span className="px-2 py-1 bg-rose-50 text-rose-700 rounded-full">{stats?.sentiment_distribution?.negative || 0}负</span>
+            <div className="flex items-center gap-1 sm:gap-2 text-xs sm:text-sm font-medium">
+              <span className="px-1.5 sm:px-2 py-0.5 sm:py-1 bg-emerald-50 text-emerald-700 rounded-full">{stats?.sentiment_distribution?.positive || 0}正</span>
+              <span className="px-1.5 sm:px-2 py-0.5 sm:py-1 bg-gray-100 text-gray-600 rounded-full">{stats?.sentiment_distribution?.neutral || 0}中</span>
+              <span className="px-1.5 sm:px-2 py-0.5 sm:py-1 bg-rose-50 text-rose-700 rounded-full">{stats?.sentiment_distribution?.negative || 0}负</span>
             </div>
           </div>
         </div>
         
         {product && (
-          <div className="max-w-7xl mx-auto px-4 py-2 border-t border-gray-100/50 flex items-center gap-3">
-            {product.image_url ? <img src={product.image_url} alt="" className="w-10 h-10 object-contain rounded-lg border border-gray-200 bg-white" />
-              : <div className="w-10 h-10 bg-gray-100 rounded-lg flex items-center justify-center"><Package className="h-5 w-5 text-gray-400" /></div>}
+          <div className="max-w-7xl mx-auto px-4 py-2 border-t border-gray-100/50 flex items-center gap-2 sm:gap-3">
+            {product.image_url ? <img src={product.image_url} alt="" className="w-8 h-8 sm:w-10 sm:h-10 object-contain rounded-lg border border-gray-200 bg-white flex-shrink-0" />
+              : <div className="w-8 h-8 sm:w-10 sm:h-10 bg-gray-100 rounded-lg flex items-center justify-center flex-shrink-0"><Package className="h-4 w-4 sm:h-5 sm:w-5 text-gray-400" /></div>}
             <div className="flex-1 min-w-0">
-              <div className="flex items-center gap-2 text-xs mb-0.5">
-                <span className="px-1.5 py-0.5 bg-gray-800 text-white rounded text-[10px] font-mono">{product.asin}</span>
-                <a href={`https://amazon.com/dp/${product.asin}`} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline flex items-center gap-0.5"><ExternalLink className="h-3 w-3" />Amazon</a>
+              <div className="flex items-center gap-1.5 sm:gap-2 text-xs mb-0.5">
+                <span className="px-1 sm:px-1.5 py-0.5 bg-gray-800 text-white rounded text-[9px] sm:text-[10px] font-mono">{product.asin}</span>
+                <a href={`https://amazon.com/dp/${product.asin}`} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline flex items-center gap-0.5"><ExternalLink className="h-2.5 sm:h-3 w-2.5 sm:w-3" />Amazon</a>
               </div>
-              <p className="text-sm text-gray-700 truncate">{product.title}</p>
+              <p className="text-xs sm:text-sm text-gray-700 truncate">{product.title}</p>
             </div>
           </div>
         )}
       </header>
 
-      <main className={activeTab === 'overview' ? 'max-w-7xl mx-auto px-4 py-6' : 'px-4 py-4 overflow-hidden h-[calc(100vh-120px)]'}>
+      <main className={activeTab === 'overview' ? 'max-w-7xl mx-auto px-3 sm:px-4 py-4 sm:py-6' : 'px-3 sm:px-4 py-3 sm:py-4 overflow-hidden h-[calc(100vh-120px)]'}>
         {activeTab === 'overview' ? (
-          <div className="space-y-6">
+          <div className="space-y-4 sm:space-y-6">
             {/* AI分析生成入口 */}
             <section className="bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500 rounded-2xl p-[1px]">
-              <div className="bg-gradient-to-r from-indigo-50/90 via-purple-50/90 to-pink-50/90 backdrop-blur rounded-2xl p-4">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 bg-gradient-to-br from-indigo-500 to-purple-600 rounded-xl flex items-center justify-center shadow-lg shadow-indigo-200">
-                      <Sparkles className="h-5 w-5 text-white" />
+              <div className="bg-gradient-to-r from-indigo-50/90 via-purple-50/90 to-pink-50/90 backdrop-blur rounded-2xl p-3 sm:p-4">
+                <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 sm:gap-0">
+                  <div className="flex items-center gap-2 sm:gap-3">
+                    <div className="w-8 h-8 sm:w-10 sm:h-10 bg-gradient-to-br from-indigo-500 to-purple-600 rounded-xl flex items-center justify-center shadow-lg shadow-indigo-200 flex-shrink-0">
+                      <Sparkles className="h-4 w-4 sm:h-5 sm:w-5 text-white" />
                     </div>
                     <div>
-                      <h3 className="text-sm font-bold text-gray-900">AI 智能分析</h3>
-                      <p className="text-xs text-gray-500">{hasAISummaries ? '已生成深度分析报告' : '一键生成深度分析报告'}</p>
+                      <h3 className="text-xs sm:text-sm font-bold text-gray-900">AI 智能分析</h3>
+                      <p className="text-[10px] sm:text-xs text-gray-500">{hasAISummaries ? '已生成深度分析报告' : '一键生成深度分析报告'}</p>
                     </div>
                   </div>
-                  <div className="flex items-center gap-3">
-                    {generateStatus === 'loading' && <span className="text-xs text-indigo-600 flex items-center gap-1"><Loader2 className="h-3 w-3 animate-spin" />{generateMessage}</span>}
-                    {generateStatus === 'success' && <span className="text-xs text-emerald-600 flex items-center gap-1"><CheckCircle2 className="h-3 w-3" />{generateMessage}</span>}
-                    {generateStatus === 'error' && <span className="text-xs text-rose-600">{generateMessage}</span>}
+                  <div className="flex items-center gap-2 sm:gap-3 w-full sm:w-auto">
+                    {generateStatus === 'loading' && <span className="text-[10px] sm:text-xs text-indigo-600 flex items-center gap-1 flex-1 sm:flex-none"><Loader2 className="h-3 w-3 animate-spin flex-shrink-0" /><span className="truncate">{generateMessage}</span></span>}
+                    {generateStatus === 'success' && <span className="text-[10px] sm:text-xs text-emerald-600 flex items-center gap-1 flex-1 sm:flex-none"><CheckCircle2 className="h-3 w-3 flex-shrink-0" /><span className="truncate">{generateMessage}</span></span>}
+                    {generateStatus === 'error' && <span className="text-[10px] sm:text-xs text-rose-600 flex-1 sm:flex-none truncate">{generateMessage}</span>}
                     <button onClick={handleGenerateAI} disabled={generateStatus === 'loading'}
-                      className={`px-5 py-2.5 rounded-xl font-medium text-sm transition-all flex items-center gap-2 shadow-lg ${
+                      className={`px-3 sm:px-5 py-2 sm:py-2.5 rounded-xl font-medium text-xs sm:text-sm transition-all flex items-center gap-1.5 sm:gap-2 shadow-lg whitespace-nowrap ${
                         hasAISummaries ? 'bg-white border border-gray-200 text-gray-700 hover:bg-gray-50 shadow-gray-100' : 'bg-gradient-to-r from-indigo-600 to-purple-600 text-white hover:from-indigo-700 hover:to-purple-700 shadow-indigo-200'
                       } ${generateStatus === 'loading' ? 'opacity-50' : ''}`}>
-                      {generateStatus === 'loading' ? <Loader2 className="h-4 w-4 animate-spin" /> : hasAISummaries ? <RefreshCw className="h-4 w-4" /> : <Sparkles className="h-4 w-4" />}
+                      {generateStatus === 'loading' ? <Loader2 className="h-3 w-3 sm:h-4 sm:w-4 animate-spin" /> : hasAISummaries ? <RefreshCw className="h-3 w-3 sm:h-4 sm:w-4" /> : <Sparkles className="h-3 w-3 sm:h-4 sm:w-4" />}
                       {hasAISummaries ? '重新生成' : '生成分析'}
                     </button>
                   </div>
@@ -506,10 +506,10 @@ export function SharedReviewReader({ data, token, onDataRefresh }: SharedReviewR
 
             {/* 一句话总结 - 结构化展示 */}
             {overallSummary && (
-              <section className="bg-white rounded-2xl border border-gray-200 p-6 shadow-sm">
-                <h3 className="text-base font-bold text-gray-900 mb-4 flex items-center gap-2">
-                  <div className="w-6 h-6 bg-gradient-to-br from-amber-400 to-orange-500 rounded-lg flex items-center justify-center">
-                    <Zap className="h-3.5 w-3.5 text-white" />
+              <section className="bg-white rounded-2xl border border-gray-200 p-4 sm:p-6 shadow-sm">
+                <h3 className="text-sm sm:text-base font-bold text-gray-900 mb-3 sm:mb-4 flex items-center gap-2">
+                  <div className="w-5 h-5 sm:w-6 sm:h-6 bg-gradient-to-br from-amber-400 to-orange-500 rounded-lg flex items-center justify-center">
+                    <Zap className="h-3 w-3 sm:h-3.5 sm:w-3.5 text-white" />
                   </div>
                   这款产品怎么样？
                 </h3>
@@ -518,35 +518,35 @@ export function SharedReviewReader({ data, token, onDataRefresh }: SharedReviewR
                   const structured = overallSummary.key_points?.find((p: any) => p.structured)?.structured;
                   if (structured && !structured.raw) {
                     return (
-                      <div className="grid grid-cols-2 gap-4">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
                         {structured.target_users && (
-                          <div className="bg-amber-50 rounded-xl p-3 border-l-3 border-amber-400">
-                            <span className="text-xs font-bold text-amber-600 block mb-1">用户群体</span>
-                            <p className="text-sm text-gray-700">{structured.target_users}</p>
+                          <div className="bg-amber-50 rounded-xl p-2.5 sm:p-3 border-l-3 border-amber-400">
+                            <span className="text-[10px] sm:text-xs font-bold text-amber-600 block mb-1">用户群体</span>
+                            <p className="text-xs sm:text-sm text-gray-700 leading-relaxed">{structured.target_users}</p>
                           </div>
                         )}
                         {structured.usage_scenario && (
-                          <div className="bg-cyan-50 rounded-xl p-3 border-l-3 border-cyan-400">
-                            <span className="text-xs font-bold text-cyan-600 block mb-1">使用场景</span>
-                            <p className="text-sm text-gray-700">{structured.usage_scenario}</p>
+                          <div className="bg-cyan-50 rounded-xl p-2.5 sm:p-3 border-l-3 border-cyan-400">
+                            <span className="text-[10px] sm:text-xs font-bold text-cyan-600 block mb-1">使用场景</span>
+                            <p className="text-xs sm:text-sm text-gray-700 leading-relaxed">{structured.usage_scenario}</p>
                           </div>
                         )}
                         {structured.main_pros && (
-                          <div className="bg-emerald-50 rounded-xl p-3 border-l-3 border-emerald-400">
-                            <span className="text-xs font-bold text-emerald-600 block mb-1">主要优势</span>
-                            <p className="text-sm text-gray-700">{Array.isArray(structured.main_pros) ? structured.main_pros.join('；') : structured.main_pros}</p>
+                          <div className="bg-emerald-50 rounded-xl p-2.5 sm:p-3 border-l-3 border-emerald-400">
+                            <span className="text-[10px] sm:text-xs font-bold text-emerald-600 block mb-1">主要优势</span>
+                            <p className="text-xs sm:text-sm text-gray-700 leading-relaxed">{Array.isArray(structured.main_pros) ? structured.main_pros.join('；') : structured.main_pros}</p>
                           </div>
                         )}
                         {structured.main_cons && (
-                          <div className="bg-rose-50 rounded-xl p-3 border-l-3 border-rose-400">
-                            <span className="text-xs font-bold text-rose-600 block mb-1">主要问题</span>
-                            <p className="text-sm text-gray-700">{Array.isArray(structured.main_cons) ? structured.main_cons.join('；') : structured.main_cons}</p>
+                          <div className="bg-rose-50 rounded-xl p-2.5 sm:p-3 border-l-3 border-rose-400">
+                            <span className="text-[10px] sm:text-xs font-bold text-rose-600 block mb-1">主要问题</span>
+                            <p className="text-xs sm:text-sm text-gray-700 leading-relaxed">{Array.isArray(structured.main_cons) ? structured.main_cons.join('；') : structured.main_cons}</p>
                           </div>
                         )}
                         {structured.recommendation && (
-                          <div className="col-span-2 bg-blue-50 rounded-xl p-3 border-l-3 border-blue-400">
-                            <span className="text-xs font-bold text-blue-600 block mb-1">改进建议</span>
-                            <p className="text-sm text-gray-700">{structured.recommendation}</p>
+                          <div className="sm:col-span-2 bg-blue-50 rounded-xl p-2.5 sm:p-3 border-l-3 border-blue-400">
+                            <span className="text-[10px] sm:text-xs font-bold text-blue-600 block mb-1">改进建议</span>
+                            <p className="text-xs sm:text-sm text-gray-700 leading-relaxed">{structured.recommendation}</p>
                           </div>
                         )}
                       </div>
@@ -567,7 +567,7 @@ export function SharedReviewReader({ data, token, onDataRefresh }: SharedReviewR
                   </div>
                   消费者原型
                 </h2>
-                <div className="grid grid-cols-5 gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-3">
                   {consumerPersonas.map((persona: any, i: number) => {
                     const RankIcon = rankIcons[i] || Award;
                     const rankColors = ['from-amber-400 to-orange-500', 'from-gray-300 to-gray-400', 'from-amber-600 to-amber-700'];
@@ -609,7 +609,7 @@ export function SharedReviewReader({ data, token, onDataRefresh }: SharedReviewR
                 </div>
                 用户画像 · 5W分析
               </h2>
-              <div className="grid grid-cols-6 gap-3 mb-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-3 mb-4">
                 {themeConfig.map(({ key, label, sub, icon: Icon, color, bg }) => {
                   const items = getLabels(key);
                   const total = items.reduce((s: number, x: any) => s + (x.count || 0), 0);
@@ -709,13 +709,15 @@ export function SharedReviewReader({ data, token, onDataRefresh }: SharedReviewR
 
             {/* 大家都在说什么 */}
             <section>
-              <h2 className="text-base font-bold text-gray-900 mb-4 flex items-center gap-2">
-                <div className="w-6 h-6 bg-gradient-to-br from-emerald-500 to-teal-600 rounded-lg flex items-center justify-center">
-                  <ThumbsUp className="h-3.5 w-3.5 text-white" />
+              <h2 className="text-sm sm:text-base font-bold text-gray-900 mb-3 sm:mb-4 flex items-center gap-2">
+                <div className="w-5 h-5 sm:w-6 sm:h-6 bg-gradient-to-br from-emerald-500 to-teal-600 rounded-lg flex items-center justify-center">
+                  <ThumbsUp className="h-3 w-3 sm:h-3.5 sm:w-3.5 text-white" />
                 </div>
                 大家都在说什么
               </h2>
-              <div className="bg-white rounded-2xl border border-gray-200 overflow-hidden shadow-sm">
+              
+              {/* 桌面端表格 */}
+              <div className="hidden lg:block bg-white rounded-2xl border border-gray-200 overflow-hidden shadow-sm">
                 <div className="overflow-x-auto">
                   <table className="w-full">
                     <thead>
@@ -777,10 +779,55 @@ export function SharedReviewReader({ data, token, onDataRefresh }: SharedReviewR
                   </table>
                 </div>
               </div>
+
+              {/* 移动端卡片 */}
+              <div className="lg:hidden space-y-3">
+                {Object.entries(dimGroups).map(([dim, { s, w, u }], idx) => {
+                  const dimSummary = dimensionSummaries[dim];
+                  const structured = dimSummary?.key_points?.find((p: any) => p.structured)?.structured;
+                  const colors = ['border-l-blue-500', 'border-l-violet-500', 'border-l-emerald-500', 'border-l-amber-500', 'border-l-rose-500', 'border-l-cyan-500'];
+                  return (
+                    <div key={dim}
+                      onClick={() => setDimensionModal({ dim, summary: dimSummary, s, w, u })}
+                      className={`bg-white rounded-xl border border-gray-200 border-l-4 ${colors[idx % colors.length]} overflow-hidden shadow-sm active:shadow-md transition-all`}>
+                      <div className="p-3">
+                        <div className="flex items-center justify-between mb-2">
+                          <span className="text-sm font-bold text-gray-800">{dim}</span>
+                          <div className="flex items-center gap-1.5">
+                            <span className="inline-flex items-center justify-center min-w-[28px] h-6 bg-gradient-to-br from-emerald-50 to-emerald-100 text-emerald-700 rounded-lg text-xs font-bold">
+                              {s.length}
+                            </span>
+                            <span className="inline-flex items-center justify-center min-w-[28px] h-6 bg-gradient-to-br from-rose-50 to-rose-100 text-rose-700 rounded-lg text-xs font-bold">
+                              {w.length}
+                            </span>
+                            <span className="inline-flex items-center justify-center min-w-[28px] h-6 bg-gradient-to-br from-blue-50 to-blue-100 text-blue-700 rounded-lg text-xs font-bold">
+                              {u.length}
+                            </span>
+                          </div>
+                        </div>
+                        {structured && !structured.raw ? (
+                          <div className="space-y-1">
+                            {structured.overall && <p className="text-xs text-gray-700 leading-relaxed">{structured.overall}</p>}
+                            <div className="flex flex-wrap gap-1.5 text-[10px]">
+                              {structured.pros_highlight && <span className="text-emerald-600 flex items-center gap-0.5"><ThumbsUp className="h-2.5 w-2.5" />{structured.pros_highlight}</span>}
+                              {structured.cons_highlight && <span className="text-rose-600 flex items-center gap-0.5"><ThumbsDown className="h-2.5 w-2.5" />{structured.cons_highlight}</span>}
+                              {structured.suggestion && <span className="text-blue-600 flex items-center gap-0.5"><Lightbulb className="h-2.5 w-2.5" />{structured.suggestion}</span>}
+                            </div>
+                          </div>
+                        ) : (
+                          <p className="text-xs text-gray-600 leading-relaxed line-clamp-3">
+                            {dimSummary?.summary || '点击查看详情'}
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
             </section>
 
             {/* 真实感受 + 使用场景 - 卡片形式，点击弹窗 */}
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
               {/* 真实感受 */}
               <section 
                 onClick={() => setEmotionModal(true)}
@@ -862,29 +909,31 @@ export function SharedReviewReader({ data, token, onDataRefresh }: SharedReviewR
           /* 评论明细 - 多视角切换 */
           <div className="w-full h-full flex flex-col overflow-hidden">
             {/* 视角切换Tab和搜索 */}
-            <div className="mb-4 shrink-0 flex items-center gap-4 flex-wrap">
-              <div className="flex items-center gap-1 bg-gray-100 rounded-xl p-1">
-                {[
-                  { key: 'sentiment', label: '情感', icon: Heart },
-                  { key: 'rating', label: '星级', icon: Star },
-                  { key: 'buyer', label: 'Buyer', sub: '购买者' },
-                  { key: 'user', label: 'User', sub: '使用者' },
-                  { key: 'where', label: 'Where', sub: '地点' },
-                  { key: 'when', label: 'When', sub: '时机' },
-                  { key: 'why', label: 'Why', sub: '动机' },
-                  { key: 'what', label: 'What', sub: '用途' },
-                ].map(v => (
-                  <button key={v.key} onClick={() => setReviewViewMode(v.key as any)}
-                    className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-all ${reviewViewMode === v.key ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>
-                    {v.label}
-                    {v.sub && <span className="text-[10px] text-gray-400 ml-0.5 hidden sm:inline">{v.sub}</span>}
-                  </button>
-                ))}
+            <div className="mb-3 sm:mb-4 shrink-0 flex flex-col sm:flex-row items-stretch sm:items-center gap-2 sm:gap-4">
+              <div className="overflow-x-auto -mx-3 sm:mx-0 px-3 sm:px-0">
+                <div className="flex items-center gap-1 bg-gray-100 rounded-xl p-1 min-w-max">
+                  {[
+                    { key: 'sentiment', label: '情感', icon: Heart },
+                    { key: 'rating', label: '星级', icon: Star },
+                    { key: 'buyer', label: 'Buyer', sub: '购买者' },
+                    { key: 'user', label: 'User', sub: '使用者' },
+                    { key: 'where', label: 'Where', sub: '地点' },
+                    { key: 'when', label: 'When', sub: '时机' },
+                    { key: 'why', label: 'Why', sub: '动机' },
+                    { key: 'what', label: 'What', sub: '用途' },
+                  ].map(v => (
+                    <button key={v.key} onClick={() => setReviewViewMode(v.key as any)}
+                      className={`px-2 sm:px-3 py-1.5 text-[10px] sm:text-xs font-medium rounded-lg transition-all whitespace-nowrap ${reviewViewMode === v.key ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>
+                      {v.label}
+                      {v.sub && <span className="text-[9px] sm:text-[10px] text-gray-400 ml-0.5 hidden sm:inline">{v.sub}</span>}
+                    </button>
+                  ))}
+                </div>
               </div>
-              <div className="relative flex-1 max-w-md">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
+              <div className="relative flex-1 sm:max-w-md">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 sm:h-4 sm:w-4 text-gray-400" />
                 <input type="text" placeholder="搜索评论..." value={searchQuery} onChange={e => setSearchQuery(e.target.value)}
-                  className="w-full pl-10 pr-4 py-2.5 border border-gray-200 rounded-xl text-sm bg-white shadow-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent" />
+                  className="w-full pl-9 sm:pl-10 pr-4 py-2 sm:py-2.5 border border-gray-200 rounded-xl text-xs sm:text-sm bg-white shadow-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent" />
               </div>
             </div>
             
@@ -901,64 +950,68 @@ export function SharedReviewReader({ data, token, onDataRefresh }: SharedReviewR
               </div>
             )}
 
-            {/* 情感视角 - 3列 */}
+            {/* 情感视角 - 横向滚动 */}
             {!loadingReviews && reviewViewMode === 'sentiment' && (
-              <div className="flex gap-4 flex-1 min-h-0">
-                {(['positive', 'neutral', 'negative'] as const).map(s => {
-                  const cfg = { 
-                    positive: { t: '正面评价', gradient: 'from-emerald-500 to-teal-600' }, 
-                    neutral: { t: '中性评价', gradient: 'from-gray-400 to-gray-500' }, 
-                    negative: { t: '负面评价', gradient: 'from-rose-500 to-pink-600' } 
-                  }[s];
-                  const list = reviewsBySentiment[s];
-                  return (
-                    <div key={s} className="flex-1 flex flex-col min-w-0 bg-white rounded-2xl border border-gray-200 overflow-hidden shadow-sm">
-                      <div className={`px-4 py-3 bg-gradient-to-r ${cfg.gradient} flex items-center gap-2 shrink-0`}>
-                        <span className="text-sm font-bold text-white">{cfg.t}</span>
-                        <span className="text-xs text-white/80 bg-white/20 px-2 py-0.5 rounded-full">{list.length}</span>
+              <div className="flex-1 overflow-x-auto -mx-3 sm:mx-0 px-3 sm:px-0">
+                <div className="flex gap-3 sm:gap-4 h-full min-w-max sm:min-w-0">
+                  {(['positive', 'neutral', 'negative'] as const).map(s => {
+                    const cfg = { 
+                      positive: { t: '正面评价', gradient: 'from-emerald-500 to-teal-600' }, 
+                      neutral: { t: '中性评价', gradient: 'from-gray-400 to-gray-500' }, 
+                      negative: { t: '负面评价', gradient: 'from-rose-500 to-pink-600' } 
+                    }[s];
+                    const list = reviewsBySentiment[s];
+                    return (
+                      <div key={s} className="flex flex-col w-[280px] sm:flex-1 sm:w-auto sm:min-w-0 bg-white rounded-xl sm:rounded-2xl border border-gray-200 overflow-hidden shadow-sm">
+                        <div className={`px-3 sm:px-4 py-2 sm:py-3 bg-gradient-to-r ${cfg.gradient} flex items-center gap-2 shrink-0`}>
+                          <span className="text-xs sm:text-sm font-bold text-white">{cfg.t}</span>
+                          <span className="text-[10px] sm:text-xs text-white/80 bg-white/20 px-1.5 sm:px-2 py-0.5 rounded-full">{list.length}</span>
+                        </div>
+                        <div className="flex-1 overflow-y-auto p-2 sm:p-3 space-y-2 max-h-[500px] sm:max-h-none">
+                          {list.map(r => <ReviewCard key={r.id} review={r} />)}
+                          {list.length === 0 && <p className="text-xs text-gray-400 text-center py-8">暂无评价</p>}
+                        </div>
                       </div>
-                      <div className="flex-1 overflow-y-auto p-3 space-y-2 min-h-0">
-                        {list.map(r => <ReviewCard key={r.id} review={r} />)}
-                        {list.length === 0 && <p className="text-xs text-gray-400 text-center py-8">暂无评价</p>}
-                      </div>
-                    </div>
-                  );
-                })}
+                    );
+                  })}
+                </div>
               </div>
             )}
 
-            {/* 星级视角 - 5列 */}
+            {/* 星级视角 - 横向滚动 */}
             {!loadingReviews && reviewViewMode === 'rating' && (
-              <div className="flex gap-3 flex-1 min-h-0">
-                {([5, 4, 3, 2, 1] as const).map(rating => {
-                  const list = reviewsByRating[rating];
-                  const colors = {
-                    5: 'from-emerald-500 to-green-600',
-                    4: 'from-lime-500 to-green-500',
-                    3: 'from-amber-400 to-yellow-500',
-                    2: 'from-orange-400 to-amber-500',
-                    1: 'from-rose-500 to-red-600',
-                  };
-                  return (
-                    <div key={rating} className="flex-1 flex flex-col min-w-0 bg-white rounded-2xl border border-gray-200 overflow-hidden shadow-sm">
-                      <div className={`px-3 py-2.5 bg-gradient-to-r ${colors[rating]} flex items-center justify-center gap-1.5 shrink-0`}>
-                        <span className="text-sm font-bold text-white">{rating}</span>
-                        <Star className="h-3.5 w-3.5 text-white fill-white" />
-                        <span className="text-xs text-white/80 bg-white/20 px-1.5 py-0.5 rounded-full ml-1">{list.length}</span>
+              <div className="flex-1 overflow-x-auto -mx-3 sm:mx-0 px-3 sm:px-0">
+                <div className="flex gap-3 h-full min-w-max sm:min-w-0">
+                  {([5, 4, 3, 2, 1] as const).map(rating => {
+                    const list = reviewsByRating[rating];
+                    const colors = {
+                      5: 'from-emerald-500 to-green-600',
+                      4: 'from-lime-500 to-green-500',
+                      3: 'from-amber-400 to-yellow-500',
+                      2: 'from-orange-400 to-amber-500',
+                      1: 'from-rose-500 to-red-600',
+                    };
+                    return (
+                      <div key={rating} className="flex flex-col w-[280px] sm:flex-1 sm:w-auto sm:min-w-0 bg-white rounded-xl sm:rounded-2xl border border-gray-200 overflow-hidden shadow-sm">
+                        <div className={`px-3 py-2 sm:py-2.5 bg-gradient-to-r ${colors[rating]} flex items-center justify-center gap-1.5 shrink-0`}>
+                          <span className="text-sm font-bold text-white">{rating}</span>
+                          <Star className="h-3.5 w-3.5 text-white fill-white" />
+                          <span className="text-xs text-white/80 bg-white/20 px-1.5 py-0.5 rounded-full ml-1">{list.length}</span>
+                        </div>
+                        <div className="flex-1 overflow-y-auto p-2 space-y-2 max-h-[500px] sm:max-h-none">
+                          {list.map(r => <ReviewCard key={r.id} review={r} />)}
+                          {list.length === 0 && <p className="text-xs text-gray-400 text-center py-8">暂无</p>}
+                        </div>
                       </div>
-                      <div className="flex-1 overflow-y-auto p-2 space-y-2 min-h-0">
-                        {list.map(r => <ReviewCard key={r.id} review={r} />)}
-                        {list.length === 0 && <p className="text-xs text-gray-400 text-center py-8">暂无</p>}
-                      </div>
-                    </div>
-                  );
-                })}
+                    );
+                  })}
+                </div>
               </div>
             )}
 
-            {/* 5W主题视角 - 按标签分组 */}
+            {/* 5W主题视角 - 按标签分组 横向滚动 */}
             {!loadingReviews && ['buyer', 'user', 'where', 'when', 'why', 'what'].includes(reviewViewMode) && (
-              <div className="flex-1 min-h-0 overflow-hidden">
+              <div className="flex-1 min-h-0 overflow-x-auto -mx-3 sm:mx-0 px-3 sm:px-0">
                 {(() => {
                   const themeKey = reviewViewMode as 'buyer' | 'user' | 'where' | 'when' | 'why' | 'what';
                   const labels = reviewsByTheme[themeKey] || [];
@@ -973,15 +1026,15 @@ export function SharedReviewReader({ data, token, onDataRefresh }: SharedReviewR
                   // 最多显示6列
                   const displayLabels = labels.slice(0, 6);
                   return (
-                    <div className="flex gap-3 h-full">
+                    <div className="flex gap-3 h-full min-w-max sm:min-w-0">
                       {displayLabels.map(({ label, reviews: revs }) => (
-                        <div key={label} className="flex-1 flex flex-col min-w-0 bg-white rounded-2xl border border-gray-200 overflow-hidden shadow-sm">
-                          <div className={`px-3 py-2.5 bg-gradient-to-r ${themeInfo?.bg} flex items-center gap-2 shrink-0`}>
-                            {themeInfo?.icon && <themeInfo.icon className="h-3.5 w-3.5 text-white" />}
+                        <div key={label} className="flex flex-col w-[280px] sm:flex-1 sm:w-auto sm:min-w-0 bg-white rounded-xl sm:rounded-2xl border border-gray-200 overflow-hidden shadow-sm">
+                          <div className={`px-3 py-2 sm:py-2.5 bg-gradient-to-r ${themeInfo?.bg} flex items-center gap-2 shrink-0`}>
+                            {themeInfo?.icon && <themeInfo.icon className="h-3 w-3 sm:h-3.5 sm:w-3.5 text-white" />}
                             <span className="text-xs font-bold text-white truncate">{label}</span>
                             <span className="text-[10px] text-white/80 bg-white/20 px-1.5 py-0.5 rounded-full ml-auto shrink-0">{revs.length}</span>
                           </div>
-                          <div className="flex-1 overflow-y-auto p-2 space-y-2 min-h-0">
+                          <div className="flex-1 overflow-y-auto p-2 space-y-2 max-h-[500px] sm:max-h-none">
                             {revs.map((r: any) => <ReviewCard key={r.id} review={r} />)}
                             {revs.length === 0 && <p className="text-xs text-gray-400 text-center py-4">暂无</p>}
                           </div>
@@ -989,7 +1042,7 @@ export function SharedReviewReader({ data, token, onDataRefresh }: SharedReviewR
                       ))}
                       {/* 如果标签超过6个，显示更多提示 */}
                       {labels.length > 6 && (
-                        <div className="flex-1 flex flex-col min-w-0 bg-gray-50 rounded-2xl border border-dashed border-gray-300 items-center justify-center">
+                        <div className="flex flex-col w-[280px] sm:flex-1 sm:w-auto sm:min-w-0 bg-gray-50 rounded-xl sm:rounded-2xl border border-dashed border-gray-300 items-center justify-center">
                           <p className="text-xs text-gray-500">还有 {labels.length - 6} 个标签</p>
                           <p className="text-[10px] text-gray-400 mt-1">使用搜索筛选</p>
                         </div>

@@ -325,50 +325,52 @@ export default function ShareViewPage() {
       <div className="min-h-screen bg-slate-50">
       {/* 分享页面顶部提示栏 - 固定在顶部 */}
       <div className="bg-gradient-to-r from-blue-600 to-indigo-600 text-white sticky top-0 z-50">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex items-center justify-between h-12">
-            <div className="flex items-center gap-3">
-              <Share2 className="h-4 w-4" />
-              <div className="flex items-center gap-1.5">
-                <Icon className="h-4 w-4" />
-                <span className="text-sm font-medium">{config?.label || '分享内容'}</span>
+        <div className="max-w-7xl mx-auto px-3 sm:px-4 lg:px-8">
+          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between py-2 sm:py-0 sm:h-12 gap-2 sm:gap-0">
+            <div className="flex items-center gap-2 sm:gap-3">
+              <Share2 className="h-3.5 w-3.5 sm:h-4 sm:w-4 flex-shrink-0" />
+              <div className="flex items-center gap-1 sm:gap-1.5">
+                <Icon className="h-3.5 w-3.5 sm:h-4 sm:w-4 flex-shrink-0" />
+                <span className="text-xs sm:text-sm font-medium">{config?.label || '分享内容'}</span>
               </div>
             </div>
-            <div className="flex items-center gap-4 text-sm text-blue-100">
-              <div className="flex items-center gap-1.5">
-                <Eye className="h-4 w-4" />
-                <span>{resourceData.view_count} 次查看</span>
+            <div className="flex items-center gap-2 sm:gap-4 text-xs sm:text-sm text-blue-100 flex-wrap">
+              <div className="flex items-center gap-1 sm:gap-1.5">
+                <Eye className="h-3 w-3 sm:h-4 sm:w-4 flex-shrink-0" />
+                <span className="whitespace-nowrap">{resourceData.view_count} 次</span>
               </div>
               {meta.created_at && (
-                <div className="flex items-center gap-1.5">
-                  <Clock className="h-4 w-4" />
-                  <span>分享于 {new Date(meta.created_at).toLocaleDateString('zh-CN')}</span>
+                <div className="flex items-center gap-1 sm:gap-1.5">
+                  <Clock className="h-3 w-3 sm:h-4 sm:w-4 flex-shrink-0" />
+                  <span className="whitespace-nowrap hidden sm:inline">分享于 {new Date(meta.created_at).toLocaleDateString('zh-CN')}</span>
+                  <span className="whitespace-nowrap sm:hidden">{new Date(meta.created_at).toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' })}</span>
                 </div>
               )}
               {/* 复制链接按钮 - 供二次分享 */}
               <button
                 onClick={handleCopyLink}
-                className="flex items-center gap-1.5 px-3 py-1 bg-white/10 rounded hover:bg-white/20 transition-colors"
+                className="flex items-center gap-1 sm:gap-1.5 px-2 sm:px-3 py-0.5 sm:py-1 bg-white/10 rounded hover:bg-white/20 transition-colors whitespace-nowrap"
                 title="复制链接分享给他人"
               >
                 {copied ? (
                   <>
-                    <Check className="h-3.5 w-3.5" />
-                    <span>已复制</span>
+                    <Check className="h-3 w-3 sm:h-3.5 sm:w-3.5 flex-shrink-0" />
+                    <span className="hidden sm:inline">已复制</span>
                   </>
                 ) : (
                   <>
-                    <Copy className="h-3.5 w-3.5" />
-                    <span>复制链接</span>
+                    <Copy className="h-3 w-3 sm:h-3.5 sm:w-3.5 flex-shrink-0" />
+                    <span className="hidden sm:inline">复制链接</span>
                   </>
                 )}
               </button>
               <Link
                 to="/login"
-                className="flex items-center gap-1 px-3 py-1 bg-white/10 rounded hover:bg-white/20 transition-colors"
+                className="flex items-center gap-1 px-2 sm:px-3 py-0.5 sm:py-1 bg-white/10 rounded hover:bg-white/20 transition-colors whitespace-nowrap"
               >
-                <ExternalLink className="h-3.5 w-3.5" />
-                <span>登录使用完整功能</span>
+                <ExternalLink className="h-3 w-3 sm:h-3.5 sm:w-3.5 flex-shrink-0" />
+                <span className="hidden sm:inline">登录使用完整功能</span>
+                <span className="sm:hidden">登录</span>
               </Link>
             </div>
           </div>
