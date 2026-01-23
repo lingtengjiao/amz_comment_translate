@@ -2847,6 +2847,23 @@ def task_full_auto_analysis(self, product_id: str, task_id: str):
         update_task_progress(4, TaskStatus.COMPLETED.value)
         logger.info(f"[全自动分析] ✅ 产品 {product_id} 全自动分析完成！（流式并行优化版）")
         
+        # 清理相关分享链接的缓存（使分享页面获取最新数据）
+        try:
+            from app.models.share_link import ShareLink
+            from app.core.redis import get_redis
+            share_links = db.query(ShareLink).filter(
+                ShareLink.product_id == product_id,
+                ShareLink.is_active == True
+            ).all()
+            if share_links:
+                redis = get_redis()
+                for link in share_links:
+                    cache_key = f"cache:share:data:{link.token}"
+                    redis.delete(cache_key)
+                    logger.info(f"[全自动分析] 已清理分享缓存: {cache_key}")
+        except Exception as cache_err:
+            logger.warning(f"[全自动分析] 清理分享缓存失败: {cache_err}")
+        
         return {
             "success": True,
             "product_id": product_id,
