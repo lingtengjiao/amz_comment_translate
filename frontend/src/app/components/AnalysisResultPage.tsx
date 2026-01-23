@@ -82,8 +82,8 @@ export default function AnalysisResultPage() {
     };
   }, []);
 
-  // 使用缓存加载分析项目（3分钟 TTL，但 processing 状态不缓存）
-  const { data: cachedProject, loading: cacheLoading, error: cacheError, refetch: refetchProject } = useSectionCache<AnalysisProject>(
+  // 🚀 优化：分离缓存加载和轮询逻辑，避免依赖循环
+  const { data: cachedProject, refetch: refetchProject } = useSectionCache<AnalysisProject>(
     projectId ? `analysis_project_${projectId}` : '',
     async () => {
       if (!projectId) throw new Error('项目 ID 无效');
@@ -92,7 +92,7 @@ export default function AnalysisResultPage() {
     { ttl: 3 * 60 * 1000 } // 3分钟缓存
   );
 
-  // 轮询逻辑：如果状态是 pending/processing，每 3 秒刷新一次
+  // 🚀 优化：独立的轮询逻辑，不依赖 cachedProject 避免循环
   useEffect(() => {
     if (!projectId) {
       setError('项目 ID 无效');
@@ -100,32 +100,59 @@ export default function AnalysisResultPage() {
       return;
     }
 
-    // 如果有缓存且已完成，直接使用缓存
-    if (cachedProject && (cachedProject.status === 'completed' || cachedProject.status === 'failed')) {
-      setProject(cachedProject);
-      setLoading(false);
-      return;
-    }
-
     let timer: NodeJS.Timeout;
     let isMounted = true;
+    let isPolling = false;
 
-    const fetchProject = async () => {
+    // 🚀 轮询函数：使用 status_only=true 减少数据传输
+    const pollStatus = async () => {
+      if (!isMounted || isPolling) return;
+      isPolling = true;
+      
       try {
-        const data = await getAnalysisProject(projectId);
+        // 🚀 使用 statusOnly=true，只获取状态字段
+        const statusData = await getAnalysisProject(projectId, true);
+        
+        if (!isMounted) return;
+        
+        // 更新状态（保留已有的完整数据）
+        setProject(prev => prev ? { ...prev, status: statusData.status, error_message: statusData.error_message } : statusData);
+        
+        // 如果已完成或失败，获取完整数据并停止轮询
+        if (statusData.status === 'completed' || statusData.status === 'failed') {
+          setLoading(false);
+          // 获取完整数据并更新缓存
+          const fullData = await getAnalysisProject(projectId, false);
+          if (isMounted) {
+            setProject(fullData);
+            refetchProject();
+          }
+        } else {
+          // 🚀 继续轮询，间隔3秒
+          timer = setTimeout(pollStatus, 3000);
+        }
+      } catch (err: any) {
+        if (!isMounted) return;
+        setError(err.message || '无法加载分析项目');
+        setLoading(false);
+      } finally {
+        isPolling = false;
+      }
+    };
+
+    // 初始加载：获取完整数据
+    const initialLoad = async () => {
+      try {
+        const data = await getAnalysisProject(projectId, false);
         
         if (!isMounted) return;
         
         setProject(data);
+        setLoading(false);
         
-        // 如果已完成或失败，停止加载，停止轮询
-        if (data.status === 'completed' || data.status === 'failed') {
-          setLoading(false);
-          // 更新缓存
-          refetchProject();
-        } else {
-          // 继续轮询
-          timer = setTimeout(fetchProject, 3000);
+        // 如果状态是 processing，开始轮询
+        if (data.status === 'processing' || data.status === 'pending') {
+          timer = setTimeout(pollStatus, 3000);
         }
       } catch (err: any) {
         if (!isMounted) return;
@@ -134,24 +161,27 @@ export default function AnalysisResultPage() {
       }
     };
 
-    // 如果有缓存数据，先使用缓存
-    if (cachedProject) {
+    // 如果有缓存且已完成，直接使用缓存
+    if (cachedProject && (cachedProject.status === 'completed' || cachedProject.status === 'failed')) {
       setProject(cachedProject);
       setLoading(false);
+    } else if (cachedProject) {
+      // 有缓存但未完成，使用缓存并开始轮询
+      setProject(cachedProject);
+      setLoading(false);
+      timer = setTimeout(pollStatus, 3000);
     } else {
+      // 无缓存，初始加载
       setLoading(true);
-    }
-
-    // 如果状态是 processing，开始轮询
-    if (cachedProject?.status === 'processing' || !cachedProject) {
-      fetchProject();
+      initialLoad();
     }
     
     return () => {
       isMounted = false;
       if (timer) clearTimeout(timer);
     };
-  }, [projectId, cachedProject, refetchProject]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectId]); // 🚀 只依赖 projectId，避免 cachedProject 变化触发重新轮询
 
   if (loading && !project) {
     return (

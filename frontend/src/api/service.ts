@@ -1072,9 +1072,16 @@ export async function getAnalysisProjects(params?: {
 
 /**
  * 获取分析项目详情
+ * @param projectId 项目ID
+ * @param statusOnly 🚀 轮询模式：只返回状态字段，不返回完整结果（减少网络传输）
  */
-export async function getAnalysisProject(projectId: string): Promise<AnalysisProject> {
-  const response = await fetch(`${API_BASE}/analysis/projects/${projectId}`);
+export async function getAnalysisProject(projectId: string, statusOnly = false): Promise<AnalysisProject> {
+  const params = new URLSearchParams();
+  if (statusOnly) {
+    params.append('status_only', 'true');
+  }
+  const url = `${API_BASE}/analysis/projects/${projectId}${params.toString() ? `?${params.toString()}` : ''}`;
+  const response = await fetch(url);
   if (!response.ok) {
     throw new ApiError(response.status, response.statusText);
   }

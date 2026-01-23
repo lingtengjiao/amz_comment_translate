@@ -233,10 +233,10 @@ export function initAnalytics() {
       endSession();
     });
     
-    // 定期发送心跳（每30秒）
+    // 🚀 定期发送心跳（每60秒，从30秒优化）
     setInterval(() => {
       sendHeartbeat();
-    }, 30000);
+    }, 60000);
     
     // 页面可见性变化时发送心跳
     document.addEventListener('visibilitychange', () => {

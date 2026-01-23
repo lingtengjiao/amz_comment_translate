@@ -149,6 +149,7 @@ export function SharedReviewReader({ data, token, onDataRefresh }: SharedReviewR
     }
   }, [activeTab]);
 
+  // 🚀 异步AI分析：启动任务后轮询状态，不阻塞用户操作
   const handleGenerateAI = async () => {
     if (generateStatus === 'loading') return;
     
@@ -161,24 +162,76 @@ export function SharedReviewReader({ data, token, onDataRefresh }: SharedReviewR
     }
     
     setGenerateStatus('loading');
-    setGenerateMessage('正在生成AI分析，预计需要1-3分钟...');
+    setGenerateMessage('正在启动AI分析任务...');
+    
     try {
+      // 🚀 Step 1: 启动异步任务
       const response = await fetch(`/api/v1/share/${token}/generate-summaries`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
       });
       if (!response.ok) {
         const err = await response.json();
-        throw new Error(err.detail || '生成失败');
+        throw new Error(err.detail || '启动任务失败');
       }
       const result = await response.json();
-      setGenerateStatus('success');
-      setGenerateMessage(result.message || 'AI分析生成完成');
-      // 重新检查数据变化状态
-      setTimeout(() => checkDataChanges(), 2000);
-      if (onDataRefresh) {
-        setTimeout(() => onDataRefresh(), 1000);
+      
+      if (!result.task_id) {
+        // 兼容旧版同步模式
+        setGenerateStatus('success');
+        setGenerateMessage(result.message || 'AI分析生成完成');
+        setTimeout(() => checkDataChanges(), 2000);
+        if (onDataRefresh) setTimeout(() => onDataRefresh(), 1000);
+        return;
       }
+      
+      // 🚀 Step 2: 轮询任务状态
+      setGenerateMessage('AI分析进行中，您可以继续浏览页面...');
+      const taskId = result.task_id;
+      let attempts = 0;
+      const maxAttempts = 90; // 最多轮询3分钟
+      const pollInterval = 2000; // 每2秒轮询一次
+      
+      const pollStatus = async () => {
+        attempts++;
+        try {
+          const statusResponse = await fetch(`/api/v1/share/${token}/generate-summaries/${taskId}`);
+          if (!statusResponse.ok) {
+            throw new Error('查询任务状态失败');
+          }
+          const statusResult = await statusResponse.json();
+          
+          if (statusResult.status === 'completed') {
+            setGenerateStatus('success');
+            setGenerateMessage(statusResult.message || 'AI分析生成完成');
+            setTimeout(() => checkDataChanges(), 1000);
+            if (onDataRefresh) setTimeout(() => onDataRefresh(), 500);
+            return;
+          } else if (statusResult.status === 'failed') {
+            setGenerateStatus('error');
+            setGenerateMessage(statusResult.message || 'AI分析失败');
+            return;
+          } else if (attempts < maxAttempts) {
+            // 继续轮询
+            setGenerateMessage(`AI分析进行中... (${Math.round(attempts * pollInterval / 1000)}秒)`);
+            setTimeout(pollStatus, pollInterval);
+          } else {
+            setGenerateStatus('error');
+            setGenerateMessage('分析超时，请稍后刷新页面查看结果');
+          }
+        } catch (err: any) {
+          if (attempts < maxAttempts) {
+            setTimeout(pollStatus, pollInterval);
+          } else {
+            setGenerateStatus('error');
+            setGenerateMessage('查询任务状态失败');
+          }
+        }
+      };
+      
+      // 开始轮询
+      setTimeout(pollStatus, pollInterval);
+      
     } catch (err: any) {
       setGenerateStatus('error');
       setGenerateMessage(err.message || '生成AI分析失败');

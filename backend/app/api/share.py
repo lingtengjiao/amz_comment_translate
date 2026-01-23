@@ -442,9 +442,11 @@ async def get_share_link(
 # ==========================================
 
 class GenerateSummariesResponse(BaseModel):
-    """生成AI总结响应"""
+    """生成AI总结响应（异步模式）"""
     success: bool
     message: str
+    task_id: Optional[str] = None  # 🚀 Celery 任务ID，用于轮询状态
+    status: Optional[str] = None  # 🚀 任务状态：pending/processing/completed/failed
     summary_counts: Optional[dict] = None
 
 
@@ -602,7 +604,7 @@ async def generate_dimension_summaries(
     db: AsyncSession = Depends(get_db)
 ):
     """
-    生成AI维度总结（公开）
+    🚀 生成AI维度总结（异步模式）
     
     通过分享链接token触发AI分析生成，包括：
     - 5W主题总结（buyer/user/where/when/why/what）
@@ -611,12 +613,11 @@ async def generate_dimension_summaries(
     - 消费者原型（3-5个）
     - 整体数据总结
     
-    注意：此操作可能需要1-3分钟完成。
-    注意：建议先调用 /check-data-changes 检查数据是否有变化。
+    🚀 优化：改为异步模式，立即返回任务ID，前端可轮询状态
     """
-    from app.services.dimension_summary_service import DimensionSummaryService
     from app.models import Product
     from sqlalchemy import select
+    from app.worker import task_generate_dimension_summaries
     
     try:
         # 验证token并获取资源信息
@@ -661,28 +662,18 @@ async def generate_dimension_summaries(
                 detail=f"产品不存在: {asin}"
             )
         
-        # 调用维度总结服务
-        logger.info(f"[AI总结] 开始为产品 {asin} 生成维度总结 (token: {token})")
+        # 🚀 异步模式：触发 Celery 任务，立即返回
+        logger.info(f"[AI总结] 🚀 异步触发产品 {asin} 维度总结任务 (token: {token})")
         
-        summary_service = DimensionSummaryService(db)
-        results = await summary_service.generate_all_summaries(product.id)
+        celery_result = task_generate_dimension_summaries.delay(str(product.id))
         
-        summary_counts = {
-            "themes": len(results.get("theme_summaries", [])),
-            "dimensions": len(results.get("dimension_summaries", [])),
-            "emotions": len(results.get("emotion_summaries", [])),
-            "scenarios": len(results.get("scenario_summaries", [])),
-            "personas": len(results.get("consumer_personas", [])),
-            "overall": 1 if results.get("overall_summary") else 0,
-        }
-        
-        total_generated = sum(summary_counts.values())
-        logger.info(f"[AI总结] 产品 {asin} 维度总结生成完成，共生成 {total_generated} 条")
+        logger.info(f"[AI总结] ✅ 任务已提交: task_id={celery_result.id}, product_id={product.id}")
         
         return GenerateSummariesResponse(
             success=True,
-            message=f"AI分析生成完成，共生成 {total_generated} 条洞察",
-            summary_counts=summary_counts
+            message="AI分析任务已启动，预计需要1-3分钟完成",
+            task_id=celery_result.id,
+            status="pending"
         )
         
     except HTTPException:
@@ -692,4 +683,89 @@ async def generate_dimension_summaries(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"生成AI总结失败: {str(e)}"
+        )
+
+
+@router.get("/{token}/generate-summaries/{task_id}", response_model=GenerateSummariesResponse)
+async def get_summary_task_status(
+    token: str,
+    task_id: str,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    🚀 查询AI总结任务状态（轮询用）
+    
+    返回任务状态：
+    - pending: 任务排队中
+    - processing: 任务执行中
+    - completed: 任务完成
+    - failed: 任务失败
+    """
+    from celery.result import AsyncResult
+    from app.worker import celery_app
+    
+    try:
+        # 验证token
+        service = ShareService(db)
+        meta = await service.get_share_meta(token)
+        
+        if not meta or not meta.get("is_valid"):
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="分享链接不存在或已失效"
+            )
+        
+        # 查询 Celery 任务状态
+        result = AsyncResult(task_id, app=celery_app)
+        
+        if result.state == 'PENDING':
+            return GenerateSummariesResponse(
+                success=True,
+                message="任务排队中...",
+                task_id=task_id,
+                status="pending"
+            )
+        elif result.state == 'STARTED' or result.state == 'PROGRESS':
+            return GenerateSummariesResponse(
+                success=True,
+                message="AI分析进行中...",
+                task_id=task_id,
+                status="processing"
+            )
+        elif result.state == 'SUCCESS':
+            # 任务完成，返回结果
+            task_result = result.result or {}
+            summary_counts = task_result.get("summary_counts", {})
+            total = sum(summary_counts.values()) if summary_counts else 0
+            
+            return GenerateSummariesResponse(
+                success=True,
+                message=f"AI分析生成完成，共生成 {total} 条洞察",
+                task_id=task_id,
+                status="completed",
+                summary_counts=summary_counts
+            )
+        elif result.state == 'FAILURE':
+            error_msg = str(result.result) if result.result else "未知错误"
+            return GenerateSummariesResponse(
+                success=False,
+                message=f"AI分析失败: {error_msg}",
+                task_id=task_id,
+                status="failed"
+            )
+        else:
+            return GenerateSummariesResponse(
+                success=True,
+                message=f"任务状态: {result.state}",
+                task_id=task_id,
+                status="processing"
+            )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(f"查询任务状态失败: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"查询任务状态失败: {str(e)}"
         )

@@ -80,7 +80,7 @@ class AnalysisProjectItemResponse(BaseModel):
 
 
 class AnalysisProjectResponse(BaseModel):
-    """分析项目响应"""
+    """分析项目响应（详情页使用，包含完整数据）"""
     id: str
     title: str
     description: Optional[str]
@@ -95,11 +95,26 @@ class AnalysisProjectResponse(BaseModel):
     items: List[AnalysisProjectItemResponse] = []
 
 
+class AnalysisProjectListItemResponse(BaseModel):
+    """分析项目列表项响应（列表页使用，不包含大数据字段以优化性能）"""
+    id: str
+    title: str
+    description: Optional[str]
+    analysis_type: str
+    user_id: Optional[str] = None
+    status: str
+    # 🚀 性能优化：列表不返回 result_content 和 raw_data_snapshot
+    error_message: Optional[str] = None
+    created_at: Optional[str]
+    updated_at: Optional[str]
+    items: List[AnalysisProjectItemResponse] = []
+
+
 class AnalysisProjectListResponse(BaseModel):
-    """项目列表响应"""
+    """项目列表响应（使用精简的列表项，不含大数据字段）"""
     success: bool
     total: int
-    projects: List[AnalysisProjectResponse]
+    projects: List[AnalysisProjectListItemResponse]
 
 
 class CreateAnalysisResponse(BaseModel):
@@ -337,19 +352,20 @@ async def list_projects(
             user_id=user_id
         )
         
+        # 🚀 性能优化：列表响应不包含 result_content 和 raw_data_snapshot
+        # 这两个字段数据量大（可达100KB+），列表页不需要，显著降低响应体积
         return AnalysisProjectListResponse(
             success=True,
             total=len(projects),
             projects=[
-                AnalysisProjectResponse(
+                AnalysisProjectListItemResponse(
                     id=str(p.id),
                     title=p.title,
                     description=p.description,
                     analysis_type=p.analysis_type,
                     user_id=str(p.user_id) if p.user_id else None,
                     status=p.status,
-                    result_content=p.result_content,
-                    raw_data_snapshot=p.raw_data_snapshot,
+                    # 不再返回 result_content 和 raw_data_snapshot
                     error_message=p.error_message,
                     created_at=p.created_at.isoformat() if p.created_at else None,
                     updated_at=p.updated_at.isoformat() if p.updated_at else None,
@@ -375,6 +391,7 @@ async def list_projects(
 async def get_project_detail(
     project_id: UUID,
     no_cache: bool = Query(False, description="跳过缓存"),
+    status_only: bool = Query(False, description="🚀 轮询模式：只返回状态字段，不返回完整结果"),
     db: AsyncSession = Depends(get_db)
 ):
     """
@@ -385,11 +402,36 @@ async def get_project_detail(
     - 包含完整的分析结果（result_content）
     - 包含原始数据快照（raw_data_snapshot）
     - 包含关联的产品信息
+    
+    🚀 轮询优化：使用 status_only=true 只返回状态字段，减少网络传输
     """
     from app.core.cache import get_cache_service
     
     cache = await get_cache_service()
     cache_key = f"cache:analysis_project:{project_id}"
+    
+    # 🚀 轮询模式：只返回状态字段，不需要缓存
+    if status_only:
+        service = AnalysisService(db)
+        project = await service.get_project(project_id)
+        if not project:
+            raise HTTPException(status_code=404, detail="项目不存在")
+        
+        # 只返回轮询所需的最小字段
+        return AnalysisProjectResponse(
+            id=str(project.id),
+            title=project.title,
+            description=project.description,
+            analysis_type=project.analysis_type,
+            user_id=str(project.user_id) if project.user_id else None,
+            status=project.status,
+            result_content=None,  # 🚀 不返回完整结果
+            raw_data_snapshot=None,  # 🚀 不返回原始数据
+            error_message=project.error_message,
+            created_at=project.created_at.isoformat() if project.created_at else None,
+            updated_at=project.updated_at.isoformat() if project.updated_at else None,
+            items=[]  # 🚀 不返回产品列表
+        )
     
     # 🚀 尝试从缓存获取
     if not no_cache:
