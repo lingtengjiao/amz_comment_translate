@@ -218,21 +218,42 @@ async def ingest_reviews_queue(
     try:
         from app.core.redis import get_async_redis, ReviewIngestionQueue, BatchStatusTracker
         
+        logger.info(f"[入队] 开始处理 ASIN={request.asin}, reviews={len(request.reviews)}, batch_id={batch_id}")
+        
         redis_client = await get_async_redis()
+        logger.info(f"[入队] Redis 客户端已获取: {redis_client is not None}")
+        
         queue = ReviewIngestionQueue(redis_client)
         tracker = BatchStatusTracker(redis_client)
         
         # 创建批次状态
+        logger.info(f"[入队] 创建批次状态: batch_id={batch_id}, count={len(request.reviews)}")
         await tracker.create(batch_id, len(request.reviews))
+        logger.info(f"[入队] 批次状态已创建")
         
         # 推入队列
+        logger.info(f"[入队] 准备推入队列，队列名称: {queue.queue_name}, payload大小: {len(str(payload))} bytes")
         success = await queue.push(payload)
+        logger.info(f"[入队] 推入队列结果: success={success}")
+        
+        # 验证队列长度（如果方法存在）
+        try:
+            if hasattr(queue, 'length'):
+                queue_length = await queue.length()
+                logger.info(f"[入队] 当前队列长度: {queue_length}")
+            else:
+                # 直接查询 Redis
+                queue_length = await redis_client.llen(queue.queue_name)
+                logger.info(f"[入队] 当前队列长度（直接查询）: {queue_length}")
+        except Exception as e:
+            logger.warning(f"[入队] 无法获取队列长度: {e}")
         
         if not success:
+            logger.error(f"[入队] ❌ 推入队列失败: batch_id={batch_id}")
             raise HTTPException(status_code=500, detail="推入队列失败")
         
         stream_flag = "流式" if request.is_stream else "批量"
-        logger.info(f"[{stream_flag}入队] 产品 {request.asin}: {len(request.reviews)} 条评论已入队，batch_id={batch_id}")
+        logger.info(f"[{stream_flag}入队] ✅ 产品 {request.asin}: {len(request.reviews)} 条评论已入队，batch_id={batch_id}, 队列长度={queue_length}")
         
         return {
             "success": True,
@@ -1079,6 +1100,157 @@ async def start_deep_analysis(
         "product_id": str(product.id),
         "asin": asin,
         "review_count": review_count
+    }
+
+
+# ==========================================
+# [NEW] 清空AI数据并重新分析
+# ==========================================
+
+@products_router.post("/{asin}/clear-and-reanalyze")
+async def clear_and_reanalyze(
+    asin: str,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    🧹 清空产品的 AI 分析数据（保留翻译），然后重新触发完整分析流程
+    
+    清空内容：
+    - 产品维度 (product_dimensions)
+    - 5W 标签 (product_context_labels)
+    - 评论洞察 (review_insights)
+    - 评论主题 (review_theme_highlights)
+    - 产品报告 (product_reports)
+    - 维度总结 (product_dimension_summaries)
+    - 相关任务 (tasks)
+    
+    保留内容：
+    - 翻译结果 (title_translated, body_translated)
+    - 评论原始数据
+    
+    触发流程：
+    1. 科学学习（维度 + 5W标签）
+    2. 洞察提取
+    3. 主题提取
+    4. 生成报告
+    """
+    from sqlalchemy import select, delete, and_, func
+    from app.models.product import Product
+    from app.models.review import Review
+    from app.models.product_dimension import ProductDimension
+    from app.models.product_context_label import ProductContextLabel
+    from app.models.insight import ReviewInsight
+    from app.models.theme_highlight import ReviewThemeHighlight
+    from app.models.report import ProductReport
+    from app.models.product_dimension_summary import ProductDimensionSummary
+    from app.models.task import Task, TaskType, TaskStatus
+    
+    # 获取产品
+    product_result = await db.execute(
+        select(Product).where(Product.asin == asin)
+    )
+    product = product_result.scalar_one_or_none()
+    
+    if not product:
+        raise HTTPException(status_code=404, detail="产品不存在")
+    
+    product_id = product.id
+    
+    # 获取所有评论 ID
+    reviews_result = await db.execute(
+        select(Review.id).where(
+            and_(
+                Review.product_id == product_id,
+                Review.is_deleted == False
+            )
+        )
+    )
+    review_ids = [r[0] for r in reviews_result.all()]
+    
+    logger.info(f"[清空重分析] 产品 {asin}，共 {len(review_ids)} 条评论")
+    
+    # ==================== 清空数据 ====================
+    cleared = {}
+    
+    # 1. 删除维度
+    dim_result = await db.execute(
+        delete(ProductDimension).where(ProductDimension.product_id == product_id)
+    )
+    cleared["dimensions"] = dim_result.rowcount
+    
+    # 2. 删除 5W 标签
+    label_result = await db.execute(
+        delete(ProductContextLabel).where(ProductContextLabel.product_id == product_id)
+    )
+    cleared["context_labels"] = label_result.rowcount
+    
+    # 3. 删除洞察
+    if review_ids:
+        insight_result = await db.execute(
+            delete(ReviewInsight).where(ReviewInsight.review_id.in_(review_ids))
+        )
+        cleared["insights"] = insight_result.rowcount
+    else:
+        cleared["insights"] = 0
+    
+    # 4. 删除主题
+    if review_ids:
+        theme_result = await db.execute(
+            delete(ReviewThemeHighlight).where(ReviewThemeHighlight.review_id.in_(review_ids))
+        )
+        cleared["themes"] = theme_result.rowcount
+    else:
+        cleared["themes"] = 0
+    
+    # 5. 删除报告
+    report_result = await db.execute(
+        delete(ProductReport).where(ProductReport.product_id == product_id)
+    )
+    cleared["reports"] = report_result.rowcount
+    
+    # 6. 删除维度总结
+    summary_result = await db.execute(
+        delete(ProductDimensionSummary).where(ProductDimensionSummary.product_id == product_id)
+    )
+    cleared["summaries"] = summary_result.rowcount
+    
+    # 7. 删除旧任务
+    task_result = await db.execute(
+        delete(Task).where(Task.product_id == product_id)
+    )
+    cleared["tasks"] = task_result.rowcount
+    
+    await db.commit()
+    
+    logger.info(f"[清空重分析] 清空完成: {cleared}")
+    
+    # ==================== 创建新任务并触发分析 ====================
+    new_task = Task(
+        product_id=product_id,
+        task_type=TaskType.AUTO_ANALYSIS.value,
+        status=TaskStatus.PENDING.value,
+        total_items=4,
+        processed_items=0
+    )
+    db.add(new_task)
+    await db.commit()
+    await db.refresh(new_task)
+    
+    # 触发全自动分析
+    celery_task = task_full_auto_analysis.delay(str(product_id), str(new_task.id))
+    new_task.celery_task_id = celery_task.id
+    await db.commit()
+    
+    logger.info(f"[清空重分析] 分析任务已触发: {new_task.id}")
+    
+    return {
+        "success": True,
+        "message": "AI 数据已清空，分析任务已启动",
+        "asin": asin,
+        "product_id": str(product_id),
+        "task_id": str(new_task.id),
+        "review_count": len(review_ids),
+        "cleared": cleared
     }
 
 
