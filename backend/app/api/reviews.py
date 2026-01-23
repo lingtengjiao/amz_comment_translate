@@ -1255,6 +1255,171 @@ async def clear_and_reanalyze(
 
 
 # ==========================================
+# [NEW] 批量清空并重新分析（按日期筛选）
+# ==========================================
+
+@products_router.post("/batch-clear-and-reanalyze")
+async def batch_clear_and_reanalyze(
+    before_date: str = Query(..., description="清空此日期之前的产品，格式: YYYY-MM-DD，如 2026-01-17"),
+    dry_run: bool = Query(True, description="试运行模式，只返回将处理的产品列表，不实际执行"),
+    limit: int = Query(100, description="最多处理多少个产品"),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    🧹 批量清空指定日期之前的产品 AI 分析数据，并重新触发分析
+    
+    用法示例：
+    - 试运行: POST /products/batch-clear-and-reanalyze?before_date=2026-01-17&dry_run=true
+    - 实际执行: POST /products/batch-clear-and-reanalyze?before_date=2026-01-17&dry_run=false
+    
+    清空内容（每个产品）：
+    - 产品维度、5W标签、评论洞察、评论主题、产品报告、维度总结、任务
+    
+    保留内容：
+    - 翻译结果、评论原始数据
+    """
+    from datetime import datetime
+    from sqlalchemy import select, delete, and_, func
+    from app.models.product import Product
+    from app.models.review import Review
+    from app.models.product_dimension import ProductDimension
+    from app.models.product_context_label import ProductContextLabel
+    from app.models.insight import ReviewInsight
+    from app.models.theme_highlight import ReviewThemeHighlight
+    from app.models.report import ProductReport
+    from app.models.product_dimension_summary import ProductDimensionSummary
+    from app.models.task import Task, TaskType, TaskStatus
+    
+    # 解析日期
+    try:
+        cutoff_date = datetime.strptime(before_date, "%Y-%m-%d")
+    except ValueError:
+        raise HTTPException(status_code=400, detail="日期格式错误，请使用 YYYY-MM-DD 格式")
+    
+    # 查询符合条件的产品（有报告且报告创建日期在指定日期之前）
+    products_result = await db.execute(
+        select(Product.id, Product.asin, Product.title, func.count(Review.id).label('review_count'))
+        .join(Review, Review.product_id == Product.id, isouter=True)
+        .where(
+            and_(
+                Product.created_at < cutoff_date,
+                Review.is_deleted == False
+            )
+        )
+        .group_by(Product.id)
+        .having(func.count(Review.id) > 0)
+        .order_by(Product.created_at.asc())
+        .limit(limit)
+    )
+    products = products_result.all()
+    
+    if not products:
+        return {
+            "success": True,
+            "message": f"没有找到 {before_date} 之前且有评论的产品",
+            "products_found": 0,
+            "dry_run": dry_run
+        }
+    
+    product_list = [
+        {"asin": p.asin, "title": (p.title or "")[:50], "review_count": p.review_count}
+        for p in products
+    ]
+    
+    if dry_run:
+        return {
+            "success": True,
+            "message": f"试运行模式：找到 {len(products)} 个产品待处理",
+            "dry_run": True,
+            "before_date": before_date,
+            "products_found": len(products),
+            "products": product_list
+        }
+    
+    # 实际执行清空和重新分析
+    results = []
+    success_count = 0
+    fail_count = 0
+    
+    for product in products:
+        product_id = product.id
+        asin = product.asin
+        
+        try:
+            # 获取评论 IDs
+            reviews_result = await db.execute(
+                select(Review.id).where(
+                    and_(
+                        Review.product_id == product_id,
+                        Review.is_deleted == False
+                    )
+                )
+            )
+            review_ids = [r[0] for r in reviews_result.all()]
+            
+            # 清空数据
+            await db.execute(delete(ProductDimension).where(ProductDimension.product_id == product_id))
+            await db.execute(delete(ProductContextLabel).where(ProductContextLabel.product_id == product_id))
+            if review_ids:
+                await db.execute(delete(ReviewInsight).where(ReviewInsight.review_id.in_(review_ids)))
+                await db.execute(delete(ReviewThemeHighlight).where(ReviewThemeHighlight.review_id.in_(review_ids)))
+            await db.execute(delete(ProductReport).where(ProductReport.product_id == product_id))
+            await db.execute(delete(ProductDimensionSummary).where(ProductDimensionSummary.product_id == product_id))
+            await db.execute(delete(Task).where(Task.product_id == product_id))
+            
+            await db.commit()
+            
+            # 创建新任务
+            new_task = Task(
+                product_id=product_id,
+                task_type=TaskType.AUTO_ANALYSIS.value,
+                status=TaskStatus.PENDING.value,
+                total_items=4,
+                processed_items=0
+            )
+            db.add(new_task)
+            await db.commit()
+            await db.refresh(new_task)
+            
+            # 触发分析（延迟执行，避免瞬间压力太大）
+            import random
+            countdown = random.randint(5, 60)  # 随机延迟 5-60 秒
+            task_full_auto_analysis.apply_async(
+                args=[str(product_id), str(new_task.id)],
+                countdown=countdown
+            )
+            
+            results.append({
+                "asin": asin,
+                "status": "success",
+                "task_id": str(new_task.id),
+                "countdown": countdown
+            })
+            success_count += 1
+            logger.info(f"[批量重分析] {asin} 成功，任务ID: {new_task.id}，延迟 {countdown}s")
+            
+        except Exception as e:
+            results.append({
+                "asin": asin,
+                "status": "failed",
+                "error": str(e)
+            })
+            fail_count += 1
+            logger.error(f"[批量重分析] {asin} 失败: {e}")
+            await db.rollback()
+    
+    return {
+        "success": True,
+        "message": f"批量处理完成：成功 {success_count} 个，失败 {fail_count} 个",
+        "dry_run": False,
+        "before_date": before_date,
+        "success_count": success_count,
+        "fail_count": fail_count,
+        "results": results
+    }
+
+
+# ==========================================
 # [NEW] 采集完成触发接口 - 全自动分析
 # ==========================================
 
