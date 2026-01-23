@@ -1169,22 +1169,19 @@ async def clear_and_reanalyze(
     
     logger.info(f"[清空重分析] 产品 {asin}，共 {len(review_ids)} 条评论")
     
-    # ==================== 清空数据 ====================
+    # ==================== 清空数据（先删子表，再删父表，避免外键约束冲突） ====================
     cleared = {}
     
-    # 1. 删除维度
-    dim_result = await db.execute(
-        delete(ProductDimension).where(ProductDimension.product_id == product_id)
-    )
-    cleared["dimensions"] = dim_result.rowcount
+    # 1. 先删除主题（子表，引用 context_labels）
+    if review_ids:
+        theme_result = await db.execute(
+            delete(ReviewThemeHighlight).where(ReviewThemeHighlight.review_id.in_(review_ids))
+        )
+        cleared["themes"] = theme_result.rowcount
+    else:
+        cleared["themes"] = 0
     
-    # 2. 删除 5W 标签
-    label_result = await db.execute(
-        delete(ProductContextLabel).where(ProductContextLabel.product_id == product_id)
-    )
-    cleared["context_labels"] = label_result.rowcount
-    
-    # 3. 删除洞察
+    # 2. 删除洞察
     if review_ids:
         insight_result = await db.execute(
             delete(ReviewInsight).where(ReviewInsight.review_id.in_(review_ids))
@@ -1193,14 +1190,17 @@ async def clear_and_reanalyze(
     else:
         cleared["insights"] = 0
     
-    # 4. 删除主题
-    if review_ids:
-        theme_result = await db.execute(
-            delete(ReviewThemeHighlight).where(ReviewThemeHighlight.review_id.in_(review_ids))
-        )
-        cleared["themes"] = theme_result.rowcount
-    else:
-        cleared["themes"] = 0
+    # 3. 删除 5W 标签（父表）
+    label_result = await db.execute(
+        delete(ProductContextLabel).where(ProductContextLabel.product_id == product_id)
+    )
+    cleared["context_labels"] = label_result.rowcount
+    
+    # 4. 删除维度
+    dim_result = await db.execute(
+        delete(ProductDimension).where(ProductDimension.product_id == product_id)
+    )
+    cleared["dimensions"] = dim_result.rowcount
     
     # 5. 删除报告
     report_result = await db.execute(
@@ -1359,12 +1359,14 @@ async def batch_clear_and_reanalyze(
             )
             review_ids = [r[0] for r in reviews_result.all()]
             
-            # 清空数据
-            await db.execute(delete(ProductDimension).where(ProductDimension.product_id == product_id))
-            await db.execute(delete(ProductContextLabel).where(ProductContextLabel.product_id == product_id))
+            # 清空数据（注意：先删子表，再删父表，避免外键约束冲突）
+            # 1. 先删除引用 context_label 的 theme_highlights（子表）
             if review_ids:
-                await db.execute(delete(ReviewInsight).where(ReviewInsight.review_id.in_(review_ids)))
                 await db.execute(delete(ReviewThemeHighlight).where(ReviewThemeHighlight.review_id.in_(review_ids)))
+                await db.execute(delete(ReviewInsight).where(ReviewInsight.review_id.in_(review_ids)))
+            # 2. 再删除 context_labels（父表）
+            await db.execute(delete(ProductContextLabel).where(ProductContextLabel.product_id == product_id))
+            await db.execute(delete(ProductDimension).where(ProductDimension.product_id == product_id))
             await db.execute(delete(ProductReport).where(ProductReport.product_id == product_id))
             await db.execute(delete(ProductDimensionSummary).where(ProductDimensionSummary.product_id == product_id))
             await db.execute(delete(Task).where(Task.product_id == product_id))
