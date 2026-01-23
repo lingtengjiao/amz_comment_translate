@@ -46,6 +46,14 @@ const RESOURCE_TYPE_CONFIG: Record<ShareResourceType, {
   keyword_collection: { label: '市场格局分析', icon: LayoutGrid, color: 'pink' },
 };
 
+// 报告类型配置
+const REPORT_TYPE_CONFIG: Record<string, string> = {
+  comprehensive: '全维度战略分析',
+  operations: '运营与市场策略',
+  product: '产品迭代建议',
+  supply_chain: '供应链质量整改',
+};
+
 // 统一使用的logo图片URL
 const LOGO_URL = 'https://98kamz.com/favicon.svg';
 
@@ -65,47 +73,78 @@ function generateMetaTags(
   
   switch (resourceType) {
     case 'review_reader': {
-      // 评论详情：标题简洁，描述提供更多信息
+      // 评论详情：标题简洁，描述不重复标题信息
       const data = resourceData.data as any;
       const reviews = data?.reviews || [];
       const reviewCount = reviews.length || data?.stats?.total_reviews || 0;
-      const productTitle = truncateText(baseTitle, 40); // 标题截断到40字符，为后面的信息留空间
-      const title = `${productTitle} - ${reviewCount}条评论分析 - 洞察大王`;
-      const description = truncateText(`${productTitle} - 深度分析${reviewCount}条用户评论，洞察产品优劣势 - 亚马逊产品洞察助手`, 120);
+      // 标题：产品标题截断到30字符（留出" - {数量}条评论分析 - 洞察大王"的空间）
+      const truncatedForTitle = truncateText(baseTitle, 30);
+      const title = `${truncatedForTitle} - ${reviewCount}条评论分析 - 洞察大王`;
+      // 描述不包含标题，只提供有价值的信息
+      const description = `深度分析${reviewCount}条用户评论，洞察产品优劣势和市场反馈 - 亚马逊产品洞察助手`;
       return { title, description };
     }
     
     case 'report': {
-      // 分析报告：标题简洁，描述提供更多信息
-      const title = truncateText(baseTitle, 50) + ' - 洞察大王';
-      const description = truncateText(`${baseTitle} - 亚马逊产品洞察助手`, 120);
+      // 分析报告：优先使用产品标题，如果没有则使用报告标题
+      const data = resourceData.data as any;
+      const fullProductTitle = data?.product?.title || baseTitle;
+      const reportType = data?.report?.report_type || '';
+      const reportTypeLabel = REPORT_TYPE_CONFIG[reportType] || '分析报告';
+      // 获取评论数量或其他数据条数
+      const analysisData = data?.report?.analysis_data || {};
+      const reviewCount = analysisData?.review_count || analysisData?.stats?.total_reviews || analysisData?.total_reviews || 0;
+      // 标题：产品标题截断到40字符（留出" - 洞察大王"的空间）
+      const truncatedProductTitle = truncateText(fullProductTitle, 40);
+      const title = `${truncatedProductTitle} - 洞察大王`;
+      // 描述：明确报告类型，包含数据条数
+      const description = reviewCount > 0 
+        ? `${reportTypeLabel}，分析${reviewCount}条评论数据，全面洞察产品表现 - 亚马逊产品洞察助手`
+        : `${reportTypeLabel}，全面分析产品数据和市场表现 - 亚马逊产品洞察助手`;
       return { title, description };
     }
     
     case 'analysis_project': {
-      // 竞品分析：标题简洁，描述提供更多信息
-      const title = truncateText(baseTitle, 50) + ' - 洞察大王';
-      const description = truncateText(`${baseTitle} - 多维度竞品对比分析，发现市场机会 - 亚马逊产品洞察助手`, 120);
+      // 竞品分析：标题简洁，描述不重复标题信息
+      const data = resourceData.data as any;
+      const items = data?.items || [];
+      const itemCount = items.length;
+      const truncatedTitle = truncateText(baseTitle, 40); // 留出" - 洞察大王"的空间
+      const title = `${truncatedTitle} - 洞察大王`;
+      // 描述：包含产品数量
+      const description = `多维度竞品对比分析${itemCount > 0 ? `，对比${itemCount}个产品` : ''}，发现市场机会和竞争优势 - 亚马逊产品洞察助手`;
       return { title, description };
     }
     
     case 'rufus_session': {
-      // Rufus 调研：标题简洁，描述提供更多信息
-      const title = truncateText(baseTitle, 50) + ' - 洞察大王';
-      const description = truncateText(`${baseTitle} - AI驱动的市场调研分析 - 亚马逊产品洞察助手`, 120);
+      // Rufus 调研：标题简洁，描述不重复标题信息
+      const data = resourceData.data as any;
+      const conversations = data?.conversations || [];
+      const conversationCount = conversations.length;
+      const truncatedTitle = truncateText(baseTitle, 40); // 留出" - 洞察大王"的空间
+      const title = `${truncatedTitle} - 洞察大王`;
+      // 描述：包含对话数量
+      const description = `存储rufus对话市场数据${conversationCount}条，深度洞察市场趋势和用户需求 - 亚马逊产品洞察助手`;
       return { title, description };
     }
     
     case 'keyword_collection': {
-      // 市场格局分析：标题简洁，描述强调市场细分需求
-      const title = truncateText(baseTitle, 50) + ' - 洞察大王';
-      const description = truncateText(`${baseTitle} - 市场整体细分需求分析 - 亚马逊产品洞察助手`, 120);
+      // 市场格局分析：标题简洁，描述不重复标题信息
+      const data = resourceData.data as any;
+      const products = data?.products || [];
+      const productCount = products.length;
+      const truncatedTitle = truncateText(baseTitle, 40); // 留出" - 洞察大王"的空间
+      const title = `${truncatedTitle} - 洞察大王`;
+      // 描述：包含产品数量
+      const description = `市场整体细分需求分析${productCount > 0 ? `，分析${productCount}个产品` : ''}，洞察品类趋势和竞争格局 - 亚马逊产品洞察助手`;
       return { title, description };
     }
     
     default: {
-      const title = truncateText(baseTitle, 50) + ' - 洞察大王';
-      const description = truncateText(`${baseTitle} - 亚马逊产品洞察助手`, 120);
+      const truncatedTitle = truncateText(baseTitle, 40); // 留出" - 洞察大王"的空间
+      const title = `${truncatedTitle} - 洞察大王`;
+      // 描述不包含标题，只提供有价值的信息
+      const description = '专业的亚马逊产品洞察和分析工具 - 亚马逊产品洞察助手';
       return { title, description };
     }
   }
