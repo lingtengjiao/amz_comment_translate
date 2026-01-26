@@ -5,11 +5,12 @@
 """
 import logging
 from typing import Optional, List
-from datetime import datetime
+from datetime import date, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from pydantic import BaseModel, Field
 from sqlalchemy import select, func, and_
+from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -71,7 +72,10 @@ class ProductItemResponse(BaseModel):
     major_category_name: Optional[str]  # 大类名称
     minor_category_name: Optional[str]  # 小类名称
     year: Optional[int]
+    listing_date: Optional[str] = None  # 上架具体日期 YYYY-MM-DD，有值时视图仍按年分组
     brand: Optional[str]
+    monthly_sales: Optional[dict] = {}  # 月度销量数据
+    custom_tags: Optional[dict] = {}  # 自定义标签数据
     created_at: Optional[str]
 
 
@@ -94,7 +98,10 @@ class UpdateProductRequest(BaseModel):
     major_category_name: Optional[str] = None  # 大类名称
     minor_category_name: Optional[str] = None  # 小类名称
     year: Optional[int] = None
+    listing_date: Optional[str] = None  # 上架具体日期 YYYY-MM-DD
     brand: Optional[str] = None
+    monthly_sales: Optional[dict] = None  # 月度销量数据
+    custom_tags: Optional[dict] = None  # 自定义标签数据
 
 
 class BatchUpdateProductRequest(BaseModel):
@@ -122,6 +129,7 @@ class CollectionDetailResponse(BaseModel):
     description: Optional[str]
     board_config: Optional[dict] = None
     view_config: Optional[dict] = None  # 视图配置
+    custom_fields: Optional[List[dict]] = []  # 自定义字段定义
     created_at: Optional[str]
     updated_at: Optional[str]
     products: List[ProductItemResponse]
@@ -203,9 +211,20 @@ async def create_collection(
         )
         db.add(collection_product)
     
-    await db.commit()
-    await db.refresh(collection)
-    
+    try:
+        await db.commit()
+        await db.refresh(collection)
+    except ProgrammingError as e:
+        await db.rollback()
+        err_msg = str(e.orig) if getattr(e, "orig", None) else str(e)
+        if "listing_date" in err_msg or "column" in err_msg.lower():
+            logger.warning(f"创建产品库失败（疑似未执行迁移）: {err_msg}")
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="数据库结构需要更新，请先执行迁移脚本: db/migrate_listing_date.sql"
+            )
+        raise
+
     logger.info(f"用户 {user.email} 创建产品库: keyword={request.keyword}, products={len(request.products)}")
     
     return CollectionResponse(
@@ -385,6 +404,7 @@ async def get_collection_detail(
         description=collection.description,
         board_config=collection.board_config,
         view_config=collection.view_config,
+        custom_fields=collection.custom_fields or [],
         created_at=collection.created_at.isoformat() if collection.created_at else None,
         updated_at=collection.updated_at.isoformat() if collection.updated_at else None,
         products=[
@@ -406,8 +426,11 @@ async def get_collection_detail(
                 minor_category_rank=p.minor_category_rank,
                 major_category_name=p.major_category_name,
                 minor_category_name=p.minor_category_name,
-                year=p.year,
+                year=p.year if p.year is not None else (p.listing_date.year if p.listing_date else None),
+                listing_date=p.listing_date.isoformat() if p.listing_date else None,
                 brand=p.brand,
+                monthly_sales=p.monthly_sales or {},
+                custom_tags=p.custom_tags or {},
                 created_at=p.created_at.isoformat() if p.created_at else None
             )
             for p in products
@@ -661,6 +684,16 @@ async def update_product(
     
     # 更新字段
     update_data = request.model_dump(exclude_unset=True)
+    if "listing_date" in update_data:
+        ld = update_data.pop("listing_date")
+        if ld:
+            try:
+                product.listing_date = date.fromisoformat(ld)
+                product.year = product.listing_date.year
+            except (ValueError, TypeError):
+                pass
+        else:
+            product.listing_date = None
     for field, value in update_data.items():
         if hasattr(product, field):
             setattr(product, field, value)
@@ -688,8 +721,11 @@ async def update_product(
         minor_category_rank=product.minor_category_rank,
         major_category_name=product.major_category_name,
         minor_category_name=product.minor_category_name,
-        year=product.year,
+        year=product.year if product.year is not None else (product.listing_date.year if product.listing_date else None),
+        listing_date=product.listing_date.isoformat() if product.listing_date else None,
         brand=product.brand,
+        monthly_sales=product.monthly_sales or {},
+        custom_tags=product.custom_tags or {},
         created_at=product.created_at.isoformat() if product.created_at else None
     )
 
@@ -810,6 +846,33 @@ async def batch_update_products(
             if field in item and item[field] is not None:
                 setattr(product, field, item[field])
         
+        # 处理上架具体日期（存 listing_date，并同步 year 便于按年分组）
+        if "listing_date" in item:
+            ld = item["listing_date"]
+            if ld:
+                try:
+                    if isinstance(ld, str):
+                        product.listing_date = date.fromisoformat(ld)
+                    else:
+                        product.listing_date = ld
+                    product.year = product.listing_date.year
+                except (ValueError, TypeError):
+                    pass
+            else:
+                product.listing_date = None
+        
+        # 处理月度销量数据（合并更新）
+        if "monthly_sales" in item and item["monthly_sales"]:
+            base_sales = dict(product.monthly_sales or {})
+            base_sales.update(item["monthly_sales"])
+            product.monthly_sales = base_sales
+        
+        # 处理自定义标签数据（合并更新，赋新 dict 以便 SQLAlchemy 检测 JSONB 变更）
+        if "custom_tags" in item and item["custom_tags"]:
+            base_tags = dict(product.custom_tags or {})
+            base_tags.update(item["custom_tags"])
+            product.custom_tags = base_tags
+        
         updated_count += 1
     
     await db.commit()
@@ -822,4 +885,256 @@ async def batch_update_products(
         "updated_count": updated_count,
         "not_found_count": len(not_found_asins),
         "not_found_asins": not_found_asins[:10]  # 只返回前 10 个未找到的 ASIN
+    }
+
+
+# ==========================================
+# 自定义字段管理接口
+# ==========================================
+
+class CustomFieldDefinition(BaseModel):
+    """自定义字段定义"""
+    id: str = Field(..., description="字段唯一标识")
+    name: str = Field(..., description="字段显示名称")
+    type: str = Field(..., description="字段类型：text, number, select")
+    options: Optional[List[str]] = Field(default=[], description="下拉选项（仅 select 类型）")
+
+
+class CustomFieldsRequest(BaseModel):
+    """自定义字段配置请求"""
+    custom_fields: List[CustomFieldDefinition] = Field(..., description="自定义字段定义列表")
+
+
+@router.put("/{collection_id}/custom-fields")
+async def save_custom_fields(
+    collection_id: str,
+    request: CustomFieldsRequest,
+    user: User = Depends(get_current_user_required),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    保存自定义字段定义
+    
+    用于管理产品库的自定义字段（列）定义
+    """
+    # 查找产品库
+    query = select(KeywordCollection).where(
+        and_(
+            KeywordCollection.id == collection_id,
+            KeywordCollection.user_id == user.id
+        )
+    )
+    
+    result = await db.execute(query)
+    collection = result.scalar_one_or_none()
+    
+    if not collection:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="产品库不存在或无权访问"
+        )
+    
+    # 保存自定义字段定义
+    collection.custom_fields = [f.model_dump() for f in request.custom_fields]
+    
+    await db.commit()
+    
+    logger.info(f"用户 {user.email} 保存自定义字段: collection={collection_id}, fields={len(request.custom_fields)}")
+    
+    return {
+        "success": True,
+        "message": f"成功保存 {len(request.custom_fields)} 个自定义字段",
+        "custom_fields": collection.custom_fields
+    }
+
+
+class UpdateProductTagsRequest(BaseModel):
+    """更新产品标签请求"""
+    custom_tags: dict = Field(..., description="自定义标签数据")
+
+
+@router.put("/{collection_id}/products/{product_id}/tags")
+async def update_product_tags(
+    collection_id: str,
+    product_id: str,
+    request: UpdateProductTagsRequest,
+    user: User = Depends(get_current_user_required),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    更新单个产品的自定义标签
+    """
+    # 验证产品库归属
+    collection_query = select(KeywordCollection).where(
+        and_(
+            KeywordCollection.id == collection_id,
+            KeywordCollection.user_id == user.id
+        )
+    )
+    collection_result = await db.execute(collection_query)
+    collection = collection_result.scalar_one_or_none()
+    
+    if not collection:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="产品库不存在或无权访问"
+        )
+    
+    # 查找产品
+    product_query = select(CollectionProduct).where(
+        and_(
+            CollectionProduct.id == product_id,
+            CollectionProduct.collection_id == collection_id
+        )
+    )
+    product_result = await db.execute(product_query)
+    product = product_result.scalar_one_or_none()
+    
+    if not product:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="产品不存在"
+        )
+    
+    # 合并更新标签（赋新 dict 以便 SQLAlchemy 检测 JSONB 变更）
+    base = dict(product.custom_tags or {})
+    base.update(request.custom_tags)
+    product.custom_tags = base
+    
+    await db.commit()
+    await db.refresh(product)
+    
+    return {
+        "success": True,
+        "custom_tags": product.custom_tags
+    }
+
+
+class UpdateProductMonthlySalesRequest(BaseModel):
+    """更新产品月度销量请求"""
+    monthly_sales: dict = Field(..., description="月度销量数据")
+
+
+@router.put("/{collection_id}/products/{product_id}/monthly-sales")
+async def update_product_monthly_sales(
+    collection_id: str,
+    product_id: str,
+    request: UpdateProductMonthlySalesRequest,
+    user: User = Depends(get_current_user_required),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    更新单个产品的月度销量数据
+    """
+    # 验证产品库归属
+    collection_query = select(KeywordCollection).where(
+        and_(
+            KeywordCollection.id == collection_id,
+            KeywordCollection.user_id == user.id
+        )
+    )
+    collection_result = await db.execute(collection_query)
+    collection = collection_result.scalar_one_or_none()
+    
+    if not collection:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="产品库不存在或无权访问"
+        )
+    
+    # 查找产品
+    product_query = select(CollectionProduct).where(
+        and_(
+            CollectionProduct.id == product_id,
+            CollectionProduct.collection_id == collection_id
+        )
+    )
+    product_result = await db.execute(product_query)
+    product = product_result.scalar_one_or_none()
+    
+    if not product:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="产品不存在"
+        )
+    
+    # 合并更新月度销量
+    existing_sales = product.monthly_sales or {}
+    existing_sales.update(request.monthly_sales)
+    product.monthly_sales = existing_sales
+    
+    await db.commit()
+    await db.refresh(product)
+    
+    return {
+        "success": True,
+        "monthly_sales": product.monthly_sales
+    }
+
+
+class BatchUpdateTagsRequest(BaseModel):
+    """批量更新标签请求"""
+    updates: List[dict] = Field(..., description="更新列表，每项包含 product_id 和 custom_tags")
+
+
+@router.post("/{collection_id}/products/batch-update-tags")
+async def batch_update_product_tags(
+    collection_id: str,
+    request: BatchUpdateTagsRequest,
+    user: User = Depends(get_current_user_required),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    批量更新产品标签
+    
+    用于表格视图中批量编辑标签
+    """
+    # 验证产品库归属
+    collection_query = select(KeywordCollection).where(
+        and_(
+            KeywordCollection.id == collection_id,
+            KeywordCollection.user_id == user.id
+        )
+    ).options(selectinload(KeywordCollection.products))
+    
+    collection_result = await db.execute(collection_query)
+    collection = collection_result.scalar_one_or_none()
+    
+    if not collection:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="产品库不存在或无权访问"
+        )
+    
+    # 构建 ID -> 产品 的映射
+    id_to_product = {str(p.id): p for p in collection.products}
+    
+    updated_count = 0
+    
+    for item in request.updates:
+        product_id = item.get("product_id")
+        custom_tags = item.get("custom_tags", {})
+        
+        if not product_id:
+            continue
+        
+        product = id_to_product.get(product_id)
+        if not product:
+            continue
+        
+        # 合并更新标签（赋新 dict 以便 SQLAlchemy 检测 JSONB 变更）
+        base = dict(product.custom_tags or {})
+        base.update(custom_tags)
+        product.custom_tags = base
+        
+        updated_count += 1
+    
+    await db.commit()
+    
+    logger.info(f"用户 {user.email} 批量更新标签: collection={collection_id}, updated={updated_count}")
+    
+    return {
+        "success": True,
+        "message": f"成功更新 {updated_count} 个产品的标签",
+        "updated_count": updated_count
     }

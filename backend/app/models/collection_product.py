@@ -2,11 +2,11 @@
 CollectionProduct Model - 产品库中的产品明细（快照数据）
 """
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import String, Integer, Boolean, DateTime, ForeignKey, func, Numeric
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy import Date, String, Integer, Boolean, DateTime, ForeignKey, func, Numeric
+from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.session import Base
@@ -167,11 +167,18 @@ class CollectionProduct(Base):
         comment="小类名称"
     )
     
-    # 产品上架年份（用于年份分类视图）
+    # 产品上架年份（用于年份分类视图；有 listing_date 时可由其推导）
     year: Mapped[int | None] = mapped_column(
         Integer,
         nullable=True,
         comment="产品上架年份"
+    )
+    
+    # 产品上架具体日期（可选，支持到日；视图仍按年分组时可从 year 或 listing_date 取年）
+    listing_date: Mapped[date | None] = mapped_column(
+        Date,
+        nullable=True,
+        comment="产品上架具体日期（YYYY-MM-DD），有值时 year 可由其推导"
     )
     
     # 品牌（用于品牌分类视图）
@@ -180,6 +187,22 @@ class CollectionProduct(Base):
         nullable=True,
         index=True,
         comment="产品品牌"
+    )
+    
+    # 月度销量数据（JSONB 格式）
+    # 结构示例: {"2023-05": 300, "2023-06": 1200, "2023-07": 1800, ...}
+    monthly_sales: Mapped[dict | None] = mapped_column(
+        JSONB,
+        nullable=True,
+        comment="月度销量数据（JSONB格式，key为月份如2023-05，value为销量数字）"
+    )
+    
+    # 自定义标签数据（JSONB 格式）
+    # 结构示例: {"field_1": "TSA-Clear", "field_2": "TSA-Clear-常规款", ...}
+    custom_tags: Mapped[dict | None] = mapped_column(
+        JSONB,
+        nullable=True,
+        comment="自定义标签数据（JSONB格式，key为字段ID，value为标签值）"
     )
     
     # 创建时间
@@ -218,7 +241,10 @@ class CollectionProduct(Base):
             "minor_category_rank": self.minor_category_rank,
             "major_category_name": self.major_category_name,
             "minor_category_name": self.minor_category_name,
-            "year": self.year,
+            "year": self.year if self.year is not None else (self.listing_date.year if self.listing_date else None),
+            "listing_date": self.listing_date.isoformat() if self.listing_date else None,
             "brand": self.brand,
+            "monthly_sales": self.monthly_sales or {},
+            "custom_tags": self.custom_tags or {},
             "created_at": self.created_at.isoformat() if self.created_at else None
         }

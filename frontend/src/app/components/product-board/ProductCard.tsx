@@ -16,6 +16,7 @@ export interface Product {
   salesVolumeManual?: number;  // 补充数据的销售量（月销量）
   year: number;
   brand: string;
+  listingDate?: string;  // 上架具体日期 YYYY-MM-DD (listing_date)，视图仍按 year 分组
   majorCategoryRank?: number;  // 大类BSR
   minorCategoryRank?: number;  // 小类BSR
   majorCategoryName?: string;  // 大类目

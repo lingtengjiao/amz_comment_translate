@@ -536,6 +536,8 @@ class ShareService:
             "when": defaultdict(lambda: {"count": 0, "review_ids": []}),
             "why": defaultdict(lambda: {"count": 0, "review_ids": []}),
             "what": defaultdict(lambda: {"count": 0, "review_ids": []}),
+            "scenario": defaultdict(lambda: {"count": 0, "review_ids": []}),
+            "emotion": defaultdict(lambda: {"count": 0, "review_ids": []}),
         }
         
         for theme in all_themes_result.scalars().all():
@@ -547,6 +549,24 @@ class ShareService:
                 if review_id not in aggregated_themes[theme_type][label_name]["review_ids"]:
                     aggregated_themes[theme_type][label_name]["count"] += 1
                     aggregated_themes[theme_type][label_name]["review_ids"].append(review_id)
+        
+        # 🔧 从review_insights获取scenario和emotion维度（它们不在theme_highlights中）
+        all_insights_result = await self.db.execute(
+            select(ReviewInsight)
+            .join(Review, ReviewInsight.review_id == Review.id)
+            .where(Review.product_id == product.id)
+            .where(ReviewInsight.insight_type.in_(["scenario", "emotion"]))
+        )
+        
+        for insight in all_insights_result.scalars().all():
+            insight_type = insight.insight_type
+            dimension = insight.dimension
+            review_id = str(insight.review_id)
+            
+            if insight_type in aggregated_themes and dimension:
+                if review_id not in aggregated_themes[insight_type][dimension]["review_ids"]:
+                    aggregated_themes[insight_type][dimension]["count"] += 1
+                    aggregated_themes[insight_type][dimension]["review_ids"].append(review_id)
         
         # 转换为列表格式
         for theme_type in aggregated_themes:
@@ -604,6 +624,117 @@ class ShareService:
                 if dim not in dimension_insights:
                     dimension_insights[dim] = {"strengths": 0, "weaknesses": 0, "suggestions": 0}
                 dimension_insights[dim][insight_type] += 1
+        
+        # 🚀 预聚合交叉统计数据（基于全部评论，用于数据透视）
+        # 1. 地点×改进建议矩阵
+        location_suggestion_matrix = {}
+        for review in reviews:
+            review_where = [t["label_name"] for t in themes_map.get(review.id, []) if t.get("theme_type") == "where" and t.get("label_name")]
+            review_suggestions = [i for i in insights_map.get(review.id, []) if i.get("type") == "suggestion" and i.get("dimension")]
+            
+            for location in review_where:
+                if location not in location_suggestion_matrix:
+                    location_suggestion_matrix[location] = {}
+                for suggestion in review_suggestions:
+                    dim = suggestion.get("dimension")
+                    if dim and dim != "其他":
+                        location_suggestion_matrix[location][dim] = location_suggestion_matrix[location].get(dim, 0) + 1
+        
+        # 2. 动机×地点矩阵
+        motivation_location_matrix = {}
+        for review in reviews:
+            review_why = [t["label_name"] for t in themes_map.get(review.id, []) if t.get("theme_type") == "why" and t.get("label_name")]
+            review_where = [t["label_name"] for t in themes_map.get(review.id, []) if t.get("theme_type") == "where" and t.get("label_name")]
+            
+            for motivation in review_why:
+                if motivation not in motivation_location_matrix:
+                    motivation_location_matrix[motivation] = {}
+                for location in review_where:
+                    motivation_location_matrix[motivation][location] = motivation_location_matrix[motivation].get(location, 0) + 1
+        
+        # 3. 地点×时机×场景3D矩阵
+        location_time_scenario_matrix = {}
+        for review in reviews:
+            review_where = [t["label_name"] for t in themes_map.get(review.id, []) if t.get("theme_type") == "where" and t.get("label_name")]
+            review_when = [t["label_name"] for t in themes_map.get(review.id, []) if t.get("theme_type") == "when" and t.get("label_name")]
+            # 🔧 修复：scenario是insight，不是theme，从insights_map获取
+            review_scenario = [i.get("dimension") for i in insights_map.get(review.id, []) if i.get("type") == "scenario" and i.get("dimension")]
+            
+            for location in review_where:
+                if location not in location_time_scenario_matrix:
+                    location_time_scenario_matrix[location] = {}
+                for time in review_when:
+                    if time not in location_time_scenario_matrix[location]:
+                        location_time_scenario_matrix[location][time] = {}
+                    for scenario in review_scenario:
+                        location_time_scenario_matrix[location][time][scenario] = location_time_scenario_matrix[location][time].get(scenario, 0) + 1
+        
+        # 4. 购买者×使用者×动机3D矩阵（人群洞察 1.3）
+        buyer_user_motivation_matrix = {}
+        for review in reviews:
+            review_buyer = [t["label_name"] for t in themes_map.get(review.id, []) if t.get("theme_type") == "buyer" and t.get("label_name")]
+            review_user = [t["label_name"] for t in themes_map.get(review.id, []) if t.get("theme_type") == "user" and t.get("label_name")]
+            review_why = [t["label_name"] for t in themes_map.get(review.id, []) if t.get("theme_type") == "why" and t.get("label_name")]
+            
+            for buyer in review_buyer:
+                if buyer not in buyer_user_motivation_matrix:
+                    buyer_user_motivation_matrix[buyer] = {}
+                for user in review_user:
+                    if user not in buyer_user_motivation_matrix[buyer]:
+                        buyer_user_motivation_matrix[buyer][user] = {}
+                    for motivation in review_why:
+                        buyer_user_motivation_matrix[buyer][user][motivation] = buyer_user_motivation_matrix[buyer][user].get(motivation, 0) + 1
+        
+        # 5. 产品优势×场景×情感3D矩阵（品牌洞察 5.1）
+        strength_scenario_emotion_matrix = {}
+        for review in reviews:
+            review_strength = [i.get("dimension") for i in insights_map.get(review.id, []) if i.get("type") == "strength" and i.get("dimension")]
+            review_scenario = [i.get("dimension") for i in insights_map.get(review.id, []) if i.get("type") == "scenario" and i.get("dimension")]
+            review_emotion = [i.get("dimension") for i in insights_map.get(review.id, []) if i.get("type") == "emotion" and i.get("dimension")]
+            
+            for strength in review_strength:
+                if strength not in strength_scenario_emotion_matrix:
+                    strength_scenario_emotion_matrix[strength] = {}
+                for scenario in review_scenario:
+                    if scenario not in strength_scenario_emotion_matrix[strength]:
+                        strength_scenario_emotion_matrix[strength][scenario] = {}
+                    for emotion in review_emotion:
+                        strength_scenario_emotion_matrix[strength][scenario][emotion] = strength_scenario_emotion_matrix[strength][scenario].get(emotion, 0) + 1
+        
+        # 6. 动机×劣势×建议3D矩阵（需求洞察 2.4 - 研发优先级）
+        motivation_weakness_suggestion_matrix = {}
+        for review in reviews:
+            review_why = [t["label_name"] for t in themes_map.get(review.id, []) if t.get("theme_type") == "why" and t.get("label_name")]
+            review_weakness = [i.get("dimension") for i in insights_map.get(review.id, []) if i.get("type") == "weakness" and i.get("dimension")]
+            review_suggestion = [i.get("dimension") for i in insights_map.get(review.id, []) if i.get("type") == "suggestion" and i.get("dimension")]
+            
+            for motivation in review_why:
+                if motivation not in motivation_weakness_suggestion_matrix:
+                    motivation_weakness_suggestion_matrix[motivation] = {}
+                for weakness in review_weakness:
+                    if weakness not in motivation_weakness_suggestion_matrix[motivation]:
+                        motivation_weakness_suggestion_matrix[motivation][weakness] = {}
+                    for suggestion in review_suggestion:
+                        motivation_weakness_suggestion_matrix[motivation][weakness][suggestion] = motivation_weakness_suggestion_matrix[motivation][weakness].get(suggestion, 0) + 1
+        
+        # 7. 情感×产品维度×地点3D矩阵（场景洞察 4.4 - 环境冲突）
+        emotion_dimension_location_matrix = {}
+        for review in reviews:
+            review_emotion = [i.get("dimension") for i in insights_map.get(review.id, []) if i.get("type") == "emotion" and i.get("dimension")]
+            # 产品维度使用strength（优势）或weakness（劣势）
+            review_strength = [i.get("dimension") for i in insights_map.get(review.id, []) if i.get("type") == "strength" and i.get("dimension")]
+            review_weakness = [i.get("dimension") for i in insights_map.get(review.id, []) if i.get("type") == "weakness" and i.get("dimension")]
+            review_dimensions = review_strength + review_weakness
+            review_where = [t["label_name"] for t in themes_map.get(review.id, []) if t.get("theme_type") == "where" and t.get("label_name")]
+            
+            for emotion in review_emotion:
+                if emotion not in emotion_dimension_location_matrix:
+                    emotion_dimension_location_matrix[emotion] = {}
+                for dimension in review_dimensions:
+                    if dimension not in emotion_dimension_location_matrix[emotion]:
+                        emotion_dimension_location_matrix[emotion][dimension] = {}
+                    for location in review_where:
+                        emotion_dimension_location_matrix[emotion][dimension][location] = emotion_dimension_location_matrix[emotion][dimension].get(location, 0) + 1
         
         # 获取维度总结（中观层AI分析）
         from app.models import ProductDimensionSummary
@@ -667,6 +798,16 @@ class ShareService:
             "context_labels": context_labels,
             "dimension_insights": dimension_insights,
             "dimension_summaries": dimension_summaries,  # AI生成的维度总结
+            # 🚀 预聚合的交叉统计矩阵（用于数据透视）
+            "pivot_matrices": {
+                "location_suggestion": location_suggestion_matrix,
+                "motivation_location": motivation_location_matrix,
+                "location_time_scenario": location_time_scenario_matrix,
+                "buyer_user_motivation": buyer_user_motivation_matrix,
+                "strength_scenario_emotion": strength_scenario_emotion_matrix,
+                "motivation_weakness_suggestion": motivation_weakness_suggestion_matrix,
+                "emotion_dimension_location": emotion_dimension_location_matrix,
+            },
         }
     
     async def _get_report_data(self, report_id: UUID) -> Dict[str, Any]:

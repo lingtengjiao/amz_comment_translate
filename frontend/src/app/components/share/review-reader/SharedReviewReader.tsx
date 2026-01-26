@@ -11,6 +11,8 @@ import {
   Sparkles, Loader2, CheckCircle2, RefreshCw, ChevronDown, ChevronUp, Crown, Medal, Award, Gauge
 } from 'lucide-react';
 import { EyeIcon } from '../../EyeIcon';
+import { PivotView } from './pivot/PivotView';
+import { PivotInsightReport } from './pivot/PivotInsightReport';
 
 interface SharedReviewReaderProps {
   data: {
@@ -21,13 +23,14 @@ interface SharedReviewReaderProps {
     aggregated_themes?: any;
     context_labels?: Record<string, any[]>;
     dimension_summaries?: Array<any>;
+    pivot_matrices?: any;
   };
   title: string | null;
   token: string;
   onDataRefresh?: () => void;
 }
 
-type TabType = 'overview' | 'reviews';
+type TabType = 'overview' | 'reviews' | 'pivot';
 type GenerateStatus = 'idle' | 'loading' | 'success' | 'error';
 
 export function SharedReviewReader({ data, token, onDataRefresh }: SharedReviewReaderProps) {
@@ -97,9 +100,9 @@ export function SharedReviewReader({ data, token, onDataRefresh }: SharedReviewR
     }
   };
 
-  // 切换到评论Tab时加载全部评论
+  // 切换到评论Tab或透视Tab时加载全部评论
   useEffect(() => {
-    if (activeTab === 'reviews' && !hasLoadedReviews && !loadingReviews) {
+    if ((activeTab === 'reviews' || activeTab === 'pivot') && !hasLoadedReviews && !loadingReviews) {
       loadAllReviews();
     }
   }, [activeTab, hasLoadedReviews, loadingReviews]);
@@ -434,7 +437,7 @@ export function SharedReviewReader({ data, token, onDataRefresh }: SharedReviewR
               <span className="text-base sm:text-lg font-bold bg-gradient-to-r from-gray-900 to-gray-600 bg-clip-text text-transparent">洞察大王分析报告</span>
             </div>
             <div className="flex bg-gray-100 rounded-xl p-1 ml-auto sm:ml-4">
-              {[{ k: 'overview', l: '数据总览' }, { k: 'reviews', l: '评论明细' }].map(t => (
+              {[{ k: 'overview', l: '数据总览' }, { k: 'reviews', l: '评论明细' }, { k: 'pivot', l: '数据透视' }].map(t => (
                 <button key={t.k} onClick={() => setActiveTab(t.k as TabType)}
                   className={`px-3 sm:px-4 py-1.5 text-xs sm:text-sm font-medium rounded-lg transition-all ${activeTab === t.k ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>{t.l}</button>
               ))}
@@ -472,8 +475,19 @@ export function SharedReviewReader({ data, token, onDataRefresh }: SharedReviewR
         )}
       </header>
 
-      <main className={activeTab === 'overview' ? 'max-w-7xl mx-auto px-3 sm:px-4 py-4 sm:py-6' : 'px-3 sm:px-4 py-3 sm:py-4 overflow-hidden h-[calc(100vh-120px)]'}>
-        {activeTab === 'overview' ? (
+      <main className={activeTab === 'overview' || activeTab === 'pivot' ? 'max-w-7xl mx-auto px-3 sm:px-4 py-4 sm:py-6' : 'px-3 sm:px-4 py-3 sm:py-4 overflow-hidden h-[calc(100vh-120px)]'}>
+        {activeTab === 'pivot' ? (
+          <PivotInsightReport 
+            data={{
+              reviews: displayReviews,
+              aggregated_themes: aggregated_themes,
+              aggregated_insights: aggregated_insights,
+              pivot_matrices: data.pivot_matrices,
+            }} 
+            token={token}
+            onDataRefresh={onDataRefresh}
+          />
+        ) : activeTab === 'overview' ? (
           <div className="space-y-4 sm:space-y-6">
             {/* AI分析生成入口 */}
             <section className="bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500 rounded-2xl p-[1px]">

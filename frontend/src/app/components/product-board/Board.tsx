@@ -15,6 +15,8 @@ interface BoardProps {
   selectedProducts?: Set<string>;
   onProductSelect?: (productId: string) => void;
   isReadOnly?: boolean;
+  /** 为 true 时隐藏画板标题栏的编辑、删除按钮（如自定义列视图下的子画板） */
+  hideBoardActions?: boolean;
   onProductEdit?: (product: Product) => void;
   onProductDelete?: (productId: string) => void;
   getProductColor?: (product: Product) => string | undefined;
@@ -36,6 +38,7 @@ export function Board({
   selectedProducts = new Set(),
   onProductSelect,
   isReadOnly = false,
+  hideBoardActions = false,
   onProductEdit,
   onProductDelete,
   getProductColor,
@@ -226,7 +229,7 @@ export function Board({
                     <ChevronRight className="w-3.5 h-3.5 text-gray-500" />
                   )}
                 </button>
-                {!isReadOnly && (
+                {!isReadOnly && !hideBoardActions && (
                   <>
                     <button
                       onClick={handleRename}

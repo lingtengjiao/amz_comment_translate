@@ -7,11 +7,13 @@ export interface DataUploadResult {
   asin: string;
   brand?: string;
   year?: number;
-  salesCount?: number;  // 月销量 → sales_volume_manual
-  majorCategoryRank?: number;  // 大类BSR
-  minorCategoryRank?: number;  // 小类BSR
-  majorCategoryName?: string;  // 大类目
-  minorCategoryName?: string;  // 小类目
+  listing_date?: string;  // 上架具体日期 YYYY-MM-DD（可选），有则用于推导 year
+  salesCount?: number;  // 单列销量 → sales_volume_manual
+  monthly_sales?: Record<string, number>;  // 按列名 YYYY-MM 或月份名解析的月度销量
+  majorCategoryRank?: number;
+  minorCategoryRank?: number;
+  majorCategoryName?: string;
+  minorCategoryName?: string;
 }
 
 interface DataUploadModalProps {
@@ -40,52 +42,70 @@ export function DataUploadModal({ isOpen, onClose, onUpload }: DataUploadModalPr
           const worksheet = workbook.Sheets[sheetName];
           const jsonData = XLSX.utils.sheet_to_json(worksheet, { defval: '' });
 
+          // 月度列匹配：YYYY-MM 或 YYYYMM
+          const isMonthKey = (key: string): boolean => /^\d{4}-\d{2}$/.test(key) || /^\d{6}$/.test(key);
+
           const results: DataUploadResult[] = [];
 
           for (const row of jsonData as Record<string, unknown>[]) {
-            // 支持多种列名（兼容卖家精灵、Sorftime 等工具导出格式）
             const asin = (row['ASIN'] || row['asin']) as string;
             if (!asin) continue;
 
-            // 品牌
             const brand = (row['品牌'] || row['brand'] || row['Brand']) as string;
-            
-            // 上架时间（支持日期格式 "2024-10-24" 或纯年份）
             const yearRaw = (row['上架时间'] || row['year'] || row['Year'] || row['年份']) as string | number;
             let year: number | undefined;
+            let listing_date: string | undefined;
             if (yearRaw) {
-              const yearStr = String(yearRaw);
-              if (yearStr.includes('-')) {
-                // 日期格式，提取年份
-                year = parseInt(yearStr.split('-')[0]);
+              const yearStr = String(yearRaw).trim();
+              if (/^\d{4}-\d{2}-\d{2}$/.test(yearStr)) {
+                listing_date = yearStr;
+                year = parseInt(yearStr.slice(0, 4), 10);
+              } else if (yearStr.includes('-')) {
+                const y = parseInt(yearStr.split('-')[0], 10);
+                if (!isNaN(y)) year = y;
               } else {
-                year = parseInt(yearStr);
+                const y = parseInt(yearStr, 10);
+                if (!isNaN(y)) year = y;
               }
             }
-            
-            // 月销量
-            const salesStr = (row['月销量'] || row['sales'] || row['Sales'] || row['salescount'] || row['SalesCount'] || row['销量']) as string | number;
+            const listingDateCol = (row['上架日期'] || row['listing_date'] || row['listingDate']) as string;
+            if (listingDateCol) {
+              const s = String(listingDateCol).trim();
+              if (/^\d{4}-\d{2}-\d{2}$/.test(s)) {
+                listing_date = s;
+                year = parseInt(s.slice(0, 4), 10);
+              }
+            }
+
+            const salesStr = (row['月销量'] || row['sales'] || row['Sales'] || row['销量'] || row['销售']) as string | number;
             const salesCount = salesStr ? parseInt(String(salesStr).replace(/,/g, '')) : undefined;
-            
-            // 大类BSR（大类排名）
+
+            const monthly_sales: Record<string, number> = {};
+            Object.keys(row).forEach((key) => {
+              if (!isMonthKey(key)) return;
+              const val = row[key];
+              if (val === '' || val == null) return;
+              const num = parseInt(String(val).replace(/,/g, ''));
+              if (!isNaN(num) && num >= 0) {
+                const monthKey = key.length === 6 ? `${key.slice(0, 4)}-${key.slice(4)}` : key;
+                monthly_sales[monthKey] = num;
+              }
+            });
+
             const majorCategoryRankStr = (row['大类BSR'] || row['major_category_rank']) as string | number;
             const majorCategoryRank = majorCategoryRankStr ? parseInt(String(majorCategoryRankStr).replace(/,/g, '')) : undefined;
-            
-            // 小类BSR（小类排名）
             const minorCategoryRankStr = (row['小类BSR'] || row['minor_category_rank']) as string | number;
             const minorCategoryRank = minorCategoryRankStr ? parseInt(String(minorCategoryRankStr).replace(/,/g, '')) : undefined;
-            
-            // 大类目名称
             const majorCategoryName = (row['大类目'] || row['major_category_name']) as string;
-            
-            // 小类目名称
             const minorCategoryName = (row['小类目'] || row['minor_category_name']) as string;
 
             results.push({
               asin: String(asin).trim(),
               brand: brand ? String(brand).trim() : undefined,
-              year: year && !isNaN(year) ? year : undefined,
+              year: year,
+              listing_date: listing_date,
               salesCount: salesCount && !isNaN(salesCount) ? salesCount : undefined,
+              monthly_sales: Object.keys(monthly_sales).length > 0 ? monthly_sales : undefined,
               majorCategoryRank: majorCategoryRank && !isNaN(majorCategoryRank) ? majorCategoryRank : undefined,
               minorCategoryRank: minorCategoryRank && !isNaN(minorCategoryRank) ? minorCategoryRank : undefined,
               majorCategoryName: majorCategoryName ? String(majorCategoryName).trim() : undefined,

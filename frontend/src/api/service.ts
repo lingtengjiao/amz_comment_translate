@@ -1354,6 +1354,12 @@ const apiService = {
   saveBoardConfig,
   saveViewConfig,
   
+  // [NEW] 自定义字段和标签
+  saveCustomFields,
+  updateProductTags,
+  updateProductMonthlySales,
+  batchUpdateProductTags,
+  
   // [NEW] Rufus 调研
   getRufusSessions,
   getRufusSessionDetail,
@@ -1442,9 +1448,20 @@ export interface CollectionProduct {
   minor_category_rank: number | null;  // 小类排名
   major_category_name: string | null;  // 大类名称
   minor_category_name: string | null;  // 小类名称
-  year: number | null;      // 产品上架年份
+  year: number | null;      // 产品上架年份（视图按年分组）
+  listing_date: string | null;  // 上架具体日期 YYYY-MM-DD，支持月/日
   brand: string | null;     // 产品品牌
+  monthly_sales: Record<string, number> | null;  // 月度销量数据 {"2023-05": 300, ...}
+  custom_tags: Record<string, string> | null;  // 自定义标签数据 {"field_1": "value1", ...}
   created_at: string;
+}
+
+// 自定义字段定义
+export interface CustomFieldDefinition {
+  id: string;
+  name: string;
+  type: 'text' | 'number' | 'select';
+  options?: string[];  // 仅 select 类型
 }
 
 export interface UpdateProductParams {
@@ -1465,12 +1482,15 @@ export interface UpdateProductParams {
   major_category_name?: string;  // 大类名称
   minor_category_name?: string;  // 小类名称
   year?: number;
+  listing_date?: string;  // 上架具体日期 YYYY-MM-DD
   brand?: string;
+  custom_tags?: Record<string, string>;  // 自定义标签数据
 }
 
 export interface BatchUpdateProductItem {
   asin: string;
   year?: number;
+  listing_date?: string;  // 上架具体日期 YYYY-MM-DD
   brand?: string;
   sales_volume?: number;  // 初步估算销售量
   sales_volume_manual?: number;  // 补充数据的销售量（月销量）
@@ -1481,6 +1501,8 @@ export interface BatchUpdateProductItem {
   minor_category_rank?: number;  // 小类BSR
   major_category_name?: string;  // 大类目
   minor_category_name?: string;  // 小类目
+  monthly_sales?: Record<string, number>;  // 月度销量数据
+  custom_tags?: Record<string, string>;  // 自定义标签数据
 }
 
 export interface BoardConfig {
@@ -1489,7 +1511,7 @@ export interface BoardConfig {
 }
 
 export interface ViewConfig {
-  viewMode?: 'custom' | 'price' | 'sales' | 'year' | 'brand' | 'ranking';  // 当前视图模式
+  viewMode?: 'price' | 'sales' | 'year' | 'brand' | 'ranking' | `tag-${string}`;  // 当前视图模式（支持自定义标签视图）
   colorRules?: Array<{
     id: string;
     name: string;
@@ -1542,6 +1564,7 @@ export interface KeywordCollection {
   description: string | null;
   board_config: BoardConfig | null;  // 画板配置
   view_config: ViewConfig | null;  // 视图配置
+  custom_fields: CustomFieldDefinition[] | null;  // 自定义字段定义
   created_at: string;
   updated_at: string | null;
   products?: CollectionProduct[];
@@ -1590,8 +1613,14 @@ async function getKeywordCollectionsGrouped(): Promise<GroupedCollectionsRespons
   return result.data;
 }
 
-async function getKeywordCollectionDetail(collectionId: string): Promise<KeywordCollection> {
-  const result = await request<KeywordCollection>(`/keyword-collections/${collectionId}`);
+async function getKeywordCollectionDetail(
+  collectionId: string,
+  noCache?: boolean
+): Promise<KeywordCollection> {
+  const url = noCache
+    ? `/keyword-collections/${collectionId}?_t=${Date.now()}`
+    : `/keyword-collections/${collectionId}`;
+  const result = await request<KeywordCollection>(url);
   return result.data;
 }
 
@@ -1694,6 +1723,78 @@ async function saveViewConfig(
     {
       method: 'PUT',
       body: JSON.stringify(viewConfig),
+    }
+  );
+  return result.data;
+}
+
+// ============== 自定义字段和标签 API ==============
+
+/**
+ * 保存自定义字段定义
+ */
+async function saveCustomFields(
+  collectionId: string,
+  customFields: CustomFieldDefinition[]
+): Promise<{ success: boolean; message: string; custom_fields: CustomFieldDefinition[] }> {
+  const result = await request<{ success: boolean; message: string; custom_fields: CustomFieldDefinition[] }>(
+    `/keyword-collections/${collectionId}/custom-fields`,
+    {
+      method: 'PUT',
+      body: JSON.stringify({ custom_fields: customFields }),
+    }
+  );
+  return result.data;
+}
+
+/**
+ * 更新单个产品的自定义标签
+ */
+async function updateProductTags(
+  collectionId: string,
+  productId: string,
+  customTags: Record<string, string>
+): Promise<{ success: boolean; custom_tags: Record<string, string> }> {
+  const result = await request<{ success: boolean; custom_tags: Record<string, string> }>(
+    `/keyword-collections/${collectionId}/products/${productId}/tags`,
+    {
+      method: 'PUT',
+      body: JSON.stringify({ custom_tags: customTags }),
+    }
+  );
+  return result.data;
+}
+
+/**
+ * 更新单个产品的月度销量数据
+ */
+async function updateProductMonthlySales(
+  collectionId: string,
+  productId: string,
+  monthlySales: Record<string, number>
+): Promise<{ success: boolean; monthly_sales: Record<string, number> }> {
+  const result = await request<{ success: boolean; monthly_sales: Record<string, number> }>(
+    `/keyword-collections/${collectionId}/products/${productId}/monthly-sales`,
+    {
+      method: 'PUT',
+      body: JSON.stringify({ monthly_sales: monthlySales }),
+    }
+  );
+  return result.data;
+}
+
+/**
+ * 批量更新产品标签
+ */
+async function batchUpdateProductTags(
+  collectionId: string,
+  updates: Array<{ product_id: string; custom_tags: Record<string, string> }>
+): Promise<{ success: boolean; message: string; updated_count: number }> {
+  const result = await request<{ success: boolean; message: string; updated_count: number }>(
+    `/keyword-collections/${collectionId}/products/batch-update-tags`,
+    {
+      method: 'POST',
+      body: JSON.stringify({ updates }),
     }
   );
   return result.data;

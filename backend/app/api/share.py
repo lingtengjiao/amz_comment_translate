@@ -769,3 +769,286 @@ async def get_summary_task_status(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"查询任务状态失败: {str(e)}"
         )
+
+
+# ============== [NEW 2026-01-24] 数据透视AI洞察生成 ==============
+
+@router.post("/{token}/generate-pivot-insights", response_model=GenerateSummariesResponse)
+async def generate_pivot_insights(
+    token: str,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    🚀 生成数据透视AI洞察（异步模式）
+    
+    通过分享链接token触发数据透视AI分析生成，包括：
+    - 人群洞察（决策链路、人群-卖点匹配）
+    - 需求洞察（需求满足度矩阵）
+    - 产品洞察（致命缺陷、优劣势对比、改进优先级）
+    - 自动迁移dimension_summaries到新表
+    
+    🚀 异步模式：立即返回任务ID，前端可轮询状态
+    """
+    from app.models import Product
+    from sqlalchemy import select
+    from app.worker import task_generate_pivot_insights
+    
+    try:
+        # 验证token并获取资源信息
+        service = ShareService(db)
+        meta = await service.get_share_meta(token)
+        
+        if not meta:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="分享链接不存在"
+            )
+        
+        if not meta.get("is_valid"):
+            raise HTTPException(
+                status_code=status.HTTP_410_GONE,
+                detail="分享链接已失效"
+            )
+        
+        # 只支持 review_reader 类型
+        if meta.get("resource_type") != "review_reader":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="此类型的分享链接不支持生成数据透视洞察"
+            )
+        
+        # 获取ASIN对应的product_id
+        asin = meta.get("asin")
+        if not asin:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="无法获取产品信息"
+            )
+        
+        result = await db.execute(
+            select(Product).where(Product.asin == asin)
+        )
+        product = result.scalar_one_or_none()
+        
+        if not product:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"产品不存在: {asin}"
+            )
+        
+        # 🚀 异步模式：触发 Celery 任务，立即返回
+        logger.info(f"[数据透视洞察] 🚀 异步触发产品 {asin} 数据透视洞察任务 (token: {token})")
+        
+        celery_result = task_generate_pivot_insights.delay(str(product.id))
+        
+        logger.info(f"[数据透视洞察] ✅ 任务已提交: task_id={celery_result.id}, product_id={product.id}")
+        
+        return GenerateSummariesResponse(
+            success=True,
+            message="数据透视AI分析任务已启动，预计需要1-3分钟完成",
+            task_id=celery_result.id,
+            status="pending"
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(f"生成数据透视洞察失败: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"生成数据透视洞察失败: {str(e)}"
+        )
+
+
+@router.get("/{token}/generate-pivot-insights/{task_id}", response_model=GenerateSummariesResponse)
+async def get_pivot_insights_task_status(
+    token: str,
+    task_id: str,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    🚀 查询数据透视洞察任务状态（轮询用）
+    
+    返回任务状态：
+    - pending: 任务排队中
+    - processing: 任务执行中
+    - completed: 任务完成
+    - failed: 任务失败
+    """
+    from celery.result import AsyncResult
+    from app.worker import celery_app
+    
+    try:
+        # 验证token
+        service = ShareService(db)
+        meta = await service.get_share_meta(token)
+        
+        if not meta or not meta.get("is_valid"):
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="分享链接不存在或已失效"
+            )
+        
+        # 查询 Celery 任务状态
+        result = AsyncResult(task_id, app=celery_app)
+        
+        if result.state == 'PENDING':
+            return GenerateSummariesResponse(
+                success=True,
+                message="任务排队中...",
+                task_id=task_id,
+                status="pending"
+            )
+        elif result.state == 'STARTED' or result.state == 'PROGRESS':
+            return GenerateSummariesResponse(
+                success=True,
+                message="数据透视AI分析进行中...",
+                task_id=task_id,
+                status="processing"
+            )
+        elif result.state == 'SUCCESS':
+            # 任务完成，返回结果
+            task_result = result.result or {}
+            total_generated = task_result.get("total_generated", 0)
+            
+            return GenerateSummariesResponse(
+                success=True,
+                message=f"数据透视AI分析完成，共生成 {total_generated} 条洞察",
+                task_id=task_id,
+                status="completed"
+            )
+        elif result.state == 'FAILURE':
+            error_msg = str(result.result) if result.result else "未知错误"
+            return GenerateSummariesResponse(
+                success=False,
+                message=f"数据透视AI分析失败: {error_msg}",
+                task_id=task_id,
+                status="failed"
+            )
+        else:
+            return GenerateSummariesResponse(
+                success=True,
+                message=f"任务状态: {result.state}",
+                task_id=task_id,
+                status="processing"
+            )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(f"查询任务状态失败: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"查询任务状态失败: {str(e)}"
+        )
+
+
+@router.get("/{token}/pivot-insights")
+async def get_pivot_insights(
+    token: str,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    📊 获取产品的数据透视AI洞察
+    
+    返回所有已生成的洞察，按类型分组：
+    - audience: 人群洞察
+    - demand: 需求洞察
+    - product: 产品洞察
+    - dimension_summary: 维度总结（兼容原有数据）
+    """
+    from app.models import Product
+    from app.models.product_pivot_insight import ProductPivotInsight
+    from sqlalchemy import select
+    
+    try:
+        # 验证token并获取资源信息
+        service = ShareService(db)
+        meta = await service.get_share_meta(token)
+        
+        if not meta:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="分享链接不存在"
+            )
+        
+        if not meta.get("is_valid"):
+            raise HTTPException(
+                status_code=status.HTTP_410_GONE,
+                detail="分享链接已失效"
+            )
+        
+        # 获取ASIN对应的product_id
+        asin = meta.get("asin")
+        if not asin:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="无法获取产品信息"
+            )
+        
+        result = await db.execute(
+            select(Product).where(Product.asin == asin)
+        )
+        product = result.scalar_one_or_none()
+        
+        if not product:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"产品不存在: {asin}"
+            )
+        
+        # 获取所有洞察
+        result = await db.execute(
+            select(ProductPivotInsight).where(
+                ProductPivotInsight.product_id == product.id
+            )
+        )
+        insights = result.scalars().all()
+        
+        # 按类型分组
+        grouped = {
+            "audience": [],
+            "demand": [],
+            "product": [],
+            "scenario": [],
+            "brand": [],
+            "dimension_summary": [],
+            "other": []
+        }
+        
+        for insight in insights:
+            insight_dict = {
+                "id": str(insight.id),
+                "insight_type": insight.insight_type,
+                "sub_type": insight.sub_type,
+                "dimension": insight.dimension,
+                "summary_type": insight.summary_type,
+                "insight_data": insight.insight_data,
+                "confidence": float(insight.confidence) if insight.confidence else None,
+                "generation_status": insight.generation_status,
+                "created_at": insight.created_at.isoformat() if insight.created_at else None,
+                "updated_at": insight.updated_at.isoformat() if insight.updated_at else None,
+            }
+            
+            insight_type = insight.insight_type
+            if insight_type in grouped:
+                grouped[insight_type].append(insight_dict)
+            else:
+                grouped["other"].append(insight_dict)
+        
+        return {
+            "success": True,
+            "product_id": str(product.id),
+            "asin": asin,
+            "insights": grouped,
+            "total": len(insights)
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(f"获取数据透视洞察失败: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"获取数据透视洞察失败: {str(e)}"
+        )

@@ -43,6 +43,8 @@ from app.models.profit_calculator import (
 from app.models.share_link import ShareLink, ShareResourceType
 # Product Dimension Summary Model (维度总结 - 中观层AI分析)
 from app.models.product_dimension_summary import ProductDimensionSummary, SummaryType as DimensionSummaryType
+# Product Pivot Insight Model (数据透视AI洞察)
+from app.models.product_pivot_insight import ProductPivotInsight
 
 __all__ = [
     "Product", 
@@ -99,5 +101,7 @@ __all__ = [
     # Product Dimension Summary Model
     "ProductDimensionSummary",
     "DimensionSummaryType",
+    # Product Pivot Insight Model
+    "ProductPivotInsight",
 ]
 

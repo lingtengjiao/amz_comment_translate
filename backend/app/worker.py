@@ -11,6 +11,7 @@ import time
 import random
 from typing import Optional
 from functools import wraps
+from uuid import UUID
 
 from celery import Celery
 from sqlalchemy import create_engine, select, update, and_, func
@@ -3493,6 +3494,52 @@ def task_generate_dimension_summaries(self, product_id: str):
     except Exception as e:
         logger.error(f"[维度总结] ❌ 生成失败: {product_id}, 错误: {e}")
         raise self.retry(exc=e)
+
+
+# ============== [NEW 2026-01-24] 任务: 数据透视AI洞察生成 ==============
+
+@celery_app.task(bind=True, max_retries=2, default_retry_delay=60)
+def task_generate_pivot_insights(self, product_id: str):
+    """
+    生成产品数据透视AI洞察
+    
+    包括：
+    - 人群洞察 (audience): 决策链路、人群-卖点匹配
+    - 需求洞察 (demand): 需求满足度矩阵
+    - 产品洞察 (product): 致命缺陷、优劣势对比、改进优先级
+    - 迁移 dimension_summaries 到新表
+    
+    Args:
+        product_id: UUID of the product
+    """
+    from app.services.pivot_insight_service import PivotInsightService
+    
+    logger.info(f"[数据透视洞察] 开始生成: {product_id}")
+    
+    db = get_sync_db()
+    
+    try:
+        service = PivotInsightService(db)
+        result = service.generate_all_insights(UUID(product_id))
+        
+        if result.get("success"):
+            logger.info(f"[数据透视洞察] ✅ 生成完成: {product_id}, 生成数量: {result.get('total_generated', 0)}")
+            return {
+                "product_id": product_id,
+                "success": True,
+                "total_generated": result.get("total_generated", 0),
+                "insights": result.get("generated_insights", [])
+            }
+        else:
+            error = result.get("error", "未知错误")
+            logger.error(f"[数据透视洞察] ❌ 生成失败: {product_id}, 错误: {error}")
+            raise Exception(error)
+        
+    except Exception as e:
+        logger.error(f"[数据透视洞察] ❌ 任务异常: {product_id}, 错误: {e}")
+        raise self.retry(exc=e)
+    finally:
+        db.close()
 
 
 # ============================================================================

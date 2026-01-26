@@ -146,16 +146,21 @@ export function ProductEditModal({ product, onSave, onClose }: ProductEditModalP
               </div>
             </div>
 
-            {/* Year and Brand Row */}
+            {/* 上架日期与品牌 */}
             <div className="grid grid-cols-2 gap-4">
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">上架年份</label>
+                <label className="block text-sm font-medium text-gray-700 mb-1">上架日期</label>
                 <input
-                  type="number"
-                  value={formData.year}
-                  onChange={(e) => handleChange('year', parseInt(e.target.value) || 2024)}
-                  min="2000"
-                  max="2030"
+                  type="date"
+                  value={formData.listingDate || (formData.year ? `${formData.year}-01-01` : '')}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    setFormData({
+                      ...formData,
+                      listingDate: v || undefined,
+                      year: v ? new Date(v).getFullYear() : formData.year,
+                    });
+                  }}
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-rose-500 focus:border-transparent"
                 />
               </div>

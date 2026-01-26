@@ -3,14 +3,14 @@
  * 1:1 还原设计稿，支持六大视图模式、拖拽分类、颜色透视等功能
  */
 import { useState, useCallback, useEffect, useRef, useMemo } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { DndProvider } from 'react-dnd';
 import { HTML5Backend } from 'react-dnd-html5-backend';
 import { toast } from 'sonner';
 import { 
-  Plus, CheckSquare, X, LayoutGrid, DollarSign, Settings, 
+  Plus, X, DollarSign, Settings, 
   TrendingUp, ArrowUpDown, Calendar, Tag, Trophy, Upload, 
-  Palette, ArrowLeft, Loader2, BarChart3, Share2
+  Palette, ArrowLeft, Loader2, BarChart3, Table2
 } from 'lucide-react';
 import { ShareButton } from '../share/ShareButton';
 import { Product } from './ProductCard';
@@ -23,16 +23,18 @@ import { RankingSettings, RankingMetric, RankingRange } from './RankingSettings'
 import { ProductEditModal } from './ProductEditModal';
 import { DataUploadModal, DataUploadResult } from './DataUploadModal';
 import { ColorPerspectiveSettings, ColorRule } from './ColorPerspectiveSettings';
+import type { CustomFieldDefinition } from '../../../api/service';
 import { CollectionDetailDialog } from '../home/dialogs/CollectionDetailDialog';
 import { ConfirmDialog } from '../ConfirmDialog';
-import apiService, { type KeywordCollection } from '../../../api/service';
+import apiService, { type KeywordCollection, type ViewConfig } from '../../../api/service';
 
 interface BoardData {
   id: string;
   name: string;
 }
 
-type ViewMode = 'custom' | 'price' | 'sales' | 'year' | 'brand' | 'ranking';
+// ViewMode 类型：使用 ViewConfig 中定义的类型，确保一致性
+type ViewMode = NonNullable<ViewConfig['viewMode']>;
 
 // 默认价格段配置
 const defaultPriceRanges: PriceRange[] = [
@@ -83,6 +85,7 @@ const defaultRankingRanges: RankingRange[] = [
 export function ProductBoardSection() {
   const { collectionId } = useParams<{ collectionId?: string }>();
   const navigate = useNavigate();
+  const location = useLocation();
 
   // 加载状态
   const [loading, setLoading] = useState(true);
@@ -92,8 +95,8 @@ export function ProductBoardSection() {
   // 详情弹窗状态
   const [detailDialogOpen, setDetailDialogOpen] = useState(false);
 
-  // 视图模式
-  const [viewMode, setViewMode] = useState<ViewMode>('custom');
+  // 视图模式（默认使用价格视图）
+  const [viewMode, setViewMode] = useState<ViewMode>('price');
   
   // 画板数据
   const [boards, setBoards] = useState<BoardData[]>([
@@ -130,6 +133,8 @@ export function ProductBoardSection() {
   // 数据上传状态
   const [isDataUploadOpen, setIsDataUploadOpen] = useState(false);
 
+  const [customFields, setCustomFields] = useState<CustomFieldDefinition[]>([]);
+
   // 默认颜色规则
   const defaultColorRule: ColorRule = {
     id: 'default-rule-1',
@@ -150,6 +155,12 @@ export function ProductBoardSection() {
   const [isAddingBoard, setIsAddingBoard] = useState(false);
   const [newBoardName, setNewBoardName] = useState('');
   
+  // 新建标签分组状态（用于 tag 视图）
+  const [isAddingTagGroup, setIsAddingTagGroup] = useState(false);
+  const [newTagGroupName, setNewTagGroupName] = useState('');
+  // 存储用户新建的空分组（fieldId -> tagValue[]）
+  const [emptyTagGroups, setEmptyTagGroups] = useState<Record<string, string[]>>({});
+  
   // 删除画板确认对话框状态
   const [deleteBoardId, setDeleteBoardId] = useState<string | null>(null);
 
@@ -159,7 +170,6 @@ export function ProductBoardSection() {
   // 批量操作相关状态
   const [isBatchMode, setIsBatchMode] = useState(false);
   const [selectedProducts, setSelectedProducts] = useState<Set<string>>(new Set());
-  const [targetBoardId, setTargetBoardId] = useState<string>('');
 
   // 画板排序状态
   type BoardSortOption = 'custom' | 'name-asc' | 'name-desc' | 'count-asc' | 'count-desc' | 'avgPrice-asc' | 'avgPrice-desc';
@@ -169,14 +179,15 @@ export function ProductBoardSection() {
   const isInitialLoadRef = useRef(true);
   const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const viewModeLoadedRef = useRef(false);  // 跟踪 viewMode 是否已从数据库加载
-  const savedViewModeRef = useRef<ViewMode>('custom');  // 存储从数据库加载的 viewMode
+  const savedViewModeRef = useRef<ViewMode>('price');  // 存储从数据库加载的 viewMode
 
-  // 加载产品数据
+  // 加载产品数据（pathname 变化时强制刷新，避免从数据表格返回后看到旧数据）
   useEffect(() => {
     if (collectionId) {
-      loadCollectionData(collectionId);
+      const skipCache = true; // 始终拉取最新数据，保证年份/品牌/排名等与数据表格一致
+      loadCollectionData(collectionId, skipCache);
     }
-  }, [collectionId]);
+  }, [collectionId, location.pathname]);
 
   // 自动保存画板配置（防抖）
   useEffect(() => {
@@ -199,12 +210,12 @@ export function ProductBoardSection() {
     saveTimeoutRef.current = setTimeout(async () => {
       try {
         // 保存画板配置（画板顺序和产品映射）
+        // 注意：custom 视图已移除，productBoards 仅用于兼容旧数据
         const boardsToSave = boards;
-        const productBoardsToSave = viewMode === 'custom' ? productBoards : {};
         await apiService.saveBoardConfig(
           collectionId, 
           boardsToSave, 
-          productBoardsToSave
+          {}
         );
         console.log('[ProductBoard] 画板配置已自动保存');
 
@@ -234,36 +245,41 @@ export function ProductBoardSection() {
     };
   }, [boards, productBoards, colorRules, yearRanges, rankingRanges, rankingMetric, priceRanges, salesRanges, brandRanges, collectionId]);
 
-  const loadCollectionData = async (id: string) => {
+  const loadCollectionData = async (id: string, skipCache = false) => {
     setLoading(true);
     viewModeLoadedRef.current = false;  // 重置 viewMode 加载标记
     try {
-      const collection = await apiService.getKeywordCollectionDetail(id);
+      const collection = await apiService.getKeywordCollectionDetail(id, skipCache);
       setFullCollection(collection); // 保存完整的 collection 信息用于弹窗
       setCollectionInfo({
         keyword: collection.keyword,
         marketplace: collection.marketplace,
       });
+      
+      // 加载自定义字段定义
+      setCustomFields(collection.custom_fields || []);
 
-      // 转换产品数据格式
+      // 转换产品数据格式（始终包含 custom_tags / monthly_sales，便于视图按钮和分组逻辑使用）
       const convertedProducts: Product[] = (collection.products || []).map((p, index) => ({
         id: p.id || `product-${index}`,
         asin: p.asin,
         title: p.title || p.asin,
         imageUrl: p.image_url || '',
         productUrl: p.product_url || `https://amazon.com/dp/${p.asin}`,
-        price: p.price || '$0.00',  // 已经是字符串格式
+        price: p.price || '$0.00',
         rating: p.rating || 0,
         reviewCount: p.review_count || 0,
         salesCount: p.sales_volume || 0,
-        salesVolumeManual: p.sales_volume_manual || undefined,  // 补充数据的月销量
-        year: p.year || 0,  // 只有在有真实年份数据时才设置，否则为 0
-        brand: p.brand || '',  // 使用 brand 字段
-        majorCategoryRank: p.major_category_rank || undefined,  // 大类BSR
-        minorCategoryRank: p.minor_category_rank || undefined,  // 小类BSR
-        majorCategoryName: p.major_category_name || undefined,  // 大类目
-        minorCategoryName: p.minor_category_name || undefined,  // 小类目
-      }));
+        salesVolumeManual: p.sales_volume_manual || undefined,
+        year: p.year || 0,
+        brand: p.brand || '',
+        majorCategoryRank: p.major_category_rank || undefined,
+        minorCategoryRank: p.minor_category_rank || undefined,
+        majorCategoryName: p.major_category_name || undefined,
+        minorCategoryName: p.minor_category_name || undefined,
+        monthly_sales: p.monthly_sales ?? {},
+        custom_tags: p.custom_tags ?? {},
+      } as any));
 
       setProducts(convertedProducts);
       
@@ -291,9 +307,8 @@ export function ProductBoardSection() {
 
       // 加载视图配置，或使用默认配置
       // 先获取保存的 viewMode，稍后验证是否可用
-      let savedViewMode: ViewMode = 'custom';
-      let hasSavedBrandRanges = false;
-      
+      let savedViewMode: ViewMode = 'price';
+
       if (collection.view_config) {
         // 加载视图模式
         if (collection.view_config.viewMode) {
@@ -311,14 +326,25 @@ export function ProductBoardSection() {
           setColorRules([defaultColorRule]);  // 第一次加载，使用默认规则
         }
 
-        // 加载年份配置
+        // 加载年份配置，并合并数据中已存在但配置中未包含的年份（如 2026、2027）
+        let loadedYearRanges: YearRange[] = [];
         if (collection.view_config.yearRanges !== undefined && collection.view_config.yearRanges !== null) {
-          setYearRanges(collection.view_config.yearRanges.length > 0 
-            ? collection.view_config.yearRanges 
-            : []);
+          loadedYearRanges = collection.view_config.yearRanges.length > 0
+            ? (collection.view_config.yearRanges as YearRange[])
+            : [];
         } else {
-          setYearRanges(defaultYearRanges);
+          loadedYearRanges = [...defaultYearRanges];
         }
+        const yearsInData = new Set(
+          convertedProducts.map(p => p.year).filter((y): y is number => typeof y === 'number' && y > 0)
+        );
+        const covered = (y: number) => loadedYearRanges.some(r => y >= r.min && y <= r.max);
+        const toAdd = Array.from(yearsInData).filter(y => !covered(y)).sort((a, b) => a - b);
+        toAdd.forEach(y => {
+          loadedYearRanges.push({ id: `year-${y}`, name: String(y), min: y, max: y });
+        });
+        loadedYearRanges.sort((a, b) => a.min - b.min);
+        setYearRanges(loadedYearRanges);
 
         // 加载排名配置
         if (collection.view_config.rankingRanges !== undefined && collection.view_config.rankingRanges !== null) {
@@ -346,28 +372,50 @@ export function ProductBoardSection() {
             : []);
         }
 
-        // 加载品牌配置
+        // 加载品牌配置，并合并数据中已存在但配置中未包含的品牌
+        let loadedBrandRanges: BrandRange[] = [];
         if (collection.view_config.brandRanges !== undefined && collection.view_config.brandRanges !== null) {
-          setBrandRanges(collection.view_config.brandRanges);
-          hasSavedBrandRanges = true;
+          loadedBrandRanges = [...(collection.view_config.brandRanges as BrandRange[])];
         }
-      } else {
-        // 使用默认视图配置
-        setColorRules([defaultColorRule]);
-        setYearRanges(defaultYearRanges);
-        setRankingRanges(defaultRankingRanges);
-      }
-
-      // 只在没有保存的品牌配置时，自动检测品牌
-      if (!hasSavedBrandRanges) {
-        const detectedBrands = new Set<string>();
-        convertedProducts.forEach(p => {
-          if (p.brand) detectedBrands.add(p.brand);
+        const brandsInData = new Set(
+          convertedProducts.map(p => p.brand).filter((b): b is string => b != null && String(b).trim() !== '')
+        );
+        const configuredBrands = new Set(loadedBrandRanges.flatMap(r => r.brands));
+        const otherBrandRange = loadedBrandRanges.find(r => r.brands.length === 0);
+        brandsInData.forEach(b => {
+          if (configuredBrands.has(b)) return;
+          configuredBrands.add(b);
+          loadedBrandRanges.push({
+            id: `brand-${b.toLowerCase().replace(/\s+/g, '-')}`,
+            name: b,
+            brands: [b],
+          });
         });
-        if (detectedBrands.size > 0) {
+        if (loadedBrandRanges.length === 0 && otherBrandRange === undefined) {
+          loadedBrandRanges.push({ id: 'brand-other', name: '其他品牌', brands: [] });
+        }
+        setBrandRanges(loadedBrandRanges);
+      } else {
+        // 使用默认视图配置，仍合并数据中已有的年份与品牌
+        setColorRules([defaultColorRule]);
+        let defaultYears = [...defaultYearRanges];
+        const yearsInDataElse = new Set(
+          convertedProducts.map(p => p.year).filter((y): y is number => typeof y === 'number' && y > 0)
+        );
+        const coveredElse = (y: number) => defaultYears.some(r => y >= r.min && y <= r.max);
+        yearsInDataElse.forEach(y => {
+          if (!coveredElse(y)) defaultYears.push({ id: `year-${y}`, name: String(y), min: y, max: y });
+        });
+        defaultYears.sort((a, b) => a.min - b.min);
+        setYearRanges(defaultYears);
+        setRankingRanges(defaultRankingRanges);
+        const brandsInDataElse = new Set(
+          convertedProducts.map(p => p.brand).filter((b): b is string => b != null && String(b).trim() !== '')
+        );
+        if (brandsInDataElse.size > 0) {
           setBrandRanges([
-            ...Array.from(detectedBrands).map(brand => ({
-              id: `brand-${brand.toLowerCase()}`,
+            ...Array.from(brandsInDataElse).map(brand => ({
+              id: `brand-${brand.toLowerCase().replace(/\s+/g, '-')}`,
               name: brand,
               brands: [brand],
             })),
@@ -387,10 +435,13 @@ export function ProductBoardSection() {
       // 如果保存的视图模式不可用（没有对应数据），切换回自定义视图
       // 注意：price、sales、brand 视图不需要数据检查，因为它们总是可用的
       let finalViewMode: ViewMode = savedViewMode;
-      if (savedViewMode === 'year' && !hasYearDataCheck) {
-        finalViewMode = 'custom';
+      // 如果保存的是旧的 custom 视图，切换到 price 视图
+      if ((savedViewMode as string) === 'custom') {
+        finalViewMode = 'price';
+      } else if (savedViewMode === 'year' && !hasYearDataCheck) {
+        finalViewMode = 'price';
       } else if (savedViewMode === 'ranking' && !hasRankingDataCheck) {
-        finalViewMode = 'custom';
+        finalViewMode = 'price';
       }
       
       // 存储到 ref，供自动保存使用
@@ -414,11 +465,62 @@ export function ProductBoardSection() {
     }
   };
 
-  const handleDrop = (product: Product, boardId: string) => {
-    setProductBoards((prev) => ({
-      ...prev,
-      [product.id]: boardId,
-    }));
+  const handleDrop = async (product: Product, boardId: string) => {
+    // 如果是自定义标签视图，更新产品的 custom_tags
+    if (viewMode.startsWith('tag-')) {
+      const fieldId = viewMode.replace('tag-', '');
+      // 解析 boardId: tag-{fieldId}-{tagValue}
+      const match = boardId.match(/^tag-([^-]+)-(.+)$/);
+      if (match) {
+        const [, , tagValue] = match;
+        // 如果是"未标记"分组，清空标签值
+        const newTagValue = tagValue === '__untagged__' ? '' : tagValue;
+        
+        // 获取当前产品的 custom_tags
+        const currentTags = (product as any).custom_tags || {};
+        const updatedTags = { ...currentTags, [fieldId]: newTagValue };
+        
+        // 更新本地状态
+        setProducts(prev => prev.map(p => {
+          if (p.id === product.id) {
+            return {
+              ...p,
+              custom_tags: updatedTags
+            } as Product;
+          }
+          return p;
+        }));
+        
+        // 调用 API 保存到后端
+        if (collectionId) {
+          try {
+            await apiService.updateCollectionProduct(collectionId, product.id, {
+              custom_tags: updatedTags
+            });
+            toast.success(`已将产品移动到「${newTagValue || '未标记'}」`);
+          } catch (err) {
+            console.error('[ProductBoard] 更新产品标签失败:', err);
+            toast.error('更新产品标签失败');
+            // 回滚本地状态
+            setProducts(prev => prev.map(p => {
+              if (p.id === product.id) {
+                return {
+                  ...p,
+                  custom_tags: currentTags
+                } as Product;
+              }
+              return p;
+            }));
+          }
+        }
+      }
+    } else {
+      // 原有逻辑：更新产品画板映射（仅用于兼容旧数据）
+      setProductBoards((prev) => ({
+        ...prev,
+        [product.id]: boardId,
+      }));
+    }
   };
 
   const handleAddBoard = () => {
@@ -476,37 +578,10 @@ export function ProductBoardSection() {
     });
   };
 
-  // 开启批量模式
-  const handleEnterBatchMode = () => {
-    setIsBatchMode(true);
-    setSelectedProducts(new Set());
-    setTargetBoardId('');
-  };
-
   // 取消批量模式
   const handleCancelBatchMode = () => {
     setIsBatchMode(false);
     setSelectedProducts(new Set());
-    setTargetBoardId('');
-  };
-
-  // 批量移动产品
-  const handleBatchMove = () => {
-    if (!targetBoardId || selectedProducts.size === 0) {
-      return;
-    }
-
-    setProductBoards((prev) => {
-      const updated = { ...prev };
-      selectedProducts.forEach((productId) => {
-        updated[productId] = targetBoardId;
-      });
-      return updated;
-    });
-
-    setSelectedProducts(new Set());
-    setIsBatchMode(false);
-    setTargetBoardId('');
   };
 
   // ========== 缓存各视图模式的产品分组 ==========
@@ -549,18 +624,30 @@ export function ProductBoardSection() {
   }, [products, yearRanges]);
 
   // 缓存品牌分组（依赖: products, brandRanges）
+  // 包含：1) 品牌设置中配置的分组 2) 产品里出现但未在配置中的品牌（动态分组，便于数据表格新增品牌及时呈现）
   const brandRangeProductsCache = useMemo(() => {
     const cache: Record<string, Product[]> = {};
-    const allBrands = brandRanges.flatMap(r => r.brands);
+    const allConfiguredBrands = brandRanges.flatMap(r => r.brands);
+    const brandValuesInProducts = new Set(
+      products.map(p => p.brand).filter((b): b is string => b != null && String(b).trim() !== '')
+    );
+
     brandRanges.forEach(range => {
       if (range.brands.length === 0) {
-        // "其他品牌" 分组
-        cache[range.id] = products.filter((p) => !allBrands.includes(p.brand));
+        // “其他品牌”：仅包含未填写品牌的 product
+        cache[range.id] = products.filter((p) => !p.brand || String(p.brand).trim() === '');
       } else {
         cache[range.id] = products.filter((p) => range.brands.includes(p.brand));
       }
     });
-    console.log('[ProductBoard] 品牌分组缓存已更新');
+
+    // 动态品牌：产品中出现的品牌但未在任一配置分组中 → 单独成看板，便于表格里新增品牌即时展示
+    brandValuesInProducts.forEach((brandName) => {
+      if (allConfiguredBrands.includes(brandName)) return;
+      const dynamicId = `brand-dynamic-${brandName}`;
+      cache[dynamicId] = products.filter((p) => p.brand === brandName);
+    });
+
     return cache;
   }, [products, brandRanges]);
 
@@ -593,6 +680,103 @@ export function ProductBoardSection() {
     console.log('[ProductBoard] 排名分组缓存已更新');
     return cache;
   }, [products, rankingRanges, rankingMetric]);
+
+  // 缓存自定义标签分组（依赖: products, customFields）
+  // 为每个有数据的自定义字段创建分组
+  const customTagProductsCache = useMemo(() => {
+    const cache: Record<string, Record<string, Product[]>> = {};
+    
+    customFields.forEach(field => {
+      const fieldCache: Record<string, Product[]> = {};
+      const tagValues = new Set<string>();
+      
+      // 收集该字段的所有标签值
+      products.forEach(p => {
+        const tagValue = (p as any).custom_tags?.[field.id];
+        if (tagValue) {
+          tagValues.add(tagValue);
+        }
+      });
+      
+      // 为每个标签值创建产品分组
+      tagValues.forEach(tagValue => {
+        fieldCache[`tag-${field.id}-${tagValue}`] = products.filter(p => {
+          const pTagValue = (p as any).custom_tags?.[field.id];
+          return pTagValue === tagValue;
+        });
+      });
+      
+      // 添加"未标记"分组
+      const untaggedProducts = products.filter(p => {
+        const pTagValue = (p as any).custom_tags?.[field.id];
+        return !pTagValue;
+      });
+      if (untaggedProducts.length > 0) {
+        fieldCache[`tag-${field.id}-__untagged__`] = untaggedProducts;
+      }
+      
+      cache[field.id] = fieldCache;
+    });
+    
+    console.log('[ProductBoard] 自定义标签分组缓存已更新');
+    return cache;
+  }, [products, customFields]);
+
+  // 获取自定义标签的所有分组（用于生成看板）
+  const getCustomTagBoards = useCallback((fieldId: string): BoardData[] => {
+    const field = customFields.find(f => f.id === fieldId);
+    if (!field) return [];
+    
+    const fieldCache = customTagProductsCache[fieldId] || {};
+    const boards: BoardData[] = [];
+    const addedTagValues = new Set<string>();
+    
+    // 如果是下拉选择类型，按选项顺序显示（包括空选项）
+    if (field.type === 'select' && field.options) {
+      field.options.forEach(option => {
+        const boardId = `tag-${fieldId}-${option}`;
+        boards.push({ id: boardId, name: option });
+        addedTagValues.add(option);
+      });
+    } else {
+      // 其他类型，按标签值显示
+      Object.keys(fieldCache).forEach(boardId => {
+        if (boardId.endsWith('__untagged__')) return;
+        const tagValue = boardId.replace(`tag-${fieldId}-`, '');
+        if (fieldCache[boardId] && fieldCache[boardId].length > 0) {
+          boards.push({ id: boardId, name: tagValue });
+          addedTagValues.add(tagValue);
+        }
+      });
+    }
+    
+    // 添加用户新建的空分组
+    const emptyGroups = emptyTagGroups[fieldId] || [];
+    emptyGroups.forEach(tagValue => {
+      if (!addedTagValues.has(tagValue)) {
+        const boardId = `tag-${fieldId}-${tagValue}`;
+        boards.push({ id: boardId, name: tagValue });
+        addedTagValues.add(tagValue);
+      }
+    });
+    
+    // 添加"未标记"分组（始终显示）
+    const untaggedBoardId = `tag-${fieldId}-__untagged__`;
+    boards.push({ id: untaggedBoardId, name: '未标记' });
+    
+    return boards;
+  }, [customFields, customTagProductsCache, emptyTagGroups]);
+
+  // 获取自定义标签分组的产品
+  const getCustomTagProducts = (boardId: string): Product[] => {
+    // boardId 格式: tag-{fieldId}-{tagValue}
+    const match = boardId.match(/^tag-([^-]+)-(.+)$/);
+    if (!match) return [];
+    
+    const [, fieldId] = match;
+    const fieldCache = customTagProductsCache[fieldId] || {};
+    return fieldCache[boardId] || [];
+  };
 
   // 获取价格段产品（使用缓存）
   const getPriceRangeProducts = (rangeId: string): Product[] => {
@@ -631,6 +815,8 @@ export function ProductBoardSection() {
       return getBrandRangeProducts(boardId);
     } else if (viewMode === 'ranking') {
       return getRankingRangeProducts(boardId);
+    } else if (viewMode.startsWith('tag-')) {
+      return getCustomTagProducts(boardId);
     }
     return getBoardProducts(boardId);
   };
@@ -641,17 +827,29 @@ export function ProductBoardSection() {
     if (viewMode === 'sales') return salesRanges.map(r => ({ id: r.id, name: r.name }));
     if (viewMode === 'year') return yearRanges.map(r => ({ id: r.id, name: r.name }));
     if (viewMode === 'brand') {
-      // 品牌视图：只显示有产品的品牌子看板
-      return brandRanges
+      // 品牌视图：配置的分组 + 产品中实际出现但未配置的品牌（动态看板）
+      const configured = brandRanges
         .filter(r => {
-          const products = brandRangeProductsCache[r.id] || [];
-          return products.length > 0;
+          const list = brandRangeProductsCache[r.id] || [];
+          return list.length > 0;
         })
         .map(r => ({ id: r.id, name: r.name }));
+      const dynamicIds = Object.keys(brandRangeProductsCache).filter((id) =>
+        id.startsWith('brand-dynamic-')
+      );
+      const dynamicBoards = dynamicIds
+        .filter((id) => (brandRangeProductsCache[id] || []).length > 0)
+        .map((id) => ({ id, name: id.slice('brand-dynamic-'.length) }));
+      return [...configured, ...dynamicBoards];
     }
     if (viewMode === 'ranking') return rankingRanges.map(r => ({ id: r.id, name: r.name }));
+    // 自定义标签视图
+    if (viewMode.startsWith('tag-')) {
+      const fieldId = viewMode.replace('tag-', '');
+      return getCustomTagBoards(fieldId);
+    }
     return boards;
-  }, [viewMode, priceRanges, salesRanges, yearRanges, brandRanges, rankingRanges, boards, brandRangeProductsCache]);
+  }, [viewMode, priceRanges, salesRanges, yearRanges, brandRanges, rankingRanges, boards, brandRangeProductsCache, getCustomTagBoards]);
 
   // 画板排序逻辑（缓存）
   const sortedBoards = useMemo(() => {
@@ -666,6 +864,7 @@ export function ProductBoardSection() {
       if (viewMode === 'year') return yearRangeProductsCache[boardId] || [];
       if (viewMode === 'brand') return brandRangeProductsCache[boardId] || [];
       if (viewMode === 'ranking') return rankingRangeProductsCache[boardId] || [];
+      if (viewMode.startsWith('tag-')) return getCustomTagProducts(boardId);
       return products.filter((p) => productBoards[p.id] === boardId);
     };
 
@@ -702,10 +901,9 @@ export function ProductBoardSection() {
     setViewMode(mode);
     // 更新 savedViewModeRef，确保自动保存时使用正确的值
     savedViewModeRef.current = mode;
-    if (mode === 'custom') {
-      setIsBatchMode(false);
-      setSelectedProducts(new Set());
-    }
+    // 切换视图时重置批量模式
+    setIsBatchMode(false);
+    setSelectedProducts(new Set());
     
     // 立即保存视图模式，确保切换后立即持久化
     if (collectionId && viewModeLoadedRef.current) {
@@ -794,15 +992,7 @@ export function ProductBoardSection() {
   // 处理画板拖拽移动（所有视图模式都支持）
   const handleMoveBoard = useCallback((dragIndex: number, hoverIndex: number) => {
     // 根据当前视图模式，更新对应的数组
-    if (viewMode === 'custom') {
-      setBoards((prevBoards) => {
-        const newBoards = [...prevBoards];
-        const dragBoard = newBoards[dragIndex];
-        newBoards.splice(dragIndex, 1);
-        newBoards.splice(hoverIndex, 0, dragBoard);
-        return newBoards;
-      });
-    } else if (viewMode === 'price') {
+    if (viewMode === 'price') {
       setPriceRanges((prevRanges) => {
         const newRanges = [...prevRanges];
         const dragRange = newRanges[dragIndex];
@@ -1027,6 +1217,19 @@ export function ProductBoardSection() {
     return hasMajorRank || hasMinorRank;
   });
 
+  // 获取有数据的自定义字段（用于显示视图切换按钮）
+  const customFieldsWithData = useMemo(() => {
+    return customFields.filter(field => {
+      const tagKey = field.id;
+      return products.some(p => {
+        const tags = (p as any).custom_tags;
+        if (!tags || typeof tags !== 'object') return false;
+        const val = tags[tagKey];
+        return val != null && String(val).trim() !== '';
+      });
+    });
+  }, [customFields, products]);
+
   // 获取产品的颜色透视颜色
   const getProductColor = (product: Product): string | undefined => {
     if (!isColorPerspectiveEnabled || colorRules.length === 0) {
@@ -1144,18 +1347,18 @@ export function ProductBoardSection() {
                 洞察分析
               </button>
               
+              {/* 数据表格按钮：直接进入完整页面 */}
+              <button
+                onClick={() => collectionId && navigate(`/product-board/${collectionId}/data-table`)}
+                className="flex items-center gap-1.5 text-white px-4 py-1.5 rounded-full shadow-lg hover:shadow-xl transition-all text-xs font-medium"
+                style={{ backgroundColor: '#0ea5e9' }}
+              >
+                <Table2 className="w-3.5 h-3.5" />
+                数据表格
+              </button>
+              
               {/* 视图模式切换器 */}
               <div className="flex border-2 border-gray-200 rounded-full p-0.5 gap-0.5">
-                <button
-                  onClick={() => handleViewModeChange('custom')}
-                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full transition-all text-xs font-medium ${
-                    viewMode === 'custom' ? 'text-white shadow-sm' : 'text-gray-600 hover:bg-gray-50'
-                  }`}
-                  style={viewMode === 'custom' ? { backgroundColor: '#FF1B82' } : {}}
-                >
-                  <LayoutGrid className="w-3.5 h-3.5" />
-                  自定义
-                </button>
                 <button
                   onClick={() => handleViewModeChange('price')}
                   className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full transition-all text-xs font-medium ${
@@ -1214,6 +1417,21 @@ export function ProductBoardSection() {
                     排名
                   </button>
                 )}
+                
+                {/* 自定义标签视图按钮 - 只显示有数据的标签 */}
+                {customFieldsWithData.map(field => (
+                  <button
+                    key={field.id}
+                    onClick={() => handleViewModeChange(`tag-${field.id}` as ViewMode)}
+                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full transition-all text-xs font-medium ${
+                      viewMode === `tag-${field.id}` ? 'text-white shadow-sm' : 'text-gray-600 hover:bg-gray-50'
+                    }`}
+                    style={viewMode === `tag-${field.id}` ? { backgroundColor: '#8B5CF6' } : {}}
+                  >
+                    <Tag className="w-3.5 h-3.5" />
+                    {field.name}
+                  </button>
+                ))}
               </div>
               
               {/* 数据上传按钮 */}
@@ -1244,25 +1462,7 @@ export function ProductBoardSection() {
                 {isColorPerspectiveEnabled ? '颜色透视：开' : '颜色透视'}
               </button>
               
-              {!isBatchMode && viewMode === 'custom' ? (
-                <>
-                  <button
-                    onClick={handleEnterBatchMode}
-                    className="flex items-center gap-1.5 text-gray-700 px-4 py-1.5 rounded-full border-2 border-gray-300 hover:border-gray-400 transition-all text-xs font-medium"
-                  >
-                    <CheckSquare className="w-3.5 h-3.5" />
-                    批量移动
-                  </button>
-                  <button
-                    onClick={() => setIsAddingBoard(true)}
-                    className="flex items-center gap-1.5 text-white px-4 py-1.5 rounded-full shadow-lg hover:shadow-xl transition-all text-xs font-medium"
-                    style={{ backgroundColor: '#FF1B82' }}
-                  >
-                    <Plus className="w-3.5 h-3.5" />
-                    新建画板
-                  </button>
-                </>
-              ) : viewMode === 'price' ? (
+              {viewMode === 'price' ? (
                 <button
                   onClick={() => setIsPriceSettingsOpen(true)}
                   className="flex items-center gap-1.5 text-white px-4 py-1.5 rounded-full shadow-lg hover:shadow-xl transition-all text-xs font-medium"
@@ -1307,6 +1507,58 @@ export function ProductBoardSection() {
                   <Settings className="w-3.5 h-3.5" />
                   排名设置
                 </button>
+              ) : viewMode.startsWith('tag-') ? (
+                // 自定义标签视图 - 仅显示新建分组功能（提醒已移至画板排序行）
+                <div className="flex items-center gap-2">
+                  {isAddingTagGroup ? (
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="text"
+                        value={newTagGroupName}
+                        onChange={(e) => setNewTagGroupName(e.target.value)}
+                        placeholder="输入新分组名称"
+                        className="px-3 py-1.5 text-xs border border-purple-300 rounded-full focus:outline-none focus:ring-2 focus:ring-purple-500"
+                        autoFocus
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' && newTagGroupName.trim()) {
+                            // 创建新的空分组
+                            const fieldId = viewMode.replace('tag-', '');
+                            const tagValue = newTagGroupName.trim();
+                            // 添加到空分组列表
+                            setEmptyTagGroups(prev => ({
+                              ...prev,
+                              [fieldId]: [...(prev[fieldId] || []), tagValue]
+                            }));
+                            setNewTagGroupName('');
+                            setIsAddingTagGroup(false);
+                            toast.success(`已创建分组「${tagValue}」，拖拽产品到此分组即可分类`);
+                          } else if (e.key === 'Escape') {
+                            setNewTagGroupName('');
+                            setIsAddingTagGroup(false);
+                          }
+                        }}
+                      />
+                      <button
+                        onClick={() => {
+                          setNewTagGroupName('');
+                          setIsAddingTagGroup(false);
+                        }}
+                        className="p-1.5 rounded-full hover:bg-gray-100"
+                      >
+                        <X className="w-3.5 h-3.5 text-gray-500" />
+                      </button>
+                    </div>
+                  ) : (
+                    <button
+                      onClick={() => setIsAddingTagGroup(true)}
+                      className="flex items-center gap-1.5 text-white px-4 py-1.5 rounded-full shadow-lg hover:shadow-xl transition-all text-xs font-medium"
+                      style={{ backgroundColor: '#8B5CF6' }}
+                    >
+                      <Plus className="w-3.5 h-3.5" />
+                      新建分组
+                    </button>
+                  )}
+                </div>
               ) : isBatchMode ? (
                 <button
                   onClick={handleCancelBatchMode}
@@ -1323,7 +1575,7 @@ export function ProductBoardSection() {
         {/* 画板容器 */}
         <div className="flex-1 px-6">
           {/* 画板排序控件 */}
-          <div className="py-3 flex items-center gap-2.5">
+          <div className="py-3 flex items-center gap-2.5 flex-wrap">
             <div className="flex items-center gap-1.5 flex-shrink-0">
               <ArrowUpDown className="w-4 h-4 text-gray-500" />
               <span className="text-sm text-gray-600 font-medium whitespace-nowrap">画板排序：</span>
@@ -1375,6 +1627,13 @@ export function ProductBoardSection() {
                 )}
               </button>
             </div>
+            {viewMode.startsWith('tag-') && (
+              <div className="flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium text-purple-700 bg-purple-50 border border-purple-200">
+                <Tag className="w-3.5 h-3.5" />
+                {customFields.find(f => viewMode === `tag-${f.id}`)?.name || '自定义标签'} 视图
+                <span className="text-purple-500">（拖拽产品到分组进行分类）</span>
+              </div>
+            )}
           </div>
 
           <div className="overflow-x-auto">
@@ -1392,7 +1651,8 @@ export function ProductBoardSection() {
                   isBatchMode={isBatchMode}
                   selectedProducts={selectedProducts}
                   onProductSelect={handleProductSelect}
-                  isReadOnly={viewMode !== 'custom'}
+                  isReadOnly={!viewMode.startsWith('tag-')}
+                  hideBoardActions={viewMode.startsWith('tag-')}
                   onProductEdit={handleProductEdit}
                   onProductDelete={handleProductDelete}
                   index={index}
@@ -1629,7 +1889,7 @@ export function ProductBoardSection() {
           collection={fullCollection}
           onRefresh={() => {
             if (collectionId) {
-              loadCollectionData(collectionId);
+              loadCollectionData(collectionId, true);
             }
           }}
         />

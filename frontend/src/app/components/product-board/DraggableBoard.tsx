@@ -16,6 +16,8 @@ interface DraggableBoardProps {
   selectedProducts?: Set<string>;
   onProductSelect?: (productId: string) => void;
   isReadOnly?: boolean;
+  /** 为 true 时隐藏画板标题栏的编辑、删除按钮 */
+  hideBoardActions?: boolean;
   onProductEdit?: (product: Product) => void;
   onProductDelete?: (productId: string) => void;
   index: number;
@@ -41,6 +43,7 @@ export function DraggableBoard({
   selectedProducts,
   onProductSelect,
   isReadOnly = false,
+  hideBoardActions = false,
   onProductEdit,
   onProductDelete,
   index,
@@ -144,6 +147,7 @@ export function DraggableBoard({
         selectedProducts={selectedProducts}
         onProductSelect={onProductSelect}
         isReadOnly={isReadOnly}
+        hideBoardActions={hideBoardActions}
         onProductEdit={onProductEdit}
         onProductDelete={onProductDelete}
         getProductColor={getProductColor}

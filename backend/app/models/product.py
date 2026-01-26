@@ -129,6 +129,13 @@ class Product(Base):
         cascade="all, delete-orphan"
     )
     
+    # 数据透视AI洞察
+    pivot_insights: Mapped[List["ProductPivotInsight"]] = relationship(
+        "ProductPivotInsight",
+        back_populates="product",
+        cascade="all, delete-orphan"
+    )
+    
     def __repr__(self) -> str:
         return f"<Product(asin={self.asin}, title={self.title[:50] if self.title else 'N/A'})>"
 

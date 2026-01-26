@@ -93,6 +93,19 @@ class KeywordCollection(Base):
         comment="视图配置（JSON 格式）：颜色规则、年份区间、排名区间、价格区间、销量区间、品牌区间等"
     )
     
+    # 自定义字段定义（JSONB 格式）
+    # 结构示例:
+    # [
+    #   {"id": "field_1", "name": "产品类型", "type": "select", "options": ["TSA-Clear", "TSA-Lock", ...]},
+    #   {"id": "field_2", "name": "产品系列", "type": "select", "options": ["TSA-Clear-常规款", ...]},
+    #   {"id": "field_3", "name": "备注", "type": "text"}
+    # ]
+    custom_fields: Mapped[list | None] = mapped_column(
+        JSONB,
+        nullable=True,
+        comment="自定义字段定义（JSONB数组，每项包含id、name、type、options等）"
+    )
+    
     # 时间戳
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -131,6 +144,7 @@ class KeywordCollection(Base):
             "description": self.description,
             "board_config": self.board_config,
             "view_config": self.view_config,
+            "custom_fields": self.custom_fields or [],
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None
         }
