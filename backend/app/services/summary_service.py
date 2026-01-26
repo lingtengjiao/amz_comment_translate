@@ -2440,6 +2440,56 @@ class SummaryService:
         # 同时检查是否有历史报告
         latest_report = await self.get_latest_report(product_id)
         
+        # 获取各类型报告数量
+        report_counts = {}
+        for rt in [ReportType.COMPREHENSIVE.value, ReportType.OPERATIONS.value, 
+                   ReportType.PRODUCT.value, ReportType.SUPPLY_CHAIN.value]:
+            stmt = select(func.count(ProductReport.id)).where(
+                and_(
+                    ProductReport.product_id == product_id,
+                    ProductReport.report_type == rt
+                )
+            )
+            result = await self.db.execute(stmt)
+            report_counts[rt] = result.scalar() or 0
+        
+        return {
+            "success": True,
+            "product": {
+                "id": str(product.id),
+                "asin": product.asin,
+                "title": product.title_translated or product.title
+            },
+            "stats": {
+                "total_reviews": total_reviews,
+                # ECharts 格式（新版 - 5类 Insight）
+                "context": context_stats,
+                "insight": insight_stats,
+                # 字符串格式（兼容旧版）
+                "context_stats": context_formatted,
+                "insight_stats": insight_formatted,
+                # 列表格式（兼容旧版）- 5W Context
+                "top_buyer": context_lists.get("buyer", [])[:5],
+                "top_user": context_lists.get("user", [])[:5],
+                "top_who": context_lists.get("who", [])[:5],  # 兼容旧数据
+                "top_where": context_lists.get("where", [])[:5],
+                "top_when": context_lists.get("when", [])[:5],
+                "top_why": context_lists.get("why", [])[:5],
+                "top_what": context_lists.get("what", [])[:5],
+                # 列表格式（兼容旧版）- 5类 Insight
+                "top_strengths": insight_lists.get("strength", [])[:5],
+                "top_weaknesses": insight_lists.get("weakness", [])[:5],
+                "top_suggestions": insight_lists.get("suggestion", [])[:5],
+                "top_scenarios": insight_lists.get("scenario", [])[:5],
+                "top_emotions": insight_lists.get("emotion", [])[:5]
+            },
+            "report_counts": report_counts,
+            "has_existing_report": latest_report is not None,
+            "latest_report_id": str(latest_report.id) if latest_report else None,
+            "latest_report_date": latest_report.created_at.isoformat() if latest_report else None,
+            "latest_report_type": latest_report.report_type if latest_report else None
+        }
+    
     # ==========================================
     # [BATCH QUERY] 批量数据查询优化 (高性能)
     # ==========================================
@@ -2608,53 +2658,3 @@ class SummaryService:
             result_map[product_id] = formatted
         
         return result_map
-        
-        # 获取各类型报告数量
-        report_counts = {}
-        for rt in [ReportType.COMPREHENSIVE.value, ReportType.OPERATIONS.value, 
-                   ReportType.PRODUCT.value, ReportType.SUPPLY_CHAIN.value]:
-            stmt = select(func.count(ProductReport.id)).where(
-                and_(
-                    ProductReport.product_id == product_id,
-                    ProductReport.report_type == rt
-                )
-            )
-            result = await self.db.execute(stmt)
-            report_counts[rt] = result.scalar() or 0
-        
-        return {
-            "success": True,
-            "product": {
-                "id": str(product.id),
-                "asin": product.asin,
-                "title": product.title_translated or product.title
-            },
-            "stats": {
-                "total_reviews": total_reviews,
-                # ECharts 格式（新版 - 5类 Insight）
-                "context": context_stats,
-                "insight": insight_stats,
-                # 字符串格式（兼容旧版）
-                "context_stats": context_formatted,
-                "insight_stats": insight_formatted,
-                # 列表格式（兼容旧版）- 5W Context
-                "top_buyer": context_lists.get("buyer", [])[:5],
-                "top_user": context_lists.get("user", [])[:5],
-                "top_who": context_lists.get("who", [])[:5],  # 兼容旧数据
-                "top_where": context_lists.get("where", [])[:5],
-                "top_when": context_lists.get("when", [])[:5],
-                "top_why": context_lists.get("why", [])[:5],
-                "top_what": context_lists.get("what", [])[:5],
-                # 列表格式（兼容旧版）- 5类 Insight
-                "top_strengths": insight_lists.get("strength", [])[:5],
-                "top_weaknesses": insight_lists.get("weakness", [])[:5],
-                "top_suggestions": insight_lists.get("suggestion", [])[:5],
-                "top_scenarios": insight_lists.get("scenario", [])[:5],
-                "top_emotions": insight_lists.get("emotion", [])[:5]
-            },
-            "report_counts": report_counts,
-            "has_existing_report": latest_report is not None,
-            "latest_report_id": str(latest_report.id) if latest_report else None,
-            "latest_report_date": latest_report.created_at.isoformat() if latest_report else None,
-            "latest_report_type": latest_report.report_type if latest_report else None
-        }
