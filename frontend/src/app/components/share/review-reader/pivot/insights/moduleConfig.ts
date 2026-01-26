@@ -119,39 +119,39 @@ export const MODULE_CONFIGS: Record<string, ModuleConfig> = {
 };
 
 /**
- * 统一的样式类（Tailwind CSS）
+ * 统一的样式类（Tailwind CSS）- 移动端优化
  */
 export const UNIFIED_STYLES = {
-  // 外层容器
-  container: 'bg-white rounded-2xl border-2 shadow-sm hover:shadow-md transition-shadow overflow-hidden',
+  // 外层容器 - 移动端减小圆角和边框
+  container: 'bg-white rounded-xl sm:rounded-2xl border sm:border-2 shadow-sm hover:shadow-md transition-shadow overflow-hidden',
   
-  // 标题区域按钮
+  // 标题区域按钮 - 移动端减小内边距
   headerButton: (expanded: boolean) => 
-    `w-full px-6 py-4 transition-colors flex items-center justify-between ${
-      expanded ? 'bg-gradient-to-r' : 'bg-gradient-to-r hover:opacity-90'
+    `w-full px-4 py-3 sm:px-6 sm:py-4 transition-colors flex items-center justify-between ${
+      expanded ? 'bg-gradient-to-r' : 'bg-gradient-to-r hover:opacity-90 active:opacity-80'
     }`,
   
-  // 图标容器
-  iconContainer: 'w-10 h-10 rounded-lg flex items-center justify-center',
+  // 图标容器 - 移动端缩小尺寸
+  iconContainer: 'w-8 h-8 sm:w-10 sm:h-10 rounded-lg flex items-center justify-center flex-shrink-0',
   
-  // 图标
-  icon: 'h-6 w-6 text-white',
+  // 图标 - 移动端缩小尺寸
+  icon: 'h-5 w-5 sm:h-6 sm:w-6 text-white',
   
-  // 标题文字
-  titleText: 'text-lg font-bold text-gray-900',
+  // 标题文字 - 移动端缩小字体
+  titleText: 'text-base sm:text-lg font-bold text-gray-900',
   
-  // 副标题文字
-  subtitleText: 'text-sm text-gray-600',
+  // 副标题文字 - 移动端缩小字体，可能隐藏
+  subtitleText: 'text-xs sm:text-sm text-gray-600 hidden sm:block',
   
-  // 折叠图标
-  chevronIcon: 'h-5 w-5 text-gray-500 transition-transform',
+  // 折叠图标 - 移动端缩小尺寸
+  chevronIcon: 'h-4 w-4 sm:h-5 sm:w-5 text-gray-500 transition-transform flex-shrink-0',
   
-  // 内容区域
-  content: 'p-6',
+  // 内容区域 - 移动端减小内边距
+  content: 'p-4 sm:p-6',
   
-  // 空数据提示
-  emptyState: 'bg-gray-50 rounded-xl p-8 text-center',
-  emptyStateText: 'text-sm text-gray-600',
+  // 空数据提示 - 移动端减小内边距
+  emptyState: 'bg-gray-50 rounded-xl p-4 sm:p-8 text-center',
+  emptyStateText: 'text-xs sm:text-sm text-gray-600',
 };
 
 /**

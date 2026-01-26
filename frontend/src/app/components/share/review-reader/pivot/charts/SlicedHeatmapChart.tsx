@@ -46,32 +46,35 @@ export function SlicedHeatmapChart({
 
   return (
     <div className="w-full">
-      {/* Tab切换 */}
+      {/* Tab切换 - 移动端优化 */}
       {slices.length > 1 && (
-        <div className="mb-4 flex flex-wrap gap-2">
-          {slices.map((slice, index) => (
-            <button
-              key={index}
-              onClick={() => setActiveSliceIndex(index)}
-              className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${
-                activeSliceIndex === index
-                  ? 'bg-blue-500 text-white shadow-md'
-                  : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-              }`}
-            >
-              {slice.label}
-              {slice.count !== undefined && (
-                <span className="ml-1.5 text-xs opacity-75">
-                  ({slice.count})
-                </span>
-              )}
-            </button>
-          ))}
+        <div className="mb-4">
+          {/* 移动端使用横向滚动 */}
+          <div className="flex gap-2 overflow-x-auto pb-2 -mx-2 px-2 md:flex-wrap md:overflow-visible">
+            {slices.map((slice, index) => (
+              <button
+                key={index}
+                onClick={() => setActiveSliceIndex(index)}
+                className={`px-3 py-2 rounded-lg text-xs sm:text-sm font-medium transition-all whitespace-nowrap flex-shrink-0 ${
+                  activeSliceIndex === index
+                    ? 'bg-blue-500 text-white shadow-md'
+                    : 'bg-gray-100 text-gray-700 hover:bg-gray-200 active:bg-gray-300'
+                }`}
+              >
+                {slice.label}
+                {slice.count !== undefined && (
+                  <span className="ml-1.5 text-[10px] sm:text-xs opacity-75">
+                    ({slice.count})
+                  </span>
+                )}
+              </button>
+            ))}
+          </div>
         </div>
       )}
 
-      {/* 热力图 */}
-      <div className="bg-white rounded-lg p-2">
+      {/* 热力图 - 移动端优化 */}
+      <div className="bg-white rounded-lg p-1 sm:p-2">
         <HeatmapChart
           rows={activeSlice.rows}
           columns={activeSlice.columns}

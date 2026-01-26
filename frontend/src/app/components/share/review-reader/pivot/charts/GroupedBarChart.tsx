@@ -18,12 +18,15 @@ interface GroupedBarChartProps {
 
 export function GroupedBarChart({ categories, series, title, horizontal = false }: GroupedBarChartProps) {
   const option = useMemo(() => {
+    // 检测是否为移动设备
+    const isMobile = typeof window !== 'undefined' && window.innerWidth < 768;
+    
     const baseOption = {
       title: title ? {
         text: title,
         left: 'center',
         textStyle: {
-          fontSize: 14,
+          fontSize: isMobile ? 12 : 14,
           fontWeight: 'bold',
         },
       } : undefined,
@@ -32,6 +35,7 @@ export function GroupedBarChart({ categories, series, title, horizontal = false 
         axisPointer: {
           type: 'shadow',
         },
+        confine: true, // 限制在图表区域内
         formatter: (params: any) => {
           let result = `<strong>${params[0].axisValue}</strong><br/>`;
           params.forEach((item: any) => {
@@ -44,14 +48,16 @@ export function GroupedBarChart({ categories, series, title, horizontal = false 
         data: series.map(s => s.name),
         bottom: 0,
         textStyle: {
-          fontSize: 11,
+          fontSize: isMobile ? 9 : 11,
         },
+        type: isMobile ? 'scroll' : 'plain', // 移动端使用滚动图例
+        pageIconSize: isMobile ? 10 : 12,
       },
       grid: {
-        left: horizontal ? '15%' : '5%',
-        right: '5%',
-        top: title ? '15%' : '5%',
-        bottom: '15%',
+        left: horizontal ? (isMobile ? '20%' : '15%') : (isMobile ? '10%' : '5%'),
+        right: isMobile ? '5%' : '5%',
+        top: title ? (isMobile ? '12%' : '15%') : (isMobile ? '5%' : '5%'),
+        bottom: isMobile ? '20%' : '15%',
         containLabel: true,
       },
       [horizontal ? 'yAxis' : 'xAxis']: {
@@ -59,14 +65,16 @@ export function GroupedBarChart({ categories, series, title, horizontal = false 
         data: categories,
         axisLabel: {
           interval: 0,
-          rotate: horizontal ? 0 : (categories.length > 6 ? 30 : 0),
-          fontSize: 11,
+          rotate: horizontal ? 0 : (isMobile ? 45 : (categories.length > 6 ? 30 : 0)),
+          fontSize: isMobile ? 9 : 11,
+          overflow: 'truncate',
+          width: isMobile ? 60 : undefined,
         },
       },
       [horizontal ? 'xAxis' : 'yAxis']: {
         type: 'value',
         axisLabel: {
-          fontSize: 11,
+          fontSize: isMobile ? 9 : 11,
         },
       },
       series: series.map(s => ({
@@ -77,9 +85,9 @@ export function GroupedBarChart({ categories, series, title, horizontal = false 
           color: s.color,
         } : undefined,
         label: {
-          show: true,
+          show: !isMobile, // 移动端隐藏标签
           position: horizontal ? 'right' : 'top',
-          fontSize: 10,
+          fontSize: isMobile ? 8 : 10,
           formatter: '{c}',
         },
       })),
@@ -88,11 +96,24 @@ export function GroupedBarChart({ categories, series, title, horizontal = false 
     return baseOption;
   }, [categories, series, title, horizontal]);
   
+  // 移动端适配高度
+  const isMobile = typeof window !== 'undefined' && window.innerWidth < 768;
+  const cellHeight = isMobile ? 35 : 50;
+  const defaultHeight = isMobile ? 280 : 350;
+  const minHeight = isMobile ? 250 : 300;
+  const chartHeight = horizontal 
+    ? Math.max(minHeight, categories.length * cellHeight) + 'px'
+    : defaultHeight + 'px';
+  
   return (
-    <div className="w-full">
+    <div className="w-full overflow-x-auto">
       <ReactECharts
         option={option}
-        style={{ height: horizontal ? Math.max(300, categories.length * 50) + 'px' : '350px', width: '100%' }}
+        style={{ 
+          height: chartHeight, 
+          width: '100%',
+          minWidth: isMobile ? '300px' : 'auto'
+        }}
         opts={{ renderer: 'canvas' }}
       />
     </div>

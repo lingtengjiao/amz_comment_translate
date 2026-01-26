@@ -22,6 +22,8 @@ export function BiDirectionalBarChart({
 }: BiDirectionalBarChartProps) {
   const option = useMemo(() => {
     const maxValue = Math.max(...leftData, ...rightData);
+    // 检测是否为移动设备
+    const isMobile = typeof window !== 'undefined' && window.innerWidth < 768;
     
     return {
       tooltip: {
@@ -29,6 +31,7 @@ export function BiDirectionalBarChart({
         axisPointer: {
           type: 'shadow',
         },
+        confine: true, // 限制在图表区域内
         formatter: (params: any) => {
           const category = params[0].axisValue;
           const left = Math.abs(params[0].value);
@@ -42,14 +45,14 @@ export function BiDirectionalBarChart({
         data: [leftLabel, rightLabel],
         bottom: 0,
         textStyle: {
-          fontSize: 11,
+          fontSize: isMobile ? 9 : 11,
         },
       },
       grid: {
-        left: '25%',
-        right: '25%',
-        top: '5%',
-        bottom: '15%',
+        left: isMobile ? '30%' : '25%',
+        right: isMobile ? '30%' : '25%',
+        top: isMobile ? '3%' : '5%',
+        bottom: isMobile ? '18%' : '15%',
         containLabel: false,
       },
       xAxis: {
@@ -58,7 +61,7 @@ export function BiDirectionalBarChart({
         max: maxValue * 1.1,
         axisLabel: {
           formatter: (value: number) => Math.abs(value).toString(),
-          fontSize: 10,
+          fontSize: isMobile ? 8 : 10,
         },
         splitLine: {
           lineStyle: {
@@ -76,8 +79,10 @@ export function BiDirectionalBarChart({
           show: false,
         },
         axisLabel: {
-          fontSize: 11,
+          fontSize: isMobile ? 9 : 11,
           align: 'center',
+          overflow: 'truncate',
+          width: isMobile ? 60 : undefined,
           margin: 80,
         },
         splitLine: {
@@ -90,9 +95,9 @@ export function BiDirectionalBarChart({
           type: 'bar',
           stack: 'total',
           label: {
-            show: true,
+            show: !isMobile, // 移动端隐藏标签
             position: 'left',
-            fontSize: 10,
+            fontSize: isMobile ? 8 : 10,
             formatter: (params: any) => Math.abs(params.value),
           },
           data: leftData.map(v => -v), // 负值显示在左侧
@@ -105,9 +110,9 @@ export function BiDirectionalBarChart({
           type: 'bar',
           stack: 'total',
           label: {
-            show: true,
+            show: !isMobile, // 移动端隐藏标签
             position: 'right',
-            fontSize: 10,
+            fontSize: isMobile ? 8 : 10,
           },
           data: rightData,
           itemStyle: {
@@ -118,11 +123,21 @@ export function BiDirectionalBarChart({
     };
   }, [categories, leftData, rightData, leftLabel, rightLabel]);
   
+  // 移动端适配高度
+  const isMobile = typeof window !== 'undefined' && window.innerWidth < 768;
+  const cellHeight = isMobile ? 35 : 45;
+  const minHeight = isMobile ? 250 : 300;
+  const chartHeight = Math.max(minHeight, categories.length * cellHeight);
+  
   return (
-    <div className="w-full">
+    <div className="w-full overflow-x-auto">
       <ReactECharts
         option={option}
-        style={{ height: Math.max(300, categories.length * 45) + 'px', width: '100%' }}
+        style={{ 
+          height: chartHeight + 'px', 
+          width: '100%',
+          minWidth: isMobile ? '300px' : 'auto'
+        }}
         opts={{ renderer: 'canvas' }}
       />
     </div>

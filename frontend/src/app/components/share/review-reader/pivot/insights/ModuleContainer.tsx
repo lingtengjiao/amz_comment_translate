@@ -25,22 +25,22 @@ export function ModuleContainer({
   const styles = buildModuleStyles(config.id as any, expanded);
   const Icon = config.icon;
   
-  // 错误状态
+  // 错误状态 - 移动端优化
   if (error) {
     return (
-      <div className="bg-white rounded-2xl border border-red-200 p-8 shadow-sm">
+      <div className="bg-white rounded-2xl border border-red-200 p-4 sm:p-8 shadow-sm">
         <div className="flex items-center gap-3 mb-4">
-          <div className="w-10 h-10 bg-red-600 rounded-lg flex items-center justify-center">
-            <Icon className="h-6 w-6 text-white" />
+          <div className="w-8 h-8 sm:w-10 sm:h-10 bg-red-600 rounded-lg flex items-center justify-center flex-shrink-0">
+            <Icon className="h-5 w-5 sm:h-6 sm:w-6 text-white" />
           </div>
-          <div className="text-left">
-            <h3 className="text-lg font-bold text-gray-900">
+          <div className="text-left min-w-0">
+            <h3 className="text-base sm:text-lg font-bold text-gray-900 truncate">
               {config.number}. {config.title}
             </h3>
           </div>
         </div>
-        <div className="bg-red-50 rounded-xl p-8 text-center">
-          <p className="text-sm text-red-600">{error}</p>
+        <div className="bg-red-50 rounded-xl p-4 sm:p-8 text-center">
+          <p className="text-xs sm:text-sm text-red-600">{error}</p>
         </div>
       </div>
     );
@@ -77,14 +77,14 @@ export function ModuleContainer({
         </div>
       </button>
       
-      {/* 内容区域 */}
+      {/* 内容区域 - 移动端优化 */}
       {expanded && (
         <div className={styles.content}>
           {hasData ? (
             children
           ) : (
-            <div className="bg-gray-50 rounded-xl p-8 text-center">
-              <p className="text-sm text-gray-600">
+            <div className="bg-gray-50 rounded-xl p-4 sm:p-8 text-center">
+              <p className="text-xs sm:text-sm text-gray-600">
                 暂无数据，请检查评论内容或重新分析
               </p>
             </div>

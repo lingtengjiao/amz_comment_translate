@@ -24,18 +24,22 @@ interface SankeyChartProps {
 
 export function SankeyChart({ nodes, links, title }: SankeyChartProps) {
   const option = useMemo(() => {
+    // 检测是否为移动设备
+    const isMobile = typeof window !== 'undefined' && window.innerWidth < 768;
+    
     return {
       title: title ? {
         text: title,
         left: 'center',
         textStyle: {
-          fontSize: 14,
+          fontSize: isMobile ? 12 : 14,
           fontWeight: 'bold',
         },
       } : undefined,
       tooltip: {
         trigger: 'item',
-        triggerOn: 'mousemove',
+        triggerOn: isMobile ? 'click' : 'mousemove', // 移动端改为点击触发
+        confine: true, // 限制在图表区域内
         formatter: (params: any) => {
           if (params.dataType === 'edge') {
             return `${params.data.source} → ${params.data.target}<br/>评论数: ${params.data.value}`;
@@ -58,8 +62,10 @@ export function SankeyChart({ nodes, links, title }: SankeyChartProps) {
             curveness: 0.5,
           },
           label: {
-            fontSize: 11,
+            fontSize: isMobile ? 9 : 11,
             color: '#333',
+            overflow: 'truncate',
+            width: isMobile ? 60 : undefined,
           },
           itemStyle: {
             borderWidth: 1,
@@ -70,11 +76,19 @@ export function SankeyChart({ nodes, links, title }: SankeyChartProps) {
     };
   }, [nodes, links, title]);
   
+  // 移动端适配高度
+  const isMobile = typeof window !== 'undefined' && window.innerWidth < 768;
+  const chartHeight = isMobile ? '300px' : '400px';
+  
   return (
-    <div className="w-full">
+    <div className="w-full overflow-x-auto">
       <ReactECharts
         option={option}
-        style={{ height: '400px', width: '100%' }}
+        style={{ 
+          height: chartHeight, 
+          width: '100%',
+          minWidth: isMobile ? '300px' : 'auto'
+        }}
         opts={{ renderer: 'canvas' }}
       />
     </div>
